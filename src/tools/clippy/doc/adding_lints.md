@@ -27,10 +27,7 @@ because that's clearly a non-descriptive name.
 
 ## Setup
 
-When working on Clippy, you will need the current git master version of rustc,
-which can change rapidly. Make sure you're working near rust-clippy's master,
-and use the `setup-toolchain.sh` script to configure the appropriate toolchain
-for the Clippy directory.
+See the [Basics](basics.md#get-the-code) documentation.
 
 ## Getting Started
 
@@ -38,12 +35,16 @@ There is a bit of boilerplate code that needs to be set up when creating a new
 lint. Fortunately, you can use the clippy dev tools to handle this for you. We
 are naming our new lint `foo_functions` (lints are generally written in snake
 case), and we don't need type information so it will have an early pass type
-(more on this later on). To get started on this lint you can run
-`cargo dev new_lint --name=foo_functions --pass=early --category=pedantic`
-(category will default to nursery if not provided). This command will create
-two files: `tests/ui/foo_functions.rs` and `clippy_lints/src/foo_functions.rs`,
-as well as run `cargo dev update_lints` to register the new lint. Next, we'll
-open up these files and add our lint!
+(more on this later on). If you're not sure if the name you chose fits the lint,
+take a look at our [lint naming guidelines][lint_naming]. To get started on this
+lint you can run `cargo dev new_lint --name=foo_functions --pass=early
+--category=pedantic` (category will default to nursery if not provided). This
+command will create two files: `tests/ui/foo_functions.rs` and
+`clippy_lints/src/foo_functions.rs`, as well as run `cargo dev update_lints` to
+register the new lint. For cargo lints, two project hierarchies (fail/pass) will
+be created by default under `tests/ui-cargo`.
+
+Next, we'll open up these files and add our lint!
 
 ## Testing
 
@@ -104,6 +105,24 @@ Running `TESTNAME=foo_functions cargo uitest` should pass then. When we commit
 our lint, we need to commit the generated `.stderr` files, too. In general, you
 should only commit files changed by `tests/ui/update-all-references.sh` for the
 specific lint you are creating/editing.
+
+### Cargo lints
+
+For cargo lints, the process of testing differs in that we are interested in
+the `Cargo.toml` manifest file. We also need a minimal crate associated
+with that manifest.
+
+If our new lint is named e.g. `foo_categories`, after running `cargo dev new_lint`
+we will find by default two new crates, each with its manifest file:
+
+* `tests/ui-cargo/foo_categories/fail/Cargo.toml`: this file should cause the new lint to raise an error.
+* `tests/ui-cargo/foo_categories/pass/Cargo.toml`: this file should not trigger the lint.
+
+If you need more cases, you can copy one of those crates (under `foo_categories`) and rename it.
+
+The process of generating the `.stderr` file is the same, and prepending the `TESTNAME`
+variable to `cargo uitest` works too, but the script to update the references
+is in another path: `tests/ui-cargo/update-all-references.sh`.
 
 ## Rustfix tests
 
@@ -276,8 +295,14 @@ impl EarlyLintPass for FooFunctions {
 
 Running our UI test should now produce output that contains the lint message.
 
+According to [the rustc-dev-guide], the text should be matter of fact and avoid
+capitalization and periods, unless multiple sentences are needed.
+When code or an identifier must appear in a message or label, it should be
+surrounded with single acute accents \`.
+
 [check_fn]: https://doc.rust-lang.org/nightly/nightly-rustc/rustc_lint/trait.EarlyLintPass.html#method.check_fn
 [diagnostics]: https://github.com/rust-lang/rust-clippy/blob/master/clippy_lints/src/utils/diagnostics.rs
+[the rustc-dev-guide]: https://rustc-dev-guide.rust-lang.org/diagnostics.html
 
 ## Adding the lint logic
 
@@ -445,6 +470,7 @@ Here are some pointers to things you are likely going to need for every lint:
 * [`from_expansion`][from_expansion] and [`in_external_macro`][in_external_macro]
 * [`Span`][span]
 * [`Applicability`][applicability]
+* [Common tools for writing lints](common_tools_writing_lints.md) helps with common operations
 * [The rustc-dev-guide][rustc-dev-guide] explains a lot of internal compiler concepts
 * [The nightly rustc docs][nightly_docs] which has been linked to throughout
   this guide

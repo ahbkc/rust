@@ -1,15 +1,22 @@
 use crate::utils::{implements_trait, is_entrypoint_fn, is_type_diagnostic_item, return_ty, span_lint};
 use if_chain::if_chain;
 use itertools::Itertools;
-use rustc_ast::ast::{AttrKind, Attribute};
+use rustc_ast::ast::{Async, AttrKind, Attribute, FnRetTy, ItemKind};
+use rustc_ast::token::CommentKind;
 use rustc_data_structures::fx::FxHashSet;
+use rustc_data_structures::sync::Lrc;
+use rustc_errors::emitter::EmitterWriter;
+use rustc_errors::Handler;
 use rustc_hir as hir;
 use rustc_lint::{LateContext, LateLintPass};
 use rustc_middle::lint::in_external_macro;
 use rustc_middle::ty;
+use rustc_parse::maybe_new_parser_from_source_str;
+use rustc_session::parse::ParseSess;
 use rustc_session::{declare_tool_lint, impl_lint_pass};
-use rustc_span::source_map::{BytePos, MultiSpan, Span};
-use rustc_span::Pos;
+use rustc_span::source_map::{BytePos, FilePathMapping, MultiSpan, SourceMap, Span};
+use rustc_span::{FileName, Pos};
+use std::io;
 use std::ops::Range;
 use url::Url;
 
@@ -146,12 +153,12 @@ impl DocMarkdown {
 
 impl_lint_pass!(DocMarkdown => [DOC_MARKDOWN, MISSING_SAFETY_DOC, MISSING_ERRORS_DOC, NEEDLESS_DOCTEST_MAIN]);
 
-impl<'a, 'tcx> LateLintPass<'a, 'tcx> for DocMarkdown {
-    fn check_crate(&mut self, cx: &LateContext<'a, 'tcx>, krate: &'tcx hir::Crate<'_>) {
+impl<'tcx> LateLintPass<'tcx> for DocMarkdown {
+    fn check_crate(&mut self, cx: &LateContext<'tcx>, krate: &'tcx hir::Crate<'_>) {
         check_attrs(cx, &self.valid_idents, &krate.item.attrs);
     }
 
-    fn check_item(&mut self, cx: &LateContext<'a, 'tcx>, item: &'tcx hir::Item<'_>) {
+    fn check_item(&mut self, cx: &LateContext<'tcx>, item: &'tcx hir::Item<'_>) {
         let headers = check_attrs(cx, &self.valid_idents, &item.attrs);
         match item.kind {
             hir::ItemKind::Fn(ref sig, _, body_id) => {
@@ -171,13 +178,13 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for DocMarkdown {
         }
     }
 
-    fn check_item_post(&mut self, _cx: &LateContext<'a, 'tcx>, item: &'tcx hir::Item<'_>) {
+    fn check_item_post(&mut self, _cx: &LateContext<'tcx>, item: &'tcx hir::Item<'_>) {
         if let hir::ItemKind::Impl { .. } = item.kind {
             self.in_trait_impl = false;
         }
     }
 
-    fn check_trait_item(&mut self, cx: &LateContext<'a, 'tcx>, item: &'tcx hir::TraitItem<'_>) {
+    fn check_trait_item(&mut self, cx: &LateContext<'tcx>, item: &'tcx hir::TraitItem<'_>) {
         let headers = check_attrs(cx, &self.valid_idents, &item.attrs);
         if let hir::TraitItemKind::Fn(ref sig, ..) = item.kind {
             if !in_external_macro(cx.tcx.sess, item.span) {
@@ -186,7 +193,7 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for DocMarkdown {
         }
     }
 
-    fn check_impl_item(&mut self, cx: &LateContext<'a, 'tcx>, item: &'tcx hir::ImplItem<'_>) {
+    fn check_impl_item(&mut self, cx: &LateContext<'tcx>, item: &'tcx hir::ImplItem<'_>) {
         let headers = check_attrs(cx, &self.valid_idents, &item.attrs);
         if self.in_trait_impl || in_external_macro(cx.tcx.sess, item.span) {
             return;
@@ -197,8 +204,8 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for DocMarkdown {
     }
 }
 
-fn lint_for_missing_headers<'a, 'tcx>(
-    cx: &LateContext<'a, 'tcx>,
+fn lint_for_missing_headers<'tcx>(
+    cx: &LateContext<'tcx>,
     hir_id: hir::HirId,
     span: impl Into<MultiSpan> + Copy,
     sig: &hir::FnSig<'_>,
@@ -232,9 +239,9 @@ fn lint_for_missing_headers<'a, 'tcx>(
                 let mir = cx.tcx.optimized_mir(def_id.to_def_id());
                 let ret_ty = mir.return_ty();
                 if implements_trait(cx, ret_ty, future, &[]);
-                if let ty::Opaque(_, subs) = ret_ty.kind;
+                if let ty::Opaque(_, subs) = ret_ty.kind();
                 if let Some(gen) = subs.types().next();
-                if let ty::Generator(_, subs, _) = gen.kind;
+                if let ty::Generator(_, subs, _) = gen.kind();
                 if is_type_diagnostic_item(cx, subs.as_generator().return_ty(), sym!(result_type));
                 then {
                     span_lint(
@@ -249,7 +256,7 @@ fn lint_for_missing_headers<'a, 'tcx>(
     }
 }
 
-/// Cleanup documentation decoration (`///` and such).
+/// Cleanup documentation decoration.
 ///
 /// We can't use `rustc_ast::attr::AttributeMethods::with_desugared_doc` or
 /// `rustc_ast::parse::lexer::comments::strip_doc_comment_decoration` because we
@@ -257,54 +264,45 @@ fn lint_for_missing_headers<'a, 'tcx>(
 /// the spans but this function is inspired from the later.
 #[allow(clippy::cast_possible_truncation)]
 #[must_use]
-pub fn strip_doc_comment_decoration(comment: &str, span: Span) -> (String, Vec<(usize, Span)>) {
+pub fn strip_doc_comment_decoration(doc: &str, comment_kind: CommentKind, span: Span) -> (String, Vec<(usize, Span)>) {
     // one-line comments lose their prefix
-    const ONELINERS: &[&str] = &["///!", "///", "//!", "//"];
-    for prefix in ONELINERS {
-        if comment.starts_with(*prefix) {
-            let doc = &comment[prefix.len()..];
-            let mut doc = doc.to_owned();
-            doc.push('\n');
-            return (
-                doc.to_owned(),
-                vec![(doc.len(), span.with_lo(span.lo() + BytePos(prefix.len() as u32)))],
-            );
-        }
+    if comment_kind == CommentKind::Line {
+        let mut doc = doc.to_owned();
+        doc.push('\n');
+        let len = doc.len();
+        // +3 skips the opening delimiter
+        return (doc, vec![(len, span.with_lo(span.lo() + BytePos(3)))]);
     }
 
-    if comment.starts_with("/*") {
-        let doc = &comment[3..comment.len() - 2];
-        let mut sizes = vec![];
-        let mut contains_initial_stars = false;
-        for line in doc.lines() {
-            let offset = line.as_ptr() as usize - comment.as_ptr() as usize;
-            debug_assert_eq!(offset as u32 as usize, offset);
-            contains_initial_stars |= line.trim_start().starts_with('*');
-            // +1 for the newline
-            sizes.push((line.len() + 1, span.with_lo(span.lo() + BytePos(offset as u32))));
-        }
-        if !contains_initial_stars {
-            return (doc.to_string(), sizes);
-        }
-        // remove the initial '*'s if any
-        let mut no_stars = String::with_capacity(doc.len());
-        for line in doc.lines() {
-            let mut chars = line.chars();
-            while let Some(c) = chars.next() {
-                if c.is_whitespace() {
-                    no_stars.push(c);
-                } else {
-                    no_stars.push(if c == '*' { ' ' } else { c });
-                    break;
-                }
+    let mut sizes = vec![];
+    let mut contains_initial_stars = false;
+    for line in doc.lines() {
+        let offset = line.as_ptr() as usize - doc.as_ptr() as usize;
+        debug_assert_eq!(offset as u32 as usize, offset);
+        contains_initial_stars |= line.trim_start().starts_with('*');
+        // +1 adds the newline, +3 skips the opening delimiter
+        sizes.push((line.len() + 1, span.with_lo(span.lo() + BytePos(3 + offset as u32))));
+    }
+    if !contains_initial_stars {
+        return (doc.to_string(), sizes);
+    }
+    // remove the initial '*'s if any
+    let mut no_stars = String::with_capacity(doc.len());
+    for line in doc.lines() {
+        let mut chars = line.chars();
+        while let Some(c) = chars.next() {
+            if c.is_whitespace() {
+                no_stars.push(c);
+            } else {
+                no_stars.push(if c == '*' { ' ' } else { c });
+                break;
             }
-            no_stars.push_str(chars.as_str());
-            no_stars.push('\n');
         }
-        return (no_stars, sizes);
+        no_stars.push_str(chars.as_str());
+        no_stars.push('\n');
     }
 
-    panic!("not a doc-comment: {}", comment);
+    (no_stars, sizes)
 }
 
 #[derive(Copy, Clone)]
@@ -313,17 +311,16 @@ struct DocHeaders {
     errors: bool,
 }
 
-fn check_attrs<'a>(cx: &LateContext<'_, '_>, valid_idents: &FxHashSet<String>, attrs: &'a [Attribute]) -> DocHeaders {
+fn check_attrs<'a>(cx: &LateContext<'_>, valid_idents: &FxHashSet<String>, attrs: &'a [Attribute]) -> DocHeaders {
     let mut doc = String::new();
     let mut spans = vec![];
 
     for attr in attrs {
-        if let AttrKind::DocComment(ref comment) = attr.kind {
-            let comment = comment.to_string();
-            let (comment, current_spans) = strip_doc_comment_decoration(&comment, attr.span);
+        if let AttrKind::DocComment(comment_kind, comment) = attr.kind {
+            let (comment, current_spans) = strip_doc_comment_decoration(&comment.as_str(), comment_kind, attr.span);
             spans.extend_from_slice(&current_spans);
             doc.push_str(&comment);
-        } else if attr.check_name(sym!(doc)) {
+        } else if attr.has_name(sym!(doc)) {
             // ignore mix of sugared and non-sugared doc
             // don't trigger the safety or errors check
             return DocHeaders {
@@ -370,7 +367,7 @@ fn check_attrs<'a>(cx: &LateContext<'_, '_>, valid_idents: &FxHashSet<String>, a
 const RUST_CODE: &[&str] = &["rust", "no_run", "should_panic", "compile_fail", "edition2018"];
 
 fn check_doc<'a, Events: Iterator<Item = (pulldown_cmark::Event<'a>, Range<usize>)>>(
-    cx: &LateContext<'_, '_>,
+    cx: &LateContext<'_>,
     valid_idents: &FxHashSet<String>,
     events: Events,
     spans: &[(usize, Span)],
@@ -440,15 +437,72 @@ fn check_doc<'a, Events: Iterator<Item = (pulldown_cmark::Event<'a>, Range<usize
     headers
 }
 
-static LEAVE_MAIN_PATTERNS: &[&str] = &["static", "fn main() {}", "extern crate", "async fn main() {"];
+fn check_code(cx: &LateContext<'_>, text: &str, span: Span) {
+    fn has_needless_main(code: &str) -> bool {
+        let filename = FileName::anon_source_code(code);
 
-fn check_code(cx: &LateContext<'_, '_>, text: &str, span: Span) {
-    if text.contains("fn main() {") && !LEAVE_MAIN_PATTERNS.iter().any(|p| text.contains(p)) {
+        let sm = Lrc::new(SourceMap::new(FilePathMapping::empty()));
+        let emitter = EmitterWriter::new(box io::sink(), None, false, false, false, None, false);
+        let handler = Handler::with_emitter(false, None, box emitter);
+        let sess = ParseSess::with_span_handler(handler, sm);
+
+        let mut parser = match maybe_new_parser_from_source_str(&sess, filename, code.into()) {
+            Ok(p) => p,
+            Err(errs) => {
+                for mut err in errs {
+                    err.cancel();
+                }
+                return false;
+            },
+        };
+
+        let mut relevant_main_found = false;
+        loop {
+            match parser.parse_item() {
+                Ok(Some(item)) => match &item.kind {
+                    // Tests with one of these items are ignored
+                    ItemKind::Static(..)
+                    | ItemKind::Const(..)
+                    | ItemKind::ExternCrate(..)
+                    | ItemKind::ForeignMod(..) => return false,
+                    // We found a main function ...
+                    ItemKind::Fn(_, sig, _, Some(block)) if item.ident.name == sym!(main) => {
+                        let is_async = matches!(sig.header.asyncness, Async::Yes{..});
+                        let returns_nothing = match &sig.decl.output {
+                            FnRetTy::Default(..) => true,
+                            FnRetTy::Ty(ty) if ty.kind.is_unit() => true,
+                            _ => false,
+                        };
+
+                        if returns_nothing && !is_async && !block.stmts.is_empty() {
+                            // This main function should be linted, but only if there are no other functions
+                            relevant_main_found = true;
+                        } else {
+                            // This main function should not be linted, we're done
+                            return false;
+                        }
+                    },
+                    // Another function was found; this case is ignored too
+                    ItemKind::Fn(..) => return false,
+                    _ => {},
+                },
+                Ok(None) => break,
+                Err(mut e) => {
+                    e.cancel();
+                    return false;
+                },
+            }
+        }
+
+        relevant_main_found
+    }
+
+    if has_needless_main(text) {
         span_lint(cx, NEEDLESS_DOCTEST_MAIN, span, "needless `fn main` in doctest");
     }
 }
 
-fn check_text(cx: &LateContext<'_, '_>, valid_idents: &FxHashSet<String>, text: &str, span: Span) {
+fn check_text(cx: &LateContext<'_>, valid_idents: &FxHashSet<String>, text: &str, span: Span) {
     for word in text.split(|c: char| c.is_whitespace() || c == '\'') {
         // Trim punctuation as in `some comment (see foo::bar).`
         //                                                   ^^
@@ -471,7 +525,7 @@ fn check_text(cx: &LateContext<'_, '_>, valid_idents: &FxHashSet<String>, text: 
     }
 }
 
-fn check_word(cx: &LateContext<'_, '_>, word: &str, span: Span) {
+fn check_word(cx: &LateContext<'_>, word: &str, span: Span) {
     /// Checks if a string is camel-case, i.e., contains at least two uppercase
     /// letters (`Clippy` is ok) and one lower-case letter (`NASA` is ok).
     /// Plurals are also excluded (`IDs` is ok).

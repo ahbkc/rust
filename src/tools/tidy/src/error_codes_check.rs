@@ -7,17 +7,16 @@ use std::fs::read_to_string;
 use std::path::Path;
 
 // A few of those error codes can't be tested but all the others can and *should* be tested!
-const WHITELIST: &[&str] = &[
-    "E0183", "E0227", "E0279", "E0280", "E0311", "E0313", "E0314", "E0315", "E0377", "E0456",
-    "E0461", "E0462", "E0464", "E0465", "E0472", "E0473", "E0474", "E0475", "E0476", "E0479",
-    "E0480", "E0481", "E0482", "E0483", "E0484", "E0485", "E0486", "E0487", "E0488", "E0489",
-    "E0514", "E0519", "E0523", "E0553", "E0554", "E0570", "E0629", "E0630", "E0640", "E0717",
-    "E0727", "E0729",
+const EXEMPTED_FROM_TEST: &[&str] = &[
+    "E0183", "E0227", "E0279", "E0280", "E0311", "E0313", "E0314", "E0315", "E0377", "E0461",
+    "E0462", "E0464", "E0465", "E0472", "E0473", "E0474", "E0475", "E0476", "E0479", "E0480",
+    "E0481", "E0482", "E0483", "E0484", "E0485", "E0486", "E0487", "E0488", "E0489", "E0514",
+    "E0519", "E0523", "E0553", "E0554", "E0570", "E0629", "E0630", "E0640", "E0717", "E0727",
+    "E0729",
 ];
 
 // Some error codes don't have any tests apparently...
-const IGNORE_EXPLANATION_CHECK: &[&str] =
-    &["E0570", "E0601", "E0602", "E0639", "E0729", "E0749", "E0750"];
+const IGNORE_EXPLANATION_CHECK: &[&str] = &["E0570", "E0601", "E0602", "E0639", "E0729"];
 
 fn check_error_code_explanation(
     f: &str,
@@ -48,9 +47,7 @@ fn check_error_code_explanation(
     invalid_compile_fail_format
 }
 
-fn check_if_error_code_is_test_in_explanation(f: &str, err_code: &String) -> bool {
-    let mut can_be_ignored = false;
-
+fn check_if_error_code_is_test_in_explanation(f: &str, err_code: &str) -> bool {
     for line in f.lines() {
         let s = line.trim();
         if s.starts_with("#### Note: this error code is no longer emitted by the compiler") {
@@ -59,13 +56,13 @@ fn check_if_error_code_is_test_in_explanation(f: &str, err_code: &String) -> boo
         if s.starts_with("```") {
             if s.contains("compile_fail") && s.contains(err_code) {
                 return true;
-            } else if s.contains("(") {
+            } else if s.contains('(') {
                 // It's very likely that we can't actually make it fail compilation...
-                can_be_ignored = true;
+                return true;
             }
         }
     }
-    can_be_ignored
+    false
 }
 
 macro_rules! some_or_continue {
@@ -166,7 +163,7 @@ pub fn check(path: &Path, bad: &mut bool) {
         println!("Found {} error codes", error_codes.len());
 
         for (err_code, nb) in &error_codes {
-            if !*nb && !WHITELIST.contains(&err_code.as_str()) {
+            if !*nb && !EXEMPTED_FROM_TEST.contains(&err_code.as_str()) {
                 errors.push(format!("Error code {} needs to have at least one UI test!", err_code));
             }
         }

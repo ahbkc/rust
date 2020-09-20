@@ -16,8 +16,13 @@ declare_clippy_lint! {
     ///
     /// **Example:**
     /// ```rust,ignore
+    /// // Bad
     /// let a = f(*&mut b);
     /// let c = *&d;
+    ///
+    /// // Good
+    /// let a = f(b);
+    /// let c = d;
     /// ```
     pub DEREF_ADDROF,
     complexity,
@@ -87,7 +92,7 @@ impl EarlyLintPass for RefInDeref {
                     cx,
                     REF_IN_DEREF,
                     object.span,
-                    "Creating a reference that is immediately dereferenced.",
+                    "creating a reference that is immediately dereferenced",
                     "try this",
                     snippet_with_applicability(cx, inner.span, "_", &mut applicability).to_string(),
                     applicability,

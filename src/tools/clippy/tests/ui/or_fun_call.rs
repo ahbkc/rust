@@ -58,12 +58,6 @@ fn or_fun_call() {
     let without_default = Some(Foo);
     without_default.unwrap_or(Foo::new());
 
-    let mut map = HashMap::<u64, String>::new();
-    map.entry(42).or_insert(String::new());
-
-    let mut btree = BTreeMap::<u64, String>::new();
-    btree.entry(42).or_insert(String::new());
-
     let stringy = Some(String::from(""));
     let _ = stringy.unwrap_or("".to_owned());
 
@@ -95,6 +89,15 @@ fn test_or_with_ctors() {
     let b = "b".to_string();
     let _ = Some(Bar("a".to_string(), Duration::from_secs(1)))
         .or(Some(Bar(b, Duration::from_secs(2))));
+
+    let vec = vec!["foo"];
+    let _ = opt.ok_or(vec.len());
+
+    let array = ["foo"];
+    let _ = opt.ok_or(array.len());
+
+    let slice = &["foo"][..];
+    let _ = opt.ok_or(slice.len());
 }
 
 // Issue 4514 - early return
@@ -105,6 +108,25 @@ fn f() -> Option<()> {
     let _ = a.unwrap_or(b.checked_mul(3)?.min(240));
 
     Some(())
+}
+
+// Issue 5886 - const fn (with no arguments)
+pub fn skip_const_fn_with_no_args() {
+    const fn foo() -> Option<i32> {
+        Some(42)
+    }
+    let _ = None.or(foo());
+
+    // See issue #5693.
+    let mut map = std::collections::HashMap::new();
+    map.insert(1, vec![1]);
+    map.entry(1).or_insert(vec![]);
+
+    let mut map = HashMap::<u64, String>::new();
+    map.entry(42).or_insert(String::new());
+
+    let mut btree = BTreeMap::<u64, String>::new();
+    btree.entry(42).or_insert(String::new());
 }
 
 fn main() {}

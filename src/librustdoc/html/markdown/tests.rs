@@ -1,4 +1,4 @@
-use super::plain_summary_line;
+use super::plain_text_summary;
 use super::{ErrorCodes, IdMap, Ignore, LangString, Markdown, MarkdownHtml};
 use rustc_span::edition::{Edition, DEFAULT_EDITION};
 use std::cell::RefCell;
@@ -134,31 +134,32 @@ fn test_header() {
     fn t(input: &str, expect: &str) {
         let mut map = IdMap::new();
         let output =
-            Markdown(input, &[], &mut map, ErrorCodes::Yes, DEFAULT_EDITION, &None).to_string();
+            Markdown(input, &[], &mut map, ErrorCodes::Yes, DEFAULT_EDITION, &None).into_string();
         assert_eq!(output, expect, "original: {}", input);
     }
 
     t(
         "# Foo bar",
-        "<h1 id=\"foo-bar\" class=\"section-header\">\
-      <a href=\"#foo-bar\">Foo bar</a></h1>",
+        "<h1 id=\"foo-bar\" class=\"section-header\"><a href=\"#foo-bar\">Foo bar</a></h1>",
     );
     t(
         "## Foo-bar_baz qux",
-        "<h2 id=\"foo-bar_baz-qux\" class=\"section-\
-      header\"><a href=\"#foo-bar_baz-qux\">Foo-bar_baz qux</a></h2>",
+        "<h2 id=\"foo-bar_baz-qux\" class=\"section-header\">\
+         <a href=\"#foo-bar_baz-qux\">Foo-bar_baz qux</a></h2>",
     );
     t(
         "### **Foo** *bar* baz!?!& -_qux_-%",
         "<h3 id=\"foo-bar-baz--qux-\" class=\"section-header\">\
-      <a href=\"#foo-bar-baz--qux-\"><strong>Foo</strong> \
-      <em>bar</em> baz!?!&amp; -<em>qux</em>-%</a></h3>",
+            <a href=\"#foo-bar-baz--qux-\"><strong>Foo</strong> \
+            <em>bar</em> baz!?!&amp; -<em>qux</em>-%</a>\
+         </h3>",
     );
     t(
         "#### **Foo?** & \\*bar?!*  _`baz`_ ❤ #qux",
         "<h4 id=\"foo--bar--baz--qux\" class=\"section-header\">\
-      <a href=\"#foo--bar--baz--qux\"><strong>Foo?</strong> &amp; *bar?!*  \
-      <em><code>baz</code></em> ❤ #qux</a></h4>",
+             <a href=\"#foo--bar--baz--qux\"><strong>Foo?</strong> &amp; *bar?!*  \
+             <em><code>baz</code></em> ❤ #qux</a>\
+         </h4>",
     );
 }
 
@@ -166,61 +167,63 @@ fn test_header() {
 fn test_header_ids_multiple_blocks() {
     let mut map = IdMap::new();
     fn t(map: &mut IdMap, input: &str, expect: &str) {
-        let output = Markdown(input, &[], map, ErrorCodes::Yes, DEFAULT_EDITION, &None).to_string();
+        let output =
+            Markdown(input, &[], map, ErrorCodes::Yes, DEFAULT_EDITION, &None).into_string();
         assert_eq!(output, expect, "original: {}", input);
     }
 
     t(
         &mut map,
         "# Example",
-        "<h1 id=\"example\" class=\"section-header\">\
-        <a href=\"#example\">Example</a></h1>",
+        "<h1 id=\"example\" class=\"section-header\"><a href=\"#example\">Example</a></h1>",
     );
     t(
         &mut map,
         "# Panics",
-        "<h1 id=\"panics\" class=\"section-header\">\
-        <a href=\"#panics\">Panics</a></h1>",
+        "<h1 id=\"panics\" class=\"section-header\"><a href=\"#panics\">Panics</a></h1>",
     );
     t(
         &mut map,
         "# Example",
-        "<h1 id=\"example-1\" class=\"section-header\">\
-        <a href=\"#example-1\">Example</a></h1>",
+        "<h1 id=\"example-1\" class=\"section-header\"><a href=\"#example-1\">Example</a></h1>",
     );
     t(
         &mut map,
         "# Main",
-        "<h1 id=\"main-1\" class=\"section-header\">\
-        <a href=\"#main-1\">Main</a></h1>",
+        "<h1 id=\"main-1\" class=\"section-header\"><a href=\"#main-1\">Main</a></h1>",
     );
     t(
         &mut map,
         "# Example",
-        "<h1 id=\"example-2\" class=\"section-header\">\
-        <a href=\"#example-2\">Example</a></h1>",
+        "<h1 id=\"example-2\" class=\"section-header\"><a href=\"#example-2\">Example</a></h1>",
     );
     t(
         &mut map,
         "# Panics",
-        "<h1 id=\"panics-1\" class=\"section-header\">\
-        <a href=\"#panics-1\">Panics</a></h1>",
+        "<h1 id=\"panics-1\" class=\"section-header\"><a href=\"#panics-1\">Panics</a></h1>",
     );
 }
 
 #[test]
-fn test_plain_summary_line() {
+fn test_plain_text_summary() {
     fn t(input: &str, expect: &str) {
-        let output = plain_summary_line(input);
+        let output = plain_text_summary(input);
         assert_eq!(output, expect, "original: {}", input);
     }
 
     t("hello [Rust](https://www.rust-lang.org) :)", "hello Rust :)");
+    t("**bold**", "bold");
+    t("Multi-line\nsummary", "Multi-line summary");
+    t("Hard-break  \nsummary", "Hard-break summary");
+    t("hello [Rust] :)\n\n[Rust]: https://www.rust-lang.org", "hello Rust :)");
     t("hello [Rust](https://www.rust-lang.org \"Rust\") :)", "hello Rust :)");
     t("code `let x = i32;` ...", "code `let x = i32;` ...");
     t("type `Type<'static>` ...", "type `Type<'static>` ...");
     t("# top header", "top header");
     t("## header", "header");
+    t("first paragraph\n\nsecond paragraph", "first paragraph");
+    t("```\nfn main() {}\n```", "");
+    t("<div>hello</div>", "");
 }
 
 #[test]
@@ -228,7 +231,7 @@ fn test_markdown_html_escape() {
     fn t(input: &str, expect: &str) {
         let mut idmap = IdMap::new();
         let output =
-            MarkdownHtml(input, &mut idmap, ErrorCodes::Yes, DEFAULT_EDITION, &None).to_string();
+            MarkdownHtml(input, &mut idmap, ErrorCodes::Yes, DEFAULT_EDITION, &None).into_string();
         assert_eq!(output, expect, "original: {}", input);
     }
 

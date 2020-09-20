@@ -10,7 +10,6 @@ use crate::utils::{snippet_opt, span_lint_and_sugg};
 declare_clippy_lint! {
     /// **What it does:** Checks for usage of `x >= y + 1` or `x - 1 >= y` (and `<=`) in a block
     ///
-    ///
     /// **Why is this bad?** Readability -- better to use `> y` instead of `>= y + 1`.
     ///
     /// **Known problems:** None.
@@ -153,7 +152,7 @@ impl IntPlusOne {
             cx,
             INT_PLUS_ONE,
             block.span,
-            "Unnecessary `>= y + 1` or `x - 1 >=`",
+            "unnecessary `>= y + 1` or `x - 1 >=`",
             "change it to",
             recommendation,
             Applicability::MachineApplicable, // snippet
@@ -164,8 +163,8 @@ impl IntPlusOne {
 impl EarlyLintPass for IntPlusOne {
     fn check_expr(&mut self, cx: &EarlyContext<'_>, item: &Expr) {
         if let ExprKind::Binary(ref kind, ref lhs, ref rhs) = item.kind {
-            if let Some(ref rec) = Self::check_binop(cx, kind.node, lhs, rhs) {
-                Self::emit_warning(cx, item, rec.clone());
+            if let Some(rec) = Self::check_binop(cx, kind.node, lhs, rhs) {
+                Self::emit_warning(cx, item, rec);
             }
         }
     }

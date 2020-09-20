@@ -2,6 +2,7 @@ use std::cmp;
 
 use crate::utils::{is_copy, is_self_ty, snippet, span_lint_and_sugg};
 use if_chain::if_chain;
+use rustc_ast::attr;
 use rustc_errors::Applicability;
 use rustc_hir as hir;
 use rustc_hir::intravisit::FnKind;
@@ -58,7 +59,7 @@ pub struct TriviallyCopyPassByRef {
     limit: u64,
 }
 
-impl<'a, 'tcx> TriviallyCopyPassByRef {
+impl<'tcx> TriviallyCopyPassByRef {
     pub fn new(limit: Option<u64>, target: &SessionConfig) -> Self {
         let limit = limit.unwrap_or_else(|| {
             let bit_width = u64::from(target.ptr_width);
@@ -73,7 +74,7 @@ impl<'a, 'tcx> TriviallyCopyPassByRef {
         Self { limit }
     }
 
-    fn check_poly_fn(&mut self, cx: &LateContext<'_, 'tcx>, hir_id: HirId, decl: &FnDecl<'_>, span: Option<Span>) {
+    fn check_poly_fn(&mut self, cx: &LateContext<'tcx>, hir_id: HirId, decl: &FnDecl<'_>, span: Option<Span>) {
         let fn_def_id = cx.tcx.hir().local_def_id(hir_id);
 
         let fn_sig = cx.tcx.fn_sig(fn_def_id);
@@ -82,7 +83,7 @@ impl<'a, 'tcx> TriviallyCopyPassByRef {
         // Use lifetimes to determine if we're returning a reference to the
         // argument. In that case we can't switch to pass-by-value as the
         // argument will not live long enough.
-        let output_lts = match fn_sig.output().kind {
+        let output_lts = match *fn_sig.output().kind() {
             ty::Ref(output_lt, _, _) => vec![output_lt],
             ty::Adt(_, substs) => substs.regions().collect(),
             _ => vec![],
@@ -96,7 +97,7 @@ impl<'a, 'tcx> TriviallyCopyPassByRef {
             }
 
             if_chain! {
-                if let ty::Ref(input_lt, ty, Mutability::Not) = ty.kind;
+                if let ty::Ref(input_lt, ty, Mutability::Not) = ty.kind();
                 if !output_lts.contains(&input_lt);
                 if is_copy(cx, ty);
                 if let Some(size) = cx.layout_of(ty).ok().map(|l| l.size.bytes());
@@ -125,8 +126,8 @@ impl<'a, 'tcx> TriviallyCopyPassByRef {
 
 impl_lint_pass!(TriviallyCopyPassByRef => [TRIVIALLY_COPY_PASS_BY_REF]);
 
-impl<'a, 'tcx> LateLintPass<'a, 'tcx> for TriviallyCopyPassByRef {
-    fn check_trait_item(&mut self, cx: &LateContext<'a, 'tcx>, item: &'tcx hir::TraitItem<'_>) {
+impl<'tcx> LateLintPass<'tcx> for TriviallyCopyPassByRef {
+    fn check_trait_item(&mut self, cx: &LateContext<'tcx>, item: &'tcx hir::TraitItem<'_>) {
         if item.span.from_expansion() {
             return;
         }
@@ -138,7 +139,7 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for TriviallyCopyPassByRef {
 
     fn check_fn(
         &mut self,
-        cx: &LateContext<'a, 'tcx>,
+        cx: &LateContext<'tcx>,
         kind: FnKind<'tcx>,
         decl: &'tcx FnDecl<'_>,
         _body: &'tcx Body<'_>,
@@ -155,13 +156,17 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for TriviallyCopyPassByRef {
                     return;
                 }
                 for a in attrs {
-                    if a.meta_item_list().is_some() && a.check_name(sym!(proc_macro_derive)) {
-                        return;
+                    if let Some(meta_items) = a.meta_item_list() {
+                        if a.has_name(sym!(proc_macro_derive))
+                            || (a.has_name(sym!(inline)) && attr::list_contains_name(&meta_items, sym!(always)))
+                        {
+                            return;
+                        }
                     }
                 }
             },
             FnKind::Method(..) => (),
-            _ => return,
+            FnKind::Closure(..) => return,
         }
 
         // Exclude non-inherent impls

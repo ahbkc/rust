@@ -64,8 +64,8 @@ fn done() {
     println!("}}");
 }
 
-impl<'a, 'tcx> LateLintPass<'a, 'tcx> for Author {
-    fn check_item(&mut self, cx: &LateContext<'a, 'tcx>, item: &'tcx hir::Item<'_>) {
+impl<'tcx> LateLintPass<'tcx> for Author {
+    fn check_item(&mut self, cx: &LateContext<'tcx>, item: &'tcx hir::Item<'_>) {
         if !has_attr(cx.sess(), &item.attrs) {
             return;
         }
@@ -74,7 +74,7 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for Author {
         done();
     }
 
-    fn check_impl_item(&mut self, cx: &LateContext<'a, 'tcx>, item: &'tcx hir::ImplItem<'_>) {
+    fn check_impl_item(&mut self, cx: &LateContext<'tcx>, item: &'tcx hir::ImplItem<'_>) {
         if !has_attr(cx.sess(), &item.attrs) {
             return;
         }
@@ -83,7 +83,7 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for Author {
         done();
     }
 
-    fn check_trait_item(&mut self, cx: &LateContext<'a, 'tcx>, item: &'tcx hir::TraitItem<'_>) {
+    fn check_trait_item(&mut self, cx: &LateContext<'tcx>, item: &'tcx hir::TraitItem<'_>) {
         if !has_attr(cx.sess(), &item.attrs) {
             return;
         }
@@ -92,7 +92,7 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for Author {
         done();
     }
 
-    fn check_variant(&mut self, cx: &LateContext<'a, 'tcx>, var: &'tcx hir::Variant<'_>) {
+    fn check_variant(&mut self, cx: &LateContext<'tcx>, var: &'tcx hir::Variant<'_>) {
         if !has_attr(cx.sess(), &var.attrs) {
             return;
         }
@@ -102,7 +102,7 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for Author {
         done();
     }
 
-    fn check_struct_field(&mut self, cx: &LateContext<'a, 'tcx>, field: &'tcx hir::StructField<'_>) {
+    fn check_struct_field(&mut self, cx: &LateContext<'tcx>, field: &'tcx hir::StructField<'_>) {
         if !has_attr(cx.sess(), &field.attrs) {
             return;
         }
@@ -111,7 +111,7 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for Author {
         done();
     }
 
-    fn check_expr(&mut self, cx: &LateContext<'a, 'tcx>, expr: &'tcx hir::Expr<'_>) {
+    fn check_expr(&mut self, cx: &LateContext<'tcx>, expr: &'tcx hir::Expr<'_>) {
         if !has_attr(cx.sess(), &expr.attrs) {
             return;
         }
@@ -120,7 +120,7 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for Author {
         done();
     }
 
-    fn check_arm(&mut self, cx: &LateContext<'a, 'tcx>, arm: &'tcx hir::Arm<'_>) {
+    fn check_arm(&mut self, cx: &LateContext<'tcx>, arm: &'tcx hir::Arm<'_>) {
         if !has_attr(cx.sess(), &arm.attrs) {
             return;
         }
@@ -129,7 +129,7 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for Author {
         done();
     }
 
-    fn check_stmt(&mut self, cx: &LateContext<'a, 'tcx>, stmt: &'tcx hir::Stmt<'_>) {
+    fn check_stmt(&mut self, cx: &LateContext<'tcx>, stmt: &'tcx hir::Stmt<'_>) {
         if !has_attr(cx.sess(), stmt.kind.attrs()) {
             return;
         }
@@ -138,7 +138,7 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for Author {
         done();
     }
 
-    fn check_foreign_item(&mut self, cx: &LateContext<'a, 'tcx>, item: &'tcx hir::ForeignItem<'_>) {
+    fn check_foreign_item(&mut self, cx: &LateContext<'tcx>, item: &'tcx hir::ForeignItem<'_>) {
         if !has_attr(cx.sess(), &item.attrs) {
             return;
         }
@@ -175,9 +175,16 @@ impl PrintVisitor {
     }
 
     fn print_qpath(&mut self, path: &QPath<'_>) {
-        print!("    if match_qpath({}, &[", self.current);
-        print_path(path, &mut true);
-        println!("]);");
+        if let QPath::LangItem(lang_item, _) = *path {
+            println!(
+                "    if matches!({}, QPath::LangItem(LangItem::{:?}, _));",
+                self.current, lang_item,
+            );
+        } else {
+            print!("    if match_qpath({}, &[", self.current);
+            print_path(path, &mut true);
+            println!("]);");
+        }
     }
 }
 
@@ -250,8 +257,11 @@ impl<'tcx> Visitor<'tcx> for PrintVisitor {
                     self.visit_expr(arg);
                 }
             },
-            ExprKind::MethodCall(ref _method_name, ref _generics, ref _args) => {
-                println!("MethodCall(ref method_name, ref generics, ref args) = {};", current);
+            ExprKind::MethodCall(ref _method_name, ref _generics, ref _args, ref _fn_span) => {
+                println!(
+                    "MethodCall(ref method_name, ref generics, ref args, ref fn_span) = {};",
+                    current
+                );
                 println!("    // unimplemented: `ExprKind::MethodCall` is not further destructured at the moment");
             },
             ExprKind::Tup(ref elements) => {
@@ -468,6 +478,10 @@ impl<'tcx> Visitor<'tcx> for PrintVisitor {
                 } else {
                     println!("Ret(None) = {};", current);
                 }
+            },
+            ExprKind::InlineAsm(_) => {
+                println!("InlineAsm(_) = {};", current);
+                println!("    // unimplemented: `ExprKind::InlineAsm` is not further destructured at the moment");
             },
             ExprKind::LlvmInlineAsm(_) => {
                 println!("LlvmInlineAsm(_) = {};", current);
@@ -753,5 +767,6 @@ fn print_path(path: &QPath<'_>, first: &mut bool) {
             },
             ref other => print!("/* unimplemented: {:?}*/", other),
         },
+        QPath::LangItem(..) => panic!("print_path: called for lang item qpath"),
     }
 }

@@ -14,6 +14,21 @@
 # =============================================================================
 [llvm]
 
+# Whether to use Rust CI built LLVM instead of locally building it.
+#
+# Unless you're developing for a target where Rust CI doesn't build a compiler
+# toolchain or changing LLVM locally, you probably want to set this to true.
+#
+# It's currently false by default due to being newly added; please file bugs if
+# enabling this did not work for you on Linux (macOS and Windows support is
+# coming soon).
+#
+# We also currently only support this when building LLVM for the build triple.
+#
+# Note that many of the LLVM options are not currently supported for
+# downloading. Currently only the "assertions" option can be toggled.
+#download-ci-llvm = false
+
 # Indicates whether LLVM rebuild should be skipped when running bootstrap. If
 # this is `false` then the compiler's LLVM will be rebuilt whenever the built
 # version doesn't have the correct hash. If it is `true` then LLVM will never
@@ -45,14 +60,12 @@
 # this flag will indicate that this version check should not be done.
 #version-check = true
 
-# Link libstdc++ statically into the librustc_llvm instead of relying on a
+# Link libstdc++ statically into the rustc_llvm instead of relying on a
 # dynamic version to be available.
 #static-libstdcpp = false
 
-# Tell the LLVM build system to use Ninja instead of the platform default for
-# the generated build system. This can sometimes be faster than make, for
-# example.
-#ninja = false
+# Whether to use Ninja to build LLVM. This runs much faster than make.
+#ninja = true
 
 # LLVM targets to build support for.
 # Note: this is NOT related to Rust compilation targets. However, as Rust is
@@ -69,7 +82,7 @@
 # the same format as above, but since these targets are experimental, they are
 # not built by default and the experimental Rust compilation targets that depend
 # on them will not work unless the user opts in to building them.
-#experimental-targets = ""
+#experimental-targets = "AVR"
 
 # Cap the number of parallel linker invocations when compiling LLVM.
 # This can be useful when building LLVM with debug info, which significantly
@@ -113,23 +126,45 @@
 # General build configuration options
 # =============================================================================
 [build]
+# The default stage to use for the `doc` subcommand
+#doc-stage = 0
+
+# The default stage to use for the `build` subcommand
+#build-stage = 1
+
+# The default stage to use for the `test` subcommand
+#test-stage = 1
+
+# The default stage to use for the `dist` subcommand
+#dist-stage = 2
+
+# The default stage to use for the `install` subcommand
+#install-stage = 2
+
+# The default stage to use for the `bench` subcommand
+#bench-stage = 2
 
 # Build triple for the original snapshot compiler. This must be a compiler that
 # nightlies are already produced for. The current platform must be able to run
 # binaries of this build triple and the nightly will be used to bootstrap the
 # first compiler.
-#build = "x86_64-unknown-linux-gnu"    # defaults to your host platform
+#
+# Defaults to host platform
+#build = "x86_64-unknown-linux-gnu"
 
-# In addition to the build triple, other triples to produce full compiler
-# toolchains for. Each of these triples will be bootstrapped from the build
-# triple and then will continue to bootstrap themselves. This platform must
-# currently be able to run all of the triples provided here.
-#host = ["x86_64-unknown-linux-gnu"]   # defaults to just the build triple
+# Which triples to produce a compiler toolchain for. Each of these triples will
+# be bootstrapped from the build triple themselves.
+#
+# Defaults to just the build triple
+#host = ["x86_64-unknown-linux-gnu"]
 
-# In addition to all host triples, other triples to produce the standard library
-# for. Each host triple will be used to produce a copy of the standard library
-# for each target triple.
-#target = ["x86_64-unknown-linux-gnu"] # defaults to just the build triple
+# Which triples to build libraries (core/alloc/std/test/proc_macro) for. Each of
+# these triples will be bootstrapped from the build triple themselves.
+#
+# Defaults to `host`. If you set this explicitly, you likely want to add all
+# host triples to this list as well in order for those host toolchains to be
+# able to compile programs for their native target.
+#target = ["x86_64-unknown-linux-gnu"]
 
 # Use this directory to store build artifacts.
 # You can use "$ROOT" to indicate the root of the git repository.
@@ -174,7 +209,7 @@
 # Python interpreter to use for various tasks throughout the build, notably
 # rustdoc tests, the lldb python interpreter, and some dist bits and pieces.
 #
-# Defaults to the Python interpreter used to execute x.py.
+# Defaults to the Python interpreter used to execute x.py
 #python = "python"
 
 # Force Cargo to check that Cargo.lock describes the precise dependency
@@ -209,7 +244,8 @@
 # Build the sanitizer runtimes
 #sanitizers = false
 
-# Build the profiler runtime
+# Build the profiler runtime (required when compiling with options that depend
+# on this runtime, such as `-C profile-generate` or `-Z instrument-coverage`).
 #profiler = false
 
 # Indicates whether the native libraries linked into Cargo will be statically
@@ -304,33 +340,64 @@
 # Number of codegen units to use for each compiler invocation. A value of 0
 # means "the number of cores on this machine", and 1+ is passed through to the
 # compiler.
-#codegen-units = 1
+#
+# Uses the rustc defaults: https://doc.rust-lang.org/rustc/codegen-options/index.html#codegen-units
+#codegen-units = if incremental { 256 } else { 16 }
 
 # Sets the number of codegen units to build the standard library with,
 # regardless of what the codegen-unit setting for the rest of the compiler is.
 #codegen-units-std = 1
 
 # Whether or not debug assertions are enabled for the compiler and standard
-# library.
-#debug-assertions = false
+# library. Debug assertions control the maximum log level used by rustc. When
+# enabled calls to `trace!` and `debug!` macros are preserved in the compiled
+# binary, otherwise they are omitted.
+#
+# Defaults to rust.debug value
+#debug-assertions = debug
+
+# Whether or not debug assertions are enabled for the standard library.
+# Overrides the `debug-assertions` option, if defined.
+#
+# Defaults to rust.debug-assertions value
+#debug-assertions-std = debug-assertions
+
+# Whether or not to leave debug! and trace! calls in the rust binary.
+# Overrides the `debug-assertions` option, if defined.
+# 
+# Defaults to rust.debug-assertions value
+#debug-logging = debug-assertions
 
 # Debuginfo level for most of Rust code, corresponds to the `-C debuginfo=N` option of `rustc`.
 # `0` - no debug info
-# `1` - line tables only
+# `1` - line tables only - sufficient to generate backtraces that include line
+#       information and inlined functions, set breakpoints at source code
+#       locations, and step through execution in a debugger.
 # `2` - full debug info with variable and type information
 # Can be overridden for specific subsets of Rust code (rustc, std or tools).
 # Debuginfo for tests run with compiletest is not controlled by this option
 # and needs to be enabled separately with `debuginfo-level-tests`.
-#debuginfo-level = if debug { 2 } else { 0 }
+#
+# Note that debuginfo-level = 2 generates several gigabytes of debuginfo
+# and will slow down the linking process significantly.
+#
+# Defaults to 1 if debug is true
+#debuginfo-level = 0
 
 # Debuginfo level for the compiler.
-#debuginfo-level-rustc = debuginfo-level
+#
+# Defaults to rust.debuginfo-level value
+#debuginfo-level-rustc = 0
 
 # Debuginfo level for the standard library.
-#debuginfo-level-std = debuginfo-level
+#
+# Defaults to rust.debuginfo-level value
+#debuginfo-level-std = 0
 
 # Debuginfo level for the tools.
-#debuginfo-level-tools = debuginfo-level
+#
+# Defaults to rust.debuginfo-level value
+#debuginfo-level-tools = 0
 
 # Debuginfo level for the test suites run with compiletest.
 # FIXME(#61117): Some tests fail when this option is enabled.
@@ -343,6 +410,7 @@
 #incremental = false
 
 # Build a multi-threaded rustc
+# FIXME(#75760): Some UI tests fail when this option is enabled.
 #parallel-compiler = false
 
 # The default linker that will be hard-coded into the generated compiler for
@@ -355,7 +423,7 @@
 # nightly features
 #channel = "dev"
 
-# The root location of the MUSL installation directory.
+# The root location of the musl installation directory.
 #musl-root = "..."
 
 # By default the `rustc` executable is built with `-Wl,-rpath` flags on Unix
@@ -364,8 +432,7 @@
 # desired in distributions, for example.
 #rpath = true
 
-# Emits extraneous output from tests to ensure that failures of the test
-# harness are debuggable just from logfiles.
+# Prints each test name as it is executed, to help debug issues in the test harness itself.
 #verbose-tests = false
 
 # Flag indicating whether tests are compiled with optimizations (the -O flag).
@@ -402,18 +469,14 @@
 # supported platforms. The LLD from the bootstrap distribution will be used
 # and not the LLD compiled during the bootstrap.
 #
-# LLD will not be used if we're cross linking or running tests.
+# LLD will not be used if we're cross linking.
 #
-# Explicitly setting the linker for a target will override this option.
+# Explicitly setting the linker for a target will override this option when targeting MSVC.
 #use-lld = false
 
 # Indicates whether some LLVM tools, like llvm-objdump, will be made available in the
 # sysroot.
 #llvm-tools = false
-
-# Indicates whether LLDB will be made available in the sysroot.
-# This is only built if LLVM is also being built.
-#lldb = false
 
 # Whether to deny warnings in crates
 #deny-warnings = true
@@ -431,8 +494,7 @@
 # instead of LLVM's default of 100.
 #thin-lto-import-instr-limit = 100
 
-# Map all debuginfo paths for libstd and crates to `/rust/$sha/$crate/...`,
-# generally only set for releases
+# Map debuginfo paths to `/rust/$sha/...`, generally only set for releases
 #remap-debuginfo = false
 
 # Link the compiler against `jemalloc`, where on Linux and OSX it should
@@ -450,6 +512,10 @@
 # Enable Windows Control Flow Guard checks in the standard library.
 # This only applies from stage 1 onwards, and only for Windows targets.
 #control-flow-guard = false
+
+# Enable symbol-mangling-version v0. This can be helpful when profiling rustc,
+# as generics will be preserved in symbols (rather than erased into opaque T).
+#new-symbol-mangling = false
 
 # =============================================================================
 # Options for specific targets
@@ -479,7 +545,7 @@
 # Linker to be used to link Rust code. Note that the
 # default value is platform specific, and if not specified it may also depend on
 # what platform is crossing to what platform.
-# Setting this will override the `use-lld` option for Rust code.
+# Setting this will override the `use-lld` option for Rust code when targeting MSVC.
 #linker = "cc"
 
 # Path to the `llvm-config` binary of the installation of a custom LLVM to link
@@ -502,11 +568,14 @@
 # only use static libraries. If unset, the target's default linkage is used.
 #crt-static = false
 
-# The root location of the MUSL installation directory. The library directory
+# The root location of the musl installation directory. The library directory
 # will also need to contain libunwind.a for an unwinding implementation. Note
-# that this option only makes sense for MUSL targets that produce statically
+# that this option only makes sense for musl targets that produce statically
 # linked binaries
 #musl-root = "..."
+
+# The full path to the musl libdir.
+#musl-libdir = musl-root/lib
 
 # The root location of the `wasm32-wasi` sysroot.
 #wasi-root = "..."

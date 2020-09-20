@@ -2,17 +2,17 @@
 
 use std::iter::once;
 
-use rustc_ast::ast;
+use rustc_ast as ast;
 use rustc_data_structures::fx::FxHashSet;
 use rustc_hir as hir;
 use rustc_hir::def::{CtorKind, DefKind, Res};
-use rustc_hir::def_id::DefId;
+use rustc_hir::def_id::{DefId, CRATE_DEF_INDEX};
 use rustc_hir::Mutability;
 use rustc_metadata::creader::LoadedMacro;
 use rustc_middle::ty;
 use rustc_mir::const_eval::is_min_const_fn;
 use rustc_span::hygiene::MacroKind;
-use rustc_span::symbol::Symbol;
+use rustc_span::symbol::{sym, Symbol};
 use rustc_span::Span;
 
 use crate::clean::{self, GetDefId, ToSource, TypeKind};
@@ -194,6 +194,7 @@ pub fn build_external_trait(cx: &DocContext<'_>, did: DefId) -> clean::Trait {
     let generics = (cx.tcx.generics_of(did), predicates).clean(cx);
     let generics = filter_non_trait_generics(did, generics);
     let (generics, supertrait_bounds) = separate_supertrait_bounds(generics);
+    let is_spotlight = load_attrs(cx, did).clean(cx).has_doc_flag(sym::spotlight);
     let is_auto = cx.tcx.trait_is_auto(did);
     clean::Trait {
         auto: auto_trait,
@@ -201,6 +202,7 @@ pub fn build_external_trait(cx: &DocContext<'_>, did: DefId) -> clean::Trait {
         generics,
         items: trait_items,
         bounds: supertrait_bounds,
+        is_spotlight,
         is_auto,
     }
 }
@@ -278,7 +280,7 @@ fn build_type_alias_type(cx: &DocContext<'_>, did: DefId) -> Option<clean::Type>
     type_.def_id().and_then(|did| build_ty(cx, did))
 }
 
-pub fn build_ty(cx: &DocContext, did: DefId) -> Option<clean::Type> {
+pub fn build_ty(cx: &DocContext<'_>, did: DefId) -> Option<clean::Type> {
     match cx.tcx.def_kind(did) {
         DefKind::Struct | DefKind::Union | DefKind::Enum | DefKind::Const | DefKind::Static => {
             Some(cx.tcx.type_of(did).clean(cx))
@@ -304,15 +306,17 @@ fn merge_attrs(
     attrs: Attrs<'_>,
     other_attrs: Option<Attrs<'_>>,
 ) -> clean::Attributes {
-    let mut merged_attrs: Vec<ast::Attribute> = Vec::with_capacity(attrs.len());
-    // If we have additional attributes (from a re-export),
+    // NOTE: If we have additional attributes (from a re-export),
     // always insert them first. This ensure that re-export
     // doc comments show up before the original doc comments
     // when we render them.
-    if let Some(a) = other_attrs {
-        merged_attrs.extend(a.iter().cloned());
-    }
-    merged_attrs.extend(attrs.to_vec());
+    let merged_attrs = if let Some(inner) = other_attrs {
+        let mut both = inner.to_vec();
+        both.extend_from_slice(attrs);
+        both
+    } else {
+        attrs.to_vec()
+    };
     merged_attrs.clean(cx)
 }
 
@@ -335,14 +339,21 @@ pub fn build_impl(
     // reachable in rustdoc generated documentation
     if !did.is_local() {
         if let Some(traitref) = associated_trait {
-            if !cx.renderinfo.borrow().access_levels.is_public(traitref.def_id) {
+            let did = traitref.def_id;
+            if !cx.renderinfo.borrow().access_levels.is_public(did) {
                 return;
+            }
+
+            if let Some(stab) = tcx.lookup_stability(did) {
+                if stab.level.is_unstable() && stab.feature == sym::rustc_private {
+                    return;
+                }
             }
         }
     }
 
     let for_ = if let Some(did) = did.as_local() {
-        let hir_id = tcx.hir().as_local_hir_id(did);
+        let hir_id = tcx.hir().local_def_id_to_hir_id(did);
         match tcx.hir().expect_item(hir_id).kind {
             hir::ItemKind::Impl { self_ty, .. } => self_ty.clean(cx),
             _ => panic!("did given to build_impl was not an impl"),
@@ -358,12 +369,18 @@ pub fn build_impl(
             if !cx.renderinfo.borrow().access_levels.is_public(did) {
                 return;
             }
+
+            if let Some(stab) = tcx.lookup_stability(did) {
+                if stab.level.is_unstable() && stab.feature == sym::rustc_private {
+                    return;
+                }
+            }
         }
     }
 
     let predicates = tcx.explicit_predicates_of(did);
     let (trait_items, generics) = if let Some(did) = did.as_local() {
-        let hir_id = tcx.hir().as_local_hir_id(did);
+        let hir_id = tcx.hir().local_def_id_to_hir_id(did);
         match tcx.hir().expect_item(hir_id).kind {
             hir::ItemKind::Impl { ref generics, ref items, .. } => (
                 items.iter().map(|item| tcx.hir().impl_item(item.id).clean(cx)).collect::<Vec<_>>(),
@@ -454,11 +471,7 @@ fn build_module(cx: &DocContext<'_>, did: DefId, visited: &mut FxHashSet<DefId>)
                         name: None,
                         attrs: clean::Attributes::default(),
                         source: clean::Span::empty(),
-                        def_id: cx
-                            .tcx
-                            .hir()
-                            .local_def_id_from_node_id(ast::CRATE_NODE_ID)
-                            .to_def_id(),
+                        def_id: DefId::local(CRATE_DEF_INDEX),
                         visibility: clean::Public,
                         stability: None,
                         deprecation: None,
@@ -490,7 +503,7 @@ fn build_module(cx: &DocContext<'_>, did: DefId, visited: &mut FxHashSet<DefId>)
 
 pub fn print_inlined_const(cx: &DocContext<'_>, did: DefId) -> String {
     if let Some(did) = did.as_local() {
-        let hir_id = cx.tcx.hir().as_local_hir_id(did);
+        let hir_id = cx.tcx.hir().local_def_id_to_hir_id(did);
         rustc_hir_pretty::id_to_string(&cx.tcx.hir(), hir_id)
     } else {
         cx.tcx.rendered_const(did)
@@ -503,7 +516,7 @@ fn build_const(cx: &DocContext<'_>, did: DefId) -> clean::Constant {
         expr: print_inlined_const(cx, did),
         value: clean::utils::print_evaluated_const(cx, did),
         is_literal: did.as_local().map_or(false, |did| {
-            clean::utils::is_literal_expr(cx, cx.tcx.hir().as_local_hir_id(did))
+            clean::utils::is_literal_expr(cx, cx.tcx.hir().local_def_id_to_hir_id(did))
         }),
     }
 }
@@ -618,7 +631,9 @@ pub fn record_extern_trait(cx: &DocContext<'_>, did: DefId) {
         }
     }
 
-    cx.active_extern_traits.borrow_mut().insert(did);
+    {
+        cx.active_extern_traits.borrow_mut().insert(did);
+    }
 
     debug!("record_extern_trait: {:?}", did);
     let trait_ = build_external_trait(cx, did);

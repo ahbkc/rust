@@ -3,12 +3,11 @@
 
 #![deny(clippy::missing_docs_in_private_items)]
 
-use crate::utils::{is_expn_of, match_def_path, match_qpath, paths};
+use crate::utils::{is_expn_of, match_def_path, paths};
 use if_chain::if_chain;
 use rustc_ast::ast;
 use rustc_hir as hir;
 use rustc_lint::LateContext;
-use rustc_middle::ty;
 
 /// Converts a hir binary operator to the corresponding `ast` type.
 #[must_use]
@@ -47,7 +46,7 @@ pub struct Range<'a> {
 }
 
 /// Higher a `hir` range to something similar to `ast::ExprKind::Range`.
-pub fn range<'a, 'b, 'tcx>(cx: &LateContext<'a, 'tcx>, expr: &'b hir::Expr<'_>) -> Option<Range<'b>> {
+pub fn range<'a>(expr: &'a hir::Expr<'_>) -> Option<Range<'a>> {
     /// Finds the field named `name` in the field. Always return `Some` for
     /// convenience.
     fn get_field<'c>(name: &str, fields: &'c [hir::Field<'_>]) -> Option<&'c hir::Expr<'c>> {
@@ -56,95 +55,46 @@ pub fn range<'a, 'b, 'tcx>(cx: &LateContext<'a, 'tcx>, expr: &'b hir::Expr<'_>) 
         Some(expr)
     }
 
-    let def_path = match cx.tables.expr_ty(expr).kind {
-        ty::Adt(def, _) => cx.tcx.def_path(def.did),
-        _ => return None,
-    };
-
-    // sanity checks for std::ops::RangeXXXX
-    if def_path.data.len() != 3 {
-        return None;
-    }
-    if def_path.data.get(0)?.data.as_symbol() != sym!(ops) {
-        return None;
-    }
-    if def_path.data.get(1)?.data.as_symbol() != sym!(range) {
-        return None;
-    }
-    let type_name = def_path.data.get(2)?.data.as_symbol();
-    let range_types = [
-        "RangeFrom",
-        "RangeFull",
-        "RangeInclusive",
-        "Range",
-        "RangeTo",
-        "RangeToInclusive",
-    ];
-    if !range_types.contains(&&*type_name.as_str()) {
-        return None;
-    }
-
-    // The range syntax is expanded to literal paths starting with `core` or `std`
-    // depending on
-    // `#[no_std]`. Testing both instead of resolving the paths.
-
     match expr.kind {
-        hir::ExprKind::Path(ref path) => {
-            if match_qpath(path, &paths::RANGE_FULL_STD) || match_qpath(path, &paths::RANGE_FULL) {
-                Some(Range {
-                    start: None,
-                    end: None,
-                    limits: ast::RangeLimits::HalfOpen,
-                })
-            } else {
-                None
-            }
+        hir::ExprKind::Call(ref path, ref args)
+            if matches!(
+                path.kind,
+                hir::ExprKind::Path(hir::QPath::LangItem(hir::LangItem::RangeInclusiveNew, _))
+            ) =>
+        {
+            Some(Range {
+                start: Some(&args[0]),
+                end: Some(&args[1]),
+                limits: ast::RangeLimits::Closed,
+            })
         },
-        hir::ExprKind::Call(ref path, ref args) => {
-            if let hir::ExprKind::Path(ref path) = path.kind {
-                if match_qpath(path, &paths::RANGE_INCLUSIVE_STD_NEW) || match_qpath(path, &paths::RANGE_INCLUSIVE_NEW)
-                {
-                    Some(Range {
-                        start: Some(&args[0]),
-                        end: Some(&args[1]),
-                        limits: ast::RangeLimits::Closed,
-                    })
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        },
-        hir::ExprKind::Struct(ref path, ref fields, None) => {
-            if match_qpath(path, &paths::RANGE_FROM_STD) || match_qpath(path, &paths::RANGE_FROM) {
-                Some(Range {
-                    start: Some(get_field("start", fields)?),
-                    end: None,
-                    limits: ast::RangeLimits::HalfOpen,
-                })
-            } else if match_qpath(path, &paths::RANGE_STD) || match_qpath(path, &paths::RANGE) {
-                Some(Range {
-                    start: Some(get_field("start", fields)?),
-                    end: Some(get_field("end", fields)?),
-                    limits: ast::RangeLimits::HalfOpen,
-                })
-            } else if match_qpath(path, &paths::RANGE_TO_INCLUSIVE_STD) || match_qpath(path, &paths::RANGE_TO_INCLUSIVE)
-            {
-                Some(Range {
-                    start: None,
-                    end: Some(get_field("end", fields)?),
-                    limits: ast::RangeLimits::Closed,
-                })
-            } else if match_qpath(path, &paths::RANGE_TO_STD) || match_qpath(path, &paths::RANGE_TO) {
-                Some(Range {
-                    start: None,
-                    end: Some(get_field("end", fields)?),
-                    limits: ast::RangeLimits::HalfOpen,
-                })
-            } else {
-                None
-            }
+        hir::ExprKind::Struct(ref path, ref fields, None) => match path {
+            hir::QPath::LangItem(hir::LangItem::RangeFull, _) => Some(Range {
+                start: None,
+                end: None,
+                limits: ast::RangeLimits::HalfOpen,
+            }),
+            hir::QPath::LangItem(hir::LangItem::RangeFrom, _) => Some(Range {
+                start: Some(get_field("start", fields)?),
+                end: None,
+                limits: ast::RangeLimits::HalfOpen,
+            }),
+            hir::QPath::LangItem(hir::LangItem::Range, _) => Some(Range {
+                start: Some(get_field("start", fields)?),
+                end: Some(get_field("end", fields)?),
+                limits: ast::RangeLimits::HalfOpen,
+            }),
+            hir::QPath::LangItem(hir::LangItem::RangeToInclusive, _) => Some(Range {
+                start: None,
+                end: Some(get_field("end", fields)?),
+                limits: ast::RangeLimits::Closed,
+            }),
+            hir::QPath::LangItem(hir::LangItem::RangeTo, _) => Some(Range {
+                start: None,
+                end: Some(get_field("end", fields)?),
+                limits: ast::RangeLimits::HalfOpen,
+            }),
+            _ => None,
         },
         _ => None,
     }
@@ -257,12 +207,12 @@ pub enum VecArgs<'a> {
 
 /// Returns the arguments of the `vec!` macro if this expression was expanded
 /// from `vec!`.
-pub fn vec_macro<'e>(cx: &LateContext<'_, '_>, expr: &'e hir::Expr<'_>) -> Option<VecArgs<'e>> {
+pub fn vec_macro<'e>(cx: &LateContext<'_>, expr: &'e hir::Expr<'_>) -> Option<VecArgs<'e>> {
     if_chain! {
         if let hir::ExprKind::Call(ref fun, ref args) = expr.kind;
         if let hir::ExprKind::Path(ref qpath) = fun.kind;
         if is_expn_of(fun.span, "vec").is_some();
-        if let Some(fun_def_id) = cx.tables.qpath_res(qpath, fun.hir_id).opt_def_id();
+        if let Some(fun_def_id) = cx.qpath_res(qpath, fun.hir_id).opt_def_id();
         then {
             return if match_def_path(cx, fun_def_id, &paths::VEC_FROM_ELEM) && args.len() == 2 {
                 // `vec![elem; size]` case

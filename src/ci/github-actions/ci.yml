@@ -35,10 +35,26 @@ x--expand-yaml-anchors--remove:
     CI_JOB_NAME: ${{ matrix.name }}
 
   - &public-variables
-    SCCACHE_BUCKET: rust-lang-gha-caches
-    TOOLSTATE_REPO: https://github.com/pietroalbini/rust-toolstate
+    SCCACHE_BUCKET: rust-lang-ci-sccache2
+    TOOLSTATE_REPO: https://github.com/rust-lang-nursery/rust-toolstate
+    CACHE_DOMAIN: ci-caches.rust-lang.org
 
   - &prod-variables
+    SCCACHE_BUCKET: rust-lang-ci-sccache2
+    DEPLOY_BUCKET: rust-lang-ci2
+    TOOLSTATE_REPO: https://github.com/rust-lang-nursery/rust-toolstate
+    TOOLSTATE_ISSUES_API_URL: https://api.github.com/repos/rust-lang/rust/issues
+    TOOLSTATE_PUBLISH: 1
+    # AWS_SECRET_ACCESS_KEYs are stored in GitHub's secrets storage, named
+    # AWS_SECRET_ACCESS_KEY_<keyid>. Including the key id in the name allows to
+    # rotate them in a single branch while keeping the old key in another
+    # branch, which wouldn't be possible if the key was named with the kind
+    # (caches, artifacts...).
+    CACHES_AWS_ACCESS_KEY_ID: AKIA46X5W6CZI5DHEBFL
+    ARTIFACTS_AWS_ACCESS_KEY_ID: AKIA46X5W6CZN24CBO55
+    CACHE_DOMAIN: ci-caches.rust-lang.org
+
+  - &dummy-variables
     SCCACHE_BUCKET: rust-lang-gha-caches
     DEPLOY_BUCKET: rust-lang-gha
     TOOLSTATE_REPO: https://github.com/pietroalbini/rust-toolstate
@@ -51,6 +67,7 @@ x--expand-yaml-anchors--remove:
     # (caches, artifacts...).
     CACHES_AWS_ACCESS_KEY_ID: AKIA46X5W6CZOMUQATD5
     ARTIFACTS_AWS_ACCESS_KEY_ID: AKIA46X5W6CZH5AYXDVF
+    CACHE_DOMAIN: ci-caches-gha.rust-lang.org
 
   - &base-job
     env: {}
@@ -67,6 +84,9 @@ x--expand-yaml-anchors--remove:
     os: windows-latest-xl
     <<: *base-job
 
+  - &job-aarch64-linux
+    os: [self-hosted, ARM64, linux]
+
   - &step
     if: success() && !env.SKIP_JOB
 
@@ -77,19 +97,20 @@ x--expand-yaml-anchors--remove:
     steps:
       - name: disable git crlf conversion
         run: git config --global core.autocrlf false
-        shell: bash
 
       - name: checkout the source code
         uses: actions/checkout@v1
         with:
           fetch-depth: 2
 
-      - name: configure GitHub Actions to kill the build when outdated
-        uses: rust-lang/simpleinfra/github-actions/cancel-outdated-builds@master
-        with:
-          github_token: "${{ secrets.github_token }}"
-        if: success() && !env.SKIP_JOB && github.ref != 'refs/heads/try'
-        <<: *step
+      # Rust Log Analyzer can't currently detect the PR number of a GitHub
+      # Actions build on its own, so a hint in the log message is needed to
+      # point it in the right direction.
+      - name: configure the PR in which the error message will be posted
+        run: echo "[CI_PR_NUMBER=$num]"
+        env:
+          num: ${{ github.event.number }}
+        if: success() && !env.SKIP_JOBS && github.event_name == 'pull_request'
 
       - name: add extra environment variables
         run: src/ci/scripts/setup-environment.sh
@@ -103,6 +124,13 @@ x--expand-yaml-anchors--remove:
 
       - name: decide whether to skip this job
         run: src/ci/scripts/should-skip-this.sh
+        <<: *step
+
+      - name: configure GitHub Actions to kill the build when outdated
+        uses: rust-lang/simpleinfra/github-actions/cancel-outdated-builds@master
+        with:
+          github_token: "${{ secrets.github_token }}"
+        if: success() && !env.SKIP_JOB && github.ref != 'refs/heads/try'
         <<: *step
 
       - name: collect CPU statistics
@@ -129,10 +157,6 @@ x--expand-yaml-anchors--remove:
         run: src/ci/scripts/install-wix.sh
         <<: *step
 
-      - name: install InnoSetup
-        run: src/ci/scripts/install-innosetup.sh
-        <<: *step
-
       - name: ensure the build happens on a partition with enough space
         run: src/ci/scripts/symlink-build-dir.sh
         <<: *step
@@ -143,10 +167,6 @@ x--expand-yaml-anchors--remove:
 
       - name: install MSYS2
         run: src/ci/scripts/install-msys2.sh
-        <<: *step
-
-      - name: install MSYS2 packages
-        run: src/ci/scripts/install-msys2-packages.sh
         <<: *step
 
       - name: install MinGW
@@ -230,6 +250,7 @@ on:
     branches:
       - auto
       - try
+      - try-perf
       - master
   pull_request:
     branches:
@@ -237,18 +258,10 @@ on:
 
 defaults:
   run:
-    # While on Linux and macOS builders it just forwards the arguments to the
-    # system bash, this wrapper allows switching from the host's bash.exe to
-    # the one we install along with MSYS2 mid-build on Windows.
-    #
-    # Once the step to install MSYS2 is executed, the CI_OVERRIDE_SHELL
-    # environment variable is set pointing to our MSYS2's bash.exe. From that
-    # moment the host's bash.exe will not be called anymore.
-    #
-    # This is needed because we can't launch our own bash.exe from the host
-    # bash.exe, as that would load two different cygwin1.dll in memory, causing
-    # "cygwin heap mismatch" errors.
-    shell: python src/ci/exec-with-shell.py {0}
+    # On Linux, macOS, and Windows, use the system-provided bash as the default
+    # shell. (This should only make a difference on Windows, where the default
+    # shell is PowerShell.)
+    shell: bash
 
 jobs:
   pr:
@@ -276,16 +289,11 @@ jobs:
     name: try
     env:
       <<: [*shared-ci-variables, *prod-variables]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/try' && github.repository == 'rust-lang-ci/rust'
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/try' || github.ref == 'refs/heads/try-perf') && github.repository == 'rust-lang-ci/rust'
     strategy:
       matrix:
         include:
           - name: dist-x86_64-linux
-            <<: *job-linux-xl
-
-          - name: dist-x86_64-linux-alt
-            env:
-              IMAGE: dist-x86_64-linux
             <<: *job-linux-xl
 
   auto:
@@ -352,6 +360,9 @@ jobs:
           - name: dist-powerpc64le-linux
             <<: *job-linux-xl
 
+          - name: dist-riscv64-linux
+            <<: *job-linux-xl
+
           - name: dist-s390x-linux
             <<: *job-linux-xl
 
@@ -362,6 +373,9 @@ jobs:
             <<: *job-linux-xl
 
           - name: dist-x86_64-freebsd
+            <<: *job-linux-xl
+
+          - name: dist-x86_64-illumos
             <<: *job-linux-xl
 
           - name: dist-x86_64-linux
@@ -405,9 +419,6 @@ jobs:
           - name: x86_64-gnu-distcheck
             <<: *job-linux-xl
 
-          - name: x86_64-gnu-full-bootstrap
-            <<: *job-linux-xl
-
           - name: x86_64-gnu-llvm-8
             env:
               RUST_BACKTRACE: 1
@@ -428,7 +439,7 @@ jobs:
           - name: dist-x86_64-apple
             env:
               SCRIPT: ./x.py dist
-              RUST_CONFIGURE_ARGS: --target=aarch64-apple-ios,x86_64-apple-ios --enable-full-tools --enable-sanitizers --enable-profiler --set rust.jemalloc
+              RUST_CONFIGURE_ARGS: --host=x86_64-apple-darwin --target=x86_64-apple-darwin,aarch64-apple-ios,x86_64-apple-ios --enable-full-tools --enable-sanitizers --enable-profiler --set rust.jemalloc --set llvm.ninja=false
               RUSTC_RETRY_LINKER_ON_SEGFAULT: 1
               MACOSX_DEPLOYMENT_TARGET: 10.7
               NO_LLVM_ASSERTIONS: 1
@@ -439,7 +450,7 @@ jobs:
           - name: dist-x86_64-apple-alt
             env:
               SCRIPT: ./x.py dist
-              RUST_CONFIGURE_ARGS: --enable-extended --enable-profiler --set rust.jemalloc
+              RUST_CONFIGURE_ARGS: --enable-extended --enable-profiler --set rust.jemalloc --set llvm.ninja=false
               RUSTC_RETRY_LINKER_ON_SEGFAULT: 1
               MACOSX_DEPLOYMENT_TARGET: 10.7
               NO_LLVM_ASSERTIONS: 1
@@ -448,8 +459,8 @@ jobs:
 
           - name: x86_64-apple
             env:
-              SCRIPT: ./x.py test
-              RUST_CONFIGURE_ARGS: --build=x86_64-apple-darwin --enable-sanitizers --enable-profiler --set rust.jemalloc
+              SCRIPT: ./x.py --stage 2 test
+              RUST_CONFIGURE_ARGS: --build=x86_64-apple-darwin --enable-sanitizers --enable-profiler --set rust.jemalloc --set llvm.ninja=false
               RUSTC_RETRY_LINKER_ON_SEGFAULT: 1
               MACOSX_DEPLOYMENT_TARGET: 10.8
               MACOSX_STD_DEPLOYMENT_TARGET: 10.7
@@ -494,16 +505,10 @@ jobs:
               NO_LLVM_ASSERTIONS: 1
             <<: *job-windows-xl
 
-          - name: x86_64-msvc-aux
-            env:
-              RUST_CHECK_TARGET: check-aux EXCLUDE_CARGO=1
-              RUST_CONFIGURE_ARGS: --build=x86_64-pc-windows-msvc
-            <<: *job-windows-xl
-
           - name: x86_64-msvc-cargo
             env:
-              SCRIPT: python x.py test src/tools/cargotest src/tools/cargo
-              RUST_CONFIGURE_ARGS: --build=x86_64-pc-windows-msvc
+              SCRIPT: python x.py --stage 2 test src/tools/cargotest src/tools/cargo
+              RUST_CONFIGURE_ARGS: --build=x86_64-pc-windows-msvc --enable-lld
               VCVARS_BAT: vcvars64.bat
               # FIXME(#59637)
               NO_DEBUG_ASSERTIONS: 1
@@ -512,21 +517,23 @@ jobs:
 
           - name: x86_64-msvc-tools
             env:
-              SCRIPT: src/ci/docker/x86_64-gnu-tools/checktools.sh x.py /tmp/toolstate/toolstates.json windows
+              SCRIPT: src/ci/docker/host-x86_64/x86_64-gnu-tools/checktools.sh x.py /tmp/toolstate/toolstates.json windows
               RUST_CONFIGURE_ARGS: --build=x86_64-pc-windows-msvc --save-toolstates=/tmp/toolstate/toolstates.json
             <<: *job-windows-xl
 
           # 32/64-bit MinGW builds.
           #
-          # We are using MinGW with posix threads since LLVM does not compile with
-          # the win32 threads version due to missing support for C++'s std::thread.
+          # We are using MinGW with POSIX threads since LLVM requires
+          # C++'s std::thread which is disabled in libstdc++ with win32 threads.
+          # FIXME: Libc++ doesn't have this limitation so we can avoid
+          # winpthreads if we switch to it.
           #
-          # Instead of relying on the MinGW version installed on appveryor we download
-          # and install one ourselves so we won't be surprised by changes to appveyor's
+          # Instead of relying on the MinGW version installed on CI we download
+          # and install one ourselves so we won't be surprised by changes to CI's
           # build image.
           #
           # Finally, note that the downloads below are all in the `rust-lang-ci` S3
-          # bucket, but they cleraly didn't originate there! The downloads originally
+          # bucket, but they clearly didn't originate there! The downloads originally
           # came from the mingw-w64 SourceForge download site. Unfortunately
           # SourceForge is notoriously flaky, so we mirror it on our own infrastructure.
 
@@ -550,7 +557,7 @@ jobs:
           - name: x86_64-mingw-1
             env:
               SCRIPT: make ci-mingw-subset-1
-              RUST_CONFIGURE_ARGS: --build=x86_64-pc-windows-gnu
+              RUST_CONFIGURE_ARGS: --build=x86_64-pc-windows-gnu --enable-profiler
               CUSTOM_MINGW: 1
               # FIXME(#59637)
               NO_DEBUG_ASSERTIONS: 1
@@ -560,7 +567,7 @@ jobs:
           - name: x86_64-mingw-2
             env:
               SCRIPT: make ci-mingw-subset-2
-              RUST_CONFIGURE_ARGS: --build=x86_64-pc-windows-gnu
+              RUST_CONFIGURE_ARGS: --build=x86_64-pc-windows-gnu --enable-profiler
               CUSTOM_MINGW: 1
             <<: *job-windows-xl
 
@@ -568,6 +575,7 @@ jobs:
             env:
               RUST_CONFIGURE_ARGS: >-
                 --build=x86_64-pc-windows-msvc
+                --host=x86_64-pc-windows-msvc
                 --target=x86_64-pc-windows-msvc,aarch64-pc-windows-msvc
                 --enable-full-tools
                 --enable-profiler
@@ -579,7 +587,8 @@ jobs:
             env:
               RUST_CONFIGURE_ARGS: >-
                 --build=i686-pc-windows-msvc
-                --target=i586-pc-windows-msvc
+                --host=i686-pc-windows-msvc
+                --target=i686-pc-windows-msvc,i586-pc-windows-msvc
                 --enable-full-tools
                 --enable-profiler
               SCRIPT: python x.py dist
@@ -608,6 +617,23 @@ jobs:
               SCRIPT: python x.py dist
             <<: *job-windows-xl
 
+  auto-fallible:
+    <<: *base-ci-job
+    name: auto-fallible
+    env:
+      <<: [*shared-ci-variables, *dummy-variables]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/auto' && github.repository == 'rust-lang-ci/rust'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          #############################
+          #   Linux/Docker builders   #
+          #############################
+
+          - name: aarch64-gnu
+            <<: *job-aarch64-linux
+
   master:
     name: master
     runs-on: ubuntu-latest
@@ -622,6 +648,7 @@ jobs:
 
       - name: publish toolstate
         run: src/ci/publish_toolstate.sh
+        shell: bash
         env:
           TOOLSTATE_REPO_ACCESS_TOKEN: ${{ secrets.TOOLSTATE_REPO_ACCESS_TOKEN }}
         <<: *step
@@ -631,11 +658,11 @@ jobs:
   # successful listening to webhooks only.
   try-success:
     needs: [try]
-    if: "success() && github.event_name == 'push' && github.ref == 'refs/heads/try' && github.repository == 'rust-lang-ci/rust'"
+    if: "success() && github.event_name == 'push' && (github.ref == 'refs/heads/try' || github.ref == 'refs/heads/try-perf') && github.repository == 'rust-lang-ci/rust'"
     <<: *base-success-job
   try-failure:
     needs: [try]
-    if: "!success() && github.event_name == 'push' && github.ref == 'refs/heads/try' && github.repository == 'rust-lang-ci/rust'"
+    if: "!success() && github.event_name == 'push' && (github.ref == 'refs/heads/try' || github.ref == 'refs/heads/try-perf') && github.repository == 'rust-lang-ci/rust'"
     <<: *base-failure-job
   auto-success:
     needs: [auto]

@@ -14,7 +14,6 @@ use rustc_middle::mir::{
     visit::{MutatingUseContext, NonMutatingUseContext, PlaceContext, Visitor as _},
 };
 use rustc_middle::ty::{self, fold::TypeVisitor, Ty};
-use rustc_mir::dataflow::BottomValue;
 use rustc_mir::dataflow::{Analysis, AnalysisDomain, GenKill, GenKillAnalysis, ResultsCursor};
 use rustc_session::{declare_lint_pass, declare_tool_lint};
 use rustc_span::source_map::{BytePos, Span};
@@ -66,11 +65,11 @@ declare_clippy_lint! {
 
 declare_lint_pass!(RedundantClone => [REDUNDANT_CLONE]);
 
-impl<'a, 'tcx> LateLintPass<'a, 'tcx> for RedundantClone {
+impl<'tcx> LateLintPass<'tcx> for RedundantClone {
     #[allow(clippy::too_many_lines)]
     fn check_fn(
         &mut self,
-        cx: &LateContext<'a, 'tcx>,
+        cx: &LateContext<'tcx>,
         _: FnKind<'tcx>,
         _: &'tcx FnDecl<'_>,
         body: &'tcx Body<'_>,
@@ -122,6 +121,12 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for RedundantClone {
 
             if !from_borrow && !from_deref {
                 continue;
+            }
+
+            if let ty::Adt(ref def, _) = arg_ty.kind() {
+                if match_def_path(cx, def.did, &paths::MEM_MANUALLY_DROP) {
+                    continue;
+                }
             }
 
             // `{ cloned = &arg; clone(move cloned); }` or `{ cloned = &arg; to_path_buf(cloned); }`
@@ -273,7 +278,7 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for RedundantClone {
 
 /// If `kind` is `y = func(x: &T)` where `T: !Copy`, returns `(DefId of func, x, T, y)`.
 fn is_call_with_ref_arg<'tcx>(
-    cx: &LateContext<'_, 'tcx>,
+    cx: &LateContext<'tcx>,
     mir: &'tcx mir::Body<'tcx>,
     kind: &'tcx mir::TerminatorKind<'tcx>,
 ) -> Option<(def_id::DefId, mir::Local, Ty<'tcx>, mir::Local)> {
@@ -281,7 +286,7 @@ fn is_call_with_ref_arg<'tcx>(
         if let mir::TerminatorKind::Call { func, args, destination, .. } = kind;
         if args.len() == 1;
         if let mir::Operand::Move(mir::Place { local, .. }) = &args[0];
-        if let ty::FnDef(def_id, _) = func.ty(&*mir, cx.tcx).kind;
+        if let ty::FnDef(def_id, _) = *func.ty(&*mir, cx.tcx).kind();
         if let (inner_ty, 1) = walk_ptrs_ty_depth(args[0].ty(&*mir, cx.tcx));
         if !is_copy(cx, inner_ty);
         then {
@@ -297,7 +302,7 @@ type CannotMoveOut = bool;
 /// Finds the first `to = (&)from`, and returns
 /// ``Some((from, whether `from` cannot be moved out))``.
 fn find_stmt_assigns_to<'tcx>(
-    cx: &LateContext<'_, 'tcx>,
+    cx: &LateContext<'tcx>,
     mir: &mir::Body<'tcx>,
     to_local: mir::Local,
     by_ref: bool,
@@ -331,7 +336,7 @@ fn find_stmt_assigns_to<'tcx>(
 ///
 /// Also reports whether given `place` cannot be moved out.
 fn base_local_and_movability<'tcx>(
-    cx: &LateContext<'_, 'tcx>,
+    cx: &LateContext<'tcx>,
     mir: &mir::Body<'tcx>,
     place: mir::Place<'tcx>,
 ) -> Option<(mir::Local, CannotMoveOut)> {
@@ -405,14 +410,15 @@ impl<'tcx> mir::visit::Visitor<'tcx> for LocalUseVisitor {
 struct MaybeStorageLive;
 
 impl<'tcx> AnalysisDomain<'tcx> for MaybeStorageLive {
-    type Idx = mir::Local;
+    type Domain = BitSet<mir::Local>;
     const NAME: &'static str = "maybe_storage_live";
 
-    fn bits_per_block(&self, body: &mir::Body<'tcx>) -> usize {
-        body.local_decls.len()
+    fn bottom_value(&self, body: &mir::Body<'tcx>) -> Self::Domain {
+        // bottom = dead
+        BitSet::new_empty(body.local_decls.len())
     }
 
-    fn initialize_start_block(&self, body: &mir::Body<'tcx>, state: &mut BitSet<Self::Idx>) {
+    fn initialize_start_block(&self, body: &mir::Body<'tcx>, state: &mut Self::Domain) {
         for arg in body.args_iter() {
             state.insert(arg);
         }
@@ -420,6 +426,8 @@ impl<'tcx> AnalysisDomain<'tcx> for MaybeStorageLive {
 }
 
 impl<'tcx> GenKillAnalysis<'tcx> for MaybeStorageLive {
+    type Idx = mir::Local;
+
     fn statement_effect(&self, trans: &mut impl GenKill<Self::Idx>, stmt: &mir::Statement<'tcx>, _: mir::Location) {
         match stmt.kind {
             mir::StatementKind::StorageLive(l) => trans.gen(l),
@@ -448,22 +456,17 @@ impl<'tcx> GenKillAnalysis<'tcx> for MaybeStorageLive {
     }
 }
 
-impl BottomValue for MaybeStorageLive {
-    /// bottom = dead
-    const BOTTOM_VALUE: bool = false;
-}
-
 /// Collects the possible borrowers of each local.
 /// For example, `b = &a; c = &a;` will make `b` and (transitively) `c`
 /// possible borrowers of `a`.
 struct PossibleBorrowerVisitor<'a, 'tcx> {
     possible_borrower: TransitiveRelation<mir::Local>,
     body: &'a mir::Body<'tcx>,
-    cx: &'a LateContext<'a, 'tcx>,
+    cx: &'a LateContext<'tcx>,
 }
 
 impl<'a, 'tcx> PossibleBorrowerVisitor<'a, 'tcx> {
-    fn new(cx: &'a LateContext<'a, 'tcx>, body: &'a mir::Body<'tcx>) -> Self {
+    fn new(cx: &'a LateContext<'tcx>, body: &'a mir::Body<'tcx>) -> Self {
         Self {
             possible_borrower: TransitiveRelation::default(),
             cx,
@@ -473,7 +476,7 @@ impl<'a, 'tcx> PossibleBorrowerVisitor<'a, 'tcx> {
 
     fn into_map(
         self,
-        cx: &LateContext<'a, 'tcx>,
+        cx: &LateContext<'tcx>,
         maybe_live: ResultsCursor<'tcx, 'tcx, MaybeStorageLive>,
     ) -> PossibleBorrowerMap<'a, 'tcx> {
         let mut map = FxHashMap::default();

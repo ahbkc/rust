@@ -20,6 +20,7 @@ use wildcard_imports_helper::inner::inner_for_self_import::*;
 use wildcard_imports_helper::*;
 
 use std::io::prelude::*;
+use wildcard_imports_helper::prelude::v1::*;
 
 struct ReadFoo;
 
@@ -75,6 +76,7 @@ fn main() {
     let _ = A;
     let _ = inner_struct_mod::C;
     let _ = ExternA;
+    let _ = PreludeModAnywhere;
 
     double_struct_import_test!();
     double_struct_import_test!();
@@ -155,4 +157,77 @@ fn test_weird_formatting() {
 
     exported();
     foo();
+}
+
+mod super_imports {
+    fn foofoo() {}
+
+    mod should_be_replaced {
+        use super::*;
+
+        fn with_super() {
+            let _ = foofoo();
+        }
+    }
+
+    mod test_should_pass {
+        use super::*;
+
+        fn with_super() {
+            let _ = foofoo();
+        }
+    }
+
+    mod test_should_pass_inside_function {
+        fn with_super_inside_function() {
+            use super::*;
+            let _ = foofoo();
+        }
+    }
+
+    mod test_should_pass_further_inside {
+        fn insidefoo() {}
+        mod inner {
+            use super::*;
+            fn with_super() {
+                let _ = insidefoo();
+            }
+        }
+    }
+
+    mod should_be_replaced_futher_inside {
+        fn insidefoo() {}
+        mod inner {
+            use super::*;
+            fn with_super() {
+                let _ = insidefoo();
+            }
+        }
+    }
+
+    mod use_explicit_should_be_replaced {
+        use super_imports::*;
+
+        fn with_explicit() {
+            let _ = foofoo();
+        }
+    }
+
+    mod use_double_super_should_be_replaced {
+        mod inner {
+            use super::super::*;
+
+            fn with_double_super() {
+                let _ = foofoo();
+            }
+        }
+    }
+
+    mod use_super_explicit_should_be_replaced {
+        use super::super::super_imports::*;
+
+        fn with_super_explicit() {
+            let _ = foofoo();
+        }
+    }
 }

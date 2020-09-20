@@ -13,31 +13,6 @@ impl SomeTrait for SomeImpl {}
 
 fn main() {}
 
-fn is_ascii(ch: char) -> bool {
-    ch.is_ascii()
-}
-
-fn clone_on_copy() {
-    42.clone();
-
-    vec![1].clone(); // ok, not a Copy type
-    Some(vec![1]).clone(); // ok, not a Copy type
-    (&42).clone();
-
-    let rc = RefCell::new(0);
-    rc.borrow().clone();
-
-    // Issue #4348
-    let mut x = 43;
-    let _ = &x.clone(); // ok, getting a ref
-    'a'.clone().make_ascii_uppercase(); // ok, clone and then mutate
-    is_ascii('z'.clone());
-
-    // Issue #5436
-    let mut vec = Vec::new();
-    vec.push(42.clone());
-}
-
 fn clone_on_ref_ptr() {
     let rc = Rc::new(true);
     let arc = Arc::new(true);
@@ -113,5 +88,23 @@ mod many_derefs {
     fn check(mut encoded: &[u8]) {
         let _ = &mut encoded.clone();
         let _ = &encoded.clone();
+    }
+}
+
+mod issue2076 {
+    use std::rc::Rc;
+
+    macro_rules! try_opt {
+        ($expr: expr) => {
+            match $expr {
+                Some(value) => value,
+                None => return None,
+            }
+        };
+    }
+
+    fn func() -> Option<Rc<u8>> {
+        let rc = Rc::new(42);
+        Some(try_opt!(Some(rc)).clone())
     }
 }

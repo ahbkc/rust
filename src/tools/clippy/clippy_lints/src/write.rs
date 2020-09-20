@@ -23,7 +23,11 @@ declare_clippy_lint! {
     ///
     /// **Example:**
     /// ```rust
+    /// // Bad
     /// println!("");
+    ///
+    /// // Good
+    /// println!();
     /// ```
     pub PRINTLN_EMPTY_STRING,
     style,
@@ -32,8 +36,7 @@ declare_clippy_lint! {
 
 declare_clippy_lint! {
     /// **What it does:** This lint warns when you use `print!()` with a format
-    /// string that
-    /// ends in a newline.
+    /// string that ends in a newline.
     ///
     /// **Why is this bad?** You should use `println!()` instead, which appends the
     /// newline.
@@ -125,7 +128,12 @@ declare_clippy_lint! {
     /// ```rust
     /// # use std::fmt::Write;
     /// # let mut buf = String::new();
+    ///
+    /// // Bad
     /// writeln!(buf, "");
+    ///
+    /// // Good
+    /// writeln!(buf);
     /// ```
     pub WRITELN_EMPTY_STRING,
     style,
@@ -147,7 +155,12 @@ declare_clippy_lint! {
     /// # use std::fmt::Write;
     /// # let mut buf = String::new();
     /// # let name = "World";
+    ///
+    /// // Bad
     /// write!(buf, "Hello {}!\n", name);
+    ///
+    /// // Good
+    /// writeln!(buf, "Hello {}!", name);
     /// ```
     pub WRITE_WITH_NEWLINE,
     style,
@@ -168,7 +181,12 @@ declare_clippy_lint! {
     /// ```rust
     /// # use std::fmt::Write;
     /// # let mut buf = String::new();
+    ///
+    /// // Bad
     /// writeln!(buf, "{}", "foo");
+    ///
+    /// // Good
+    /// writeln!(buf, "foo");
     /// ```
     pub WRITE_LITERAL,
     style,
@@ -219,7 +237,7 @@ impl EarlyLintPass for Write {
     fn check_mac(&mut self, cx: &EarlyContext<'_>, mac: &MacCall) {
         if mac.path == sym!(println) {
             span_lint(cx, PRINT_STDOUT, mac.span(), "use of `println!`");
-            if let (Some(fmt_str), _) = self.check_tts(cx, &mac.args.inner_tokens(), false) {
+            if let (Some(fmt_str), _) = self.check_tts(cx, mac.args.inner_tokens(), false) {
                 if fmt_str.symbol == Symbol::intern("") {
                     span_lint_and_sugg(
                         cx,
@@ -234,7 +252,7 @@ impl EarlyLintPass for Write {
             }
         } else if mac.path == sym!(print) {
             span_lint(cx, PRINT_STDOUT, mac.span(), "use of `print!`");
-            if let (Some(fmt_str), _) = self.check_tts(cx, &mac.args.inner_tokens(), false) {
+            if let (Some(fmt_str), _) = self.check_tts(cx, mac.args.inner_tokens(), false) {
                 if check_newlines(&fmt_str) {
                     span_lint_and_then(
                         cx,
@@ -255,7 +273,7 @@ impl EarlyLintPass for Write {
                 }
             }
         } else if mac.path == sym!(write) {
-            if let (Some(fmt_str), _) = self.check_tts(cx, &mac.args.inner_tokens(), true) {
+            if let (Some(fmt_str), _) = self.check_tts(cx, mac.args.inner_tokens(), true) {
                 if check_newlines(&fmt_str) {
                     span_lint_and_then(
                         cx,
@@ -276,16 +294,17 @@ impl EarlyLintPass for Write {
                 }
             }
         } else if mac.path == sym!(writeln) {
-            if let (Some(fmt_str), expr) = self.check_tts(cx, &mac.args.inner_tokens(), true) {
+            if let (Some(fmt_str), expr) = self.check_tts(cx, mac.args.inner_tokens(), true) {
                 if fmt_str.symbol == Symbol::intern("") {
                     let mut applicability = Applicability::MachineApplicable;
-                    let suggestion = expr.map_or_else(
-                        move || {
-                            applicability = Applicability::HasPlaceholders;
-                            Cow::Borrowed("v")
-                        },
-                        move |expr| snippet_with_applicability(cx, expr.span, "v", &mut applicability),
-                    );
+                    // FIXME: remove this `#[allow(...)]` once the issue #5822 gets fixed
+                    #[allow(clippy::option_if_let_else)]
+                    let suggestion = if let Some(e) = expr {
+                        snippet_with_applicability(cx, e.span, "v", &mut applicability)
+                    } else {
+                        applicability = Applicability::HasPlaceholders;
+                        Cow::Borrowed("v")
+                    };
 
                     span_lint_and_sugg(
                         cx,
@@ -346,16 +365,11 @@ impl Write {
     /// (Some("string to write: {}"), Some(buf))
     /// ```
     #[allow(clippy::too_many_lines)]
-    fn check_tts<'a>(
-        &self,
-        cx: &EarlyContext<'a>,
-        tts: &TokenStream,
-        is_write: bool,
-    ) -> (Option<StrLit>, Option<Expr>) {
-        use fmt_macros::{
-            AlignUnknown, ArgumentImplicitlyIs, ArgumentIs, ArgumentNamed, CountImplied, FormatSpec, Parser, Piece,
+    fn check_tts<'a>(&self, cx: &EarlyContext<'a>, tts: TokenStream, is_write: bool) -> (Option<StrLit>, Option<Expr>) {
+        use rustc_parse_format::{
+            AlignUnknown, ArgumentImplicitlyIs, ArgumentIs, ArgumentNamed, CountImplied, FormatSpec, ParseMode, Parser,
+            Piece,
         };
-        let tts = tts.clone();
 
         let mut parser = parser::Parser::new(&cx.sess.parse_sess, tts, false, None);
         let mut expr: Option<Expr> = None;
@@ -376,7 +390,7 @@ impl Write {
         };
         let tmp = fmtstr.symbol.as_str();
         let mut args = vec![];
-        let mut fmt_parser = Parser::new(&tmp, None, Vec::new(), false);
+        let mut fmt_parser = Parser::new(&tmp, None, None, false, ParseMode::Format);
         while let Some(piece) = fmt_parser.next() {
             if !fmt_parser.errors.is_empty() {
                 return (None, expr);
@@ -483,8 +497,8 @@ fn check_newlines(fmtstr: &StrLit) -> bool {
     };
 
     match fmtstr.style {
-        StrStyle::Cooked => unescape::unescape_str(contents, &mut cb),
-        StrStyle::Raw(_) => unescape::unescape_raw_str(contents, &mut cb),
+        StrStyle::Cooked => unescape::unescape_literal(contents, unescape::Mode::Str, &mut cb),
+        StrStyle::Raw(_) => unescape::unescape_literal(contents, unescape::Mode::RawStr, &mut cb),
     }
 
     should_lint

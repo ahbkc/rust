@@ -1,7 +1,8 @@
-use crate::utils::{is_type_diagnostic_item, snippet, span_lint_and_sugg, walk_ptrs_ty};
+use crate::utils::walk_ptrs_ty;
+use crate::utils::{is_type_diagnostic_item, is_type_lang_item, snippet, span_lint_and_sugg};
 use if_chain::if_chain;
 use rustc_errors::Applicability;
-use rustc_hir::{Expr, ExprKind, MatchSource};
+use rustc_hir::{Expr, ExprKind, LangItem, MatchSource};
 use rustc_lint::{LateContext, LateLintPass, LintContext};
 use rustc_middle::lint::in_external_macro;
 use rustc_session::{declare_lint_pass, declare_tool_lint};
@@ -38,14 +39,14 @@ declare_clippy_lint! {
     /// }
     /// ```
     pub MATCH_ON_VEC_ITEMS,
-    correctness,
+    pedantic,
     "matching on vector elements can panic"
 }
 
 declare_lint_pass!(MatchOnVecItems => [MATCH_ON_VEC_ITEMS]);
 
-impl<'a, 'tcx> LateLintPass<'a, 'tcx> for MatchOnVecItems {
-    fn check_expr(&mut self, cx: &LateContext<'a, 'tcx>, expr: &'tcx Expr<'tcx>) {
+impl<'tcx> LateLintPass<'tcx> for MatchOnVecItems {
+    fn check_expr(&mut self, cx: &LateContext<'tcx>, expr: &'tcx Expr<'tcx>) {
         if_chain! {
             if !in_external_macro(cx.sess(), expr.span);
             if let ExprKind::Match(ref match_expr, _, MatchSource::Normal) = expr.kind;
@@ -73,12 +74,11 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for MatchOnVecItems {
     }
 }
 
-fn is_vec_indexing<'a, 'tcx>(cx: &LateContext<'a, 'tcx>, expr: &'tcx Expr<'tcx>) -> Option<&'tcx Expr<'tcx>> {
+fn is_vec_indexing<'tcx>(cx: &LateContext<'tcx>, expr: &'tcx Expr<'tcx>) -> Option<&'tcx Expr<'tcx>> {
     if_chain! {
-        if let ExprKind::Index(ref array, _) = expr.kind;
-        let ty = cx.tables.expr_ty(array);
-        let ty = walk_ptrs_ty(ty);
-        if is_type_diagnostic_item(cx, ty, sym!(vec_type));
+        if let ExprKind::Index(ref array, ref index) = expr.kind;
+        if is_vector(cx, array);
+        if !is_full_range(cx, index);
 
         then {
             return Some(expr);
@@ -86,4 +86,16 @@ fn is_vec_indexing<'a, 'tcx>(cx: &LateContext<'a, 'tcx>, expr: &'tcx Expr<'tcx>)
     }
 
     None
+}
+
+fn is_vector(cx: &LateContext<'_>, expr: &Expr<'_>) -> bool {
+    let ty = cx.typeck_results().expr_ty(expr);
+    let ty = walk_ptrs_ty(ty);
+    is_type_diagnostic_item(cx, ty, sym!(vec_type))
+}
+
+fn is_full_range(cx: &LateContext<'_>, expr: &Expr<'_>) -> bool {
+    let ty = cx.typeck_results().expr_ty(expr);
+    let ty = walk_ptrs_ty(ty);
+    is_type_lang_item(cx, ty, LangItem::RangeFull)
 }

@@ -2,7 +2,7 @@
 //! manner (and with prettier names) before cleaning.
 pub use self::StructType::*;
 
-use rustc_ast::ast;
+use rustc_ast as ast;
 use rustc_span::hygiene::MacroKind;
 use rustc_span::{self, Span, Symbol};
 
@@ -262,7 +262,7 @@ pub struct ProcMacro<'hir> {
     pub whence: Span,
 }
 
-pub fn struct_type_from_def(vdata: &hir::VariantData) -> StructType {
+pub fn struct_type_from_def(vdata: &hir::VariantData<'_>) -> StructType {
     match *vdata {
         hir::VariantData::Struct(..) => Plain,
         hir::VariantData::Tuple(..) => Tuple,

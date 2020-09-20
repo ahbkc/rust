@@ -5,7 +5,9 @@ LL |                                           ..SafeStruct{field1: SafeEnum::Va
    |  ___________________________________________^
 LL | |
 LL | |                                                      field2: SafeEnum::Variant1}};
-   | |________________________________________________________________________________^ statics cannot evaluate destructors
+   | |                                                                                ^- value is dropped here
+   | |________________________________________________________________________________|
+   |                                                                                  statics cannot evaluate destructors
 
 error[E0010]: allocations are not allowed in statics
   --> $DIR/check-static-values-constraints.rs:79:33
@@ -103,7 +105,7 @@ error[E0507]: cannot move out of static item `x`
 LL |     let y = { static x: Box<isize> = box 3; x };
    |                                             ^
    |                                             |
-   |                                             move occurs because `x` has type `std::boxed::Box<isize>`, which does not implement the `Copy` trait
+   |                                             move occurs because `x` has type `Box<isize>`, which does not implement the `Copy` trait
    |                                             help: consider borrowing here: `&x`
 
 error[E0010]: allocations are not allowed in statics

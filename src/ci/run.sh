@@ -20,6 +20,18 @@ if [ -f /proc/sys/kernel/core_pattern ]; then
   ulimit -c unlimited
 fi
 
+# There was a bad interaction between "old" 32-bit binaries on current 64-bit
+# kernels with selinux enabled, where ASLR mmap would sometimes choose a low
+# address and then block it for being below `vm.mmap_min_addr` -> `EACCES`.
+# This is probably a kernel bug, but setting `ulimit -Hs` works around it.
+# See also `dist-i686-linux` where this setting is enabled.
+if [ "$SET_HARD_RLIMIT_STACK" = "1" ]; then
+  rlimit_stack=$(ulimit -Ss)
+  if [ "$rlimit_stack" != "" ]; then
+    ulimit -Hs "$rlimit_stack"
+  fi
+fi
+
 ci_dir=`cd $(dirname $0) && pwd`
 source "$ci_dir/shared.sh"
 
@@ -62,6 +74,13 @@ if [ "$DEPLOY$DEPLOY_ALT" = "1" ]; then
   RUST_CONFIGURE_ARGS="$RUST_CONFIGURE_ARGS --enable-llvm-static-stdcpp"
   RUST_CONFIGURE_ARGS="$RUST_CONFIGURE_ARGS --set rust.remap-debuginfo"
   RUST_CONFIGURE_ARGS="$RUST_CONFIGURE_ARGS --debuginfo-level-std=1"
+
+  # If we're distributing binaries, we want a shared LLVM link. We're already
+  # going to link LLVM to the LLVM tools dynamically, so we need to ship a
+  # libLLVM library anyway.
+  if !isWindows; then
+    RUST_CONFIGURE_ARGS="$RUST_CONFIGURE_ARGS --set llvm.link-shared=true"
+  fi
 
   if [ "$NO_LLVM_ASSERTIONS" = "1" ]; then
     RUST_CONFIGURE_ARGS="$RUST_CONFIGURE_ARGS --disable-llvm-assertions"

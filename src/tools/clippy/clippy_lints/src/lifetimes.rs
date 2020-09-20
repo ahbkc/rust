@@ -13,9 +13,8 @@ use rustc_lint::{LateContext, LateLintPass};
 use rustc_middle::hir::map::Map;
 use rustc_session::{declare_lint_pass, declare_tool_lint};
 use rustc_span::source_map::Span;
-use rustc_span::symbol::kw;
+use rustc_span::symbol::{kw, Symbol};
 
-use crate::reexport::Name;
 use crate::utils::{in_macro, last_path_segment, span_lint, trait_ref_of_method};
 
 declare_clippy_lint! {
@@ -76,14 +75,14 @@ declare_clippy_lint! {
 
 declare_lint_pass!(Lifetimes => [NEEDLESS_LIFETIMES, EXTRA_UNUSED_LIFETIMES]);
 
-impl<'a, 'tcx> LateLintPass<'a, 'tcx> for Lifetimes {
-    fn check_item(&mut self, cx: &LateContext<'a, 'tcx>, item: &'tcx Item<'_>) {
+impl<'tcx> LateLintPass<'tcx> for Lifetimes {
+    fn check_item(&mut self, cx: &LateContext<'tcx>, item: &'tcx Item<'_>) {
         if let ItemKind::Fn(ref sig, ref generics, id) = item.kind {
             check_fn_inner(cx, &sig.decl, Some(id), generics, item.span, true);
         }
     }
 
-    fn check_impl_item(&mut self, cx: &LateContext<'a, 'tcx>, item: &'tcx ImplItem<'_>) {
+    fn check_impl_item(&mut self, cx: &LateContext<'tcx>, item: &'tcx ImplItem<'_>) {
         if let ImplItemKind::Fn(ref sig, id) = item.kind {
             let report_extra_lifetimes = trait_ref_of_method(cx, item.hir_id).is_none();
             check_fn_inner(
@@ -97,7 +96,7 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for Lifetimes {
         }
     }
 
-    fn check_trait_item(&mut self, cx: &LateContext<'a, 'tcx>, item: &'tcx TraitItem<'_>) {
+    fn check_trait_item(&mut self, cx: &LateContext<'tcx>, item: &'tcx TraitItem<'_>) {
         if let TraitItemKind::Fn(ref sig, ref body) = item.kind {
             let body = match *body {
                 TraitFn::Required(_) => None,
@@ -113,11 +112,11 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for Lifetimes {
 enum RefLt {
     Unnamed,
     Static,
-    Named(Name),
+    Named(Symbol),
 }
 
-fn check_fn_inner<'a, 'tcx>(
-    cx: &LateContext<'a, 'tcx>,
+fn check_fn_inner<'tcx>(
+    cx: &LateContext<'tcx>,
     decl: &'tcx FnDecl<'_>,
     body: Option<BodyId>,
     generics: &'tcx Generics<'_>,
@@ -129,10 +128,10 @@ fn check_fn_inner<'a, 'tcx>(
     }
 
     let mut bounds_lts = Vec::new();
-    let types = generics.params.iter().filter(|param| match param.kind {
-        GenericParamKind::Type { .. } => true,
-        _ => false,
-    });
+    let types = generics
+        .params
+        .iter()
+        .filter(|param| matches!(param.kind, GenericParamKind::Type { .. }));
     for typ in types {
         for bound in typ.bounds {
             let mut visitor = RefVisitor::new(cx);
@@ -177,8 +176,8 @@ fn check_fn_inner<'a, 'tcx>(
     }
 }
 
-fn could_use_elision<'a, 'tcx>(
-    cx: &LateContext<'a, 'tcx>,
+fn could_use_elision<'tcx>(
+    cx: &LateContext<'tcx>,
     func: &'tcx FnDecl<'_>,
     body: Option<BodyId>,
     named_generics: &'tcx [GenericParam<'_>],
@@ -296,13 +295,13 @@ fn unique_lifetimes(lts: &[RefLt]) -> usize {
 
 /// A visitor usable for `rustc_front::visit::walk_ty()`.
 struct RefVisitor<'a, 'tcx> {
-    cx: &'a LateContext<'a, 'tcx>,
+    cx: &'a LateContext<'tcx>,
     lts: Vec<RefLt>,
     abort: bool,
 }
 
-impl<'v, 't> RefVisitor<'v, 't> {
-    fn new(cx: &'v LateContext<'v, 't>) -> Self {
+impl<'a, 'tcx> RefVisitor<'a, 'tcx> {
+    fn new(cx: &'a LateContext<'tcx>) -> Self {
         Self {
             cx,
             lts: Vec::new(),
@@ -337,13 +336,13 @@ impl<'v, 't> RefVisitor<'v, 't> {
     fn collect_anonymous_lifetimes(&mut self, qpath: &QPath<'_>, ty: &Ty<'_>) {
         if let Some(ref last_path_segment) = last_path_segment(qpath).args {
             if !last_path_segment.parenthesized
-                && !last_path_segment.args.iter().any(|arg| match arg {
-                    GenericArg::Lifetime(_) => true,
-                    _ => false,
-                })
+                && !last_path_segment
+                    .args
+                    .iter()
+                    .any(|arg| matches!(arg, GenericArg::Lifetime(_)))
             {
                 let hir_id = ty.hir_id;
-                match self.cx.tables.qpath_res(qpath, hir_id) {
+                match self.cx.qpath_res(qpath, hir_id) {
                     Res::Def(DefKind::TyAlias | DefKind::Struct, def_id) => {
                         let generics = self.cx.tcx.generics_of(def_id);
                         for _ in generics.params.as_slice() {
@@ -379,7 +378,7 @@ impl<'a, 'tcx> Visitor<'tcx> for RefVisitor<'a, 'tcx> {
             TyKind::Path(ref path) => {
                 self.collect_anonymous_lifetimes(path, ty);
             },
-            TyKind::Def(item, _) => {
+            TyKind::OpaqueDef(item, _) => {
                 let map = self.cx.tcx.hir();
                 if let ItemKind::OpaqueTy(ref exist_ty) = map.expect_item(item.id).kind {
                     for bound in exist_ty.bounds {
@@ -412,7 +411,7 @@ impl<'a, 'tcx> Visitor<'tcx> for RefVisitor<'a, 'tcx> {
 
 /// Are any lifetimes mentioned in the `where` clause? If so, we don't try to
 /// reason about elision.
-fn has_where_lifetimes<'a, 'tcx>(cx: &LateContext<'a, 'tcx>, where_clause: &'tcx WhereClause<'_>) -> bool {
+fn has_where_lifetimes<'tcx>(cx: &LateContext<'tcx>, where_clause: &'tcx WhereClause<'_>) -> bool {
     for predicate in where_clause.predicates {
         match *predicate {
             WherePredicate::RegionPredicate(..) => return true,
@@ -456,7 +455,7 @@ fn has_where_lifetimes<'a, 'tcx>(cx: &LateContext<'a, 'tcx>, where_clause: &'tcx
 }
 
 struct LifetimeChecker {
-    map: FxHashMap<Name, Span>,
+    map: FxHashMap<Symbol, Span>,
 }
 
 impl<'tcx> Visitor<'tcx> for LifetimeChecker {
@@ -482,7 +481,7 @@ impl<'tcx> Visitor<'tcx> for LifetimeChecker {
     }
 }
 
-fn report_extra_lifetimes<'a, 'tcx>(cx: &LateContext<'a, 'tcx>, func: &'tcx FnDecl<'_>, generics: &'tcx Generics<'_>) {
+fn report_extra_lifetimes<'tcx>(cx: &LateContext<'tcx>, func: &'tcx FnDecl<'_>, generics: &'tcx Generics<'_>) {
     let hs = generics
         .params
         .iter()

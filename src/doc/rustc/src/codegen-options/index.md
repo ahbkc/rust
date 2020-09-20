@@ -9,9 +9,25 @@ This option is deprecated and does nothing.
 
 ## code-model
 
-This option lets you choose which code model to use.
+This option lets you choose which code model to use. \
+Code models put constraints on address ranges that the program and its symbols may use. \
+With smaller address ranges machine instructions
+may be able to use more compact addressing modes.
 
-To find the valid options for this flag, run `rustc --print code-models`.
+The specific ranges depend on target architectures and addressing modes available to them. \
+For x86 more detailed description of its code models can be found in
+[System V Application Binary Interface](https://github.com/hjl-tools/x86-psABI/wiki/x86-64-psABI-1.0.pdf)
+specification.
+
+Supported values for this option are:
+
+- `tiny` - Tiny code model.
+- `small` - Small code model. This is the default model for majority of supported targets.
+- `kernel` - Kernel code model.
+- `medium` - Medium code model.
+- `large` - Large code model.
+
+Supported values can also be discovered by running `rustc --print code-models`.
 
 ## codegen-units
 
@@ -25,6 +41,18 @@ generated code, but may be slower to compile.
 
 The default value, if not specified, is 16 for non-incremental builds. For
 incremental builds the default is 256 which allows caching to be more granular.
+
+## control-flow-guard
+
+This flag controls whether LLVM enables the Windows [Control Flow
+Guard](https://docs.microsoft.com/en-us/windows/win32/secbp/control-flow-guard)
+platform security feature. This flag is currently ignored for non-Windows targets.
+It takes one of the following values:
+
+* `y`, `yes`, `on`, `checks`, or no value: enable Control Flow Guard.
+* `nochecks`: emit Control Flow Guard metadata without runtime enforcement checks (this
+should only be used for testing purposes as it does not provide security enforcement).
+* `n`, `no`, `off`: do not enable Control Flow Guard (the default).
 
 ## debug-assertions
 
@@ -171,6 +199,18 @@ the following values:
 
 An example of when this flag might be useful is when trying to construct code coverage
 metrics.
+
+## link-self-contained
+
+On targets that support it this flag controls whether the linker will use libraries and objects
+shipped with Rust instead or those in the system.
+It takes one of the following values:
+
+* no value: rustc will use heuristic to disable self-contained mode if system has necessary tools.
+* `y`, `yes`, `on`: use only libraries/objects shipped with Rust.
+* `n`, `no`, or `off`: rely on the user or the linker to provide non-Rust libraries/objects.
+
+This allows overriding cases when detection fails or user wants to use shipped libraries.
 
 ## linker
 
@@ -464,7 +504,15 @@ machine. Each target has a default base CPU.
 
 Individual targets will support different features; this flag lets you control
 enabling or disabling a feature. Each feature should be prefixed with a `+` to
-enable it or `-` to disable it. Separate multiple features with commas.
+enable it or `-` to disable it.
+
+Features from multiple `-C target-feature` options are combined. \
+Multiple features can be specified in a single option by separating them
+with commas - `-C target-feature=+x,-y`. \
+If some feature is specified more than once with both `+` and `-`,
+then values passed later override values passed earlier. \
+For example, `-C target-feature=+x,-y,+z -Ctarget-feature=-x,+y`
+is equivalent to `-C target-feature=-x,+y,+z`.
 
 To see the valid options and an example of use, run `rustc --print
 target-features`.

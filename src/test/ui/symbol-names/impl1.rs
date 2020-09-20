@@ -3,8 +3,8 @@
 // revisions: legacy v0
 //[legacy]compile-flags: -Z symbol-mangling-version=legacy
     //[v0]compile-flags: -Z symbol-mangling-version=v0
-//[legacy]normalize-stderr-32bit: "hdb62078998ce7ea8" -> "SYMBOL_HASH"
-//[legacy]normalize-stderr-64bit: "h62e540f14f879d56" -> "SYMBOL_HASH"
+//[legacy]normalize-stderr-32bit: "hee444285569b39c2" -> "SYMBOL_HASH"
+//[legacy]normalize-stderr-64bit: "h310ea0259fc3d32d" -> "SYMBOL_HASH"
 
 #![feature(optin_builtin_traits, rustc_attrs)]
 #![allow(dead_code)]
@@ -69,8 +69,8 @@ fn main() {
                 //[v0]~| ERROR demangling(<[&dyn impl1[317d481089b8c8fe]::Foo<Assoc = for<'a> extern "C" fn(&'a u8, ...)> + impl1[317d481089b8c8fe]::AutoTrait; 3: usize] as impl1[317d481089b8c8fe]::main::{closure#1}::Bar>::method)
                 //[v0]~| ERROR demangling-alt(<[&dyn impl1::Foo<Assoc = for<'a> extern "C" fn(&'a u8, ...)> + impl1::AutoTrait; 3] as impl1::main::{closure#1}::Bar>::method)
             #[rustc_def_path]
-            //[legacy]~^ ERROR def-path(<[&dyn Foo<Assoc = for<'r> extern "C" fn(&'r u8, ...)> + AutoTrait; 3] as main::{{closure}}#1::Bar>::method)
-               //[v0]~^^ ERROR def-path(<[&dyn Foo<Assoc = for<'r> extern "C" fn(&'r u8, ...)> + AutoTrait; 3] as main::{{closure}}#1::Bar>::method)
+            //[legacy]~^ ERROR def-path(<[&dyn Foo<Assoc = for<'r> extern "C" fn(&'r u8, ...)> + AutoTrait; 3] as Bar>::method)
+               //[v0]~^^ ERROR def-path(<[&dyn Foo<Assoc = for<'r> extern "C" fn(&'r u8, ...)> + AutoTrait; 3] as Bar>::method)
             fn method(&self) {}
         }
     };

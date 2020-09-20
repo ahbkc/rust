@@ -1,5 +1,4 @@
 use rustc_ast::ast;
-use rustc_ast::expand::is_proc_macro_attr;
 use rustc_errors::Applicability;
 use rustc_session::Session;
 use std::str::FromStr;
@@ -65,42 +64,45 @@ pub fn get_attr<'a>(
         };
         let attr_segments = &attr.path.segments;
         if attr_segments.len() == 2 && attr_segments[0].ident.to_string() == "clippy" {
-            if let Some(deprecation_status) =
-                BUILTIN_ATTRIBUTES
-                    .iter()
-                    .find_map(|(builtin_name, deprecation_status)| {
-                        if *builtin_name == attr_segments[1].ident.to_string() {
-                            Some(deprecation_status)
-                        } else {
-                            None
+            BUILTIN_ATTRIBUTES
+                .iter()
+                .find_map(|(builtin_name, deprecation_status)| {
+                    if *builtin_name == attr_segments[1].ident.to_string() {
+                        Some(deprecation_status)
+                    } else {
+                        None
+                    }
+                })
+                .map_or_else(
+                    || {
+                        sess.span_err(attr_segments[1].ident.span, "usage of unknown attribute");
+                        false
+                    },
+                    |deprecation_status| {
+                        let mut diag =
+                            sess.struct_span_err(attr_segments[1].ident.span, "usage of deprecated attribute");
+                        match *deprecation_status {
+                            DeprecationStatus::Deprecated => {
+                                diag.emit();
+                                false
+                            },
+                            DeprecationStatus::Replaced(new_name) => {
+                                diag.span_suggestion(
+                                    attr_segments[1].ident.span,
+                                    "consider using",
+                                    new_name.to_string(),
+                                    Applicability::MachineApplicable,
+                                );
+                                diag.emit();
+                                false
+                            },
+                            DeprecationStatus::None => {
+                                diag.cancel();
+                                attr_segments[1].ident.to_string() == name
+                            },
                         }
-                    })
-            {
-                let mut diag = sess.struct_span_err(attr_segments[1].ident.span, "Usage of deprecated attribute");
-                match *deprecation_status {
-                    DeprecationStatus::Deprecated => {
-                        diag.emit();
-                        false
                     },
-                    DeprecationStatus::Replaced(new_name) => {
-                        diag.span_suggestion(
-                            attr_segments[1].ident.span,
-                            "consider using",
-                            new_name.to_string(),
-                            Applicability::MachineApplicable,
-                        );
-                        diag.emit();
-                        false
-                    },
-                    DeprecationStatus::None => {
-                        diag.cancel();
-                        attr_segments[1].ident.to_string() == name
-                    },
-                }
-            } else {
-                sess.span_err(attr_segments[1].ident.span, "Usage of unknown attribute");
-                false
-            }
+                )
         } else {
             false
         }
@@ -123,6 +125,6 @@ fn parse_attrs<F: FnMut(u64)>(sess: &Session, attrs: &[ast::Attribute], name: &'
 
 /// Return true if the attributes contain any of `proc_macro`,
 /// `proc_macro_derive` or `proc_macro_attribute`, false otherwise
-pub fn is_proc_macro(attrs: &[ast::Attribute]) -> bool {
-    attrs.iter().any(is_proc_macro_attr)
+pub fn is_proc_macro(sess: &Session, attrs: &[ast::Attribute]) -> bool {
+    attrs.iter().any(|attr| sess.is_proc_macro_attr(attr))
 }

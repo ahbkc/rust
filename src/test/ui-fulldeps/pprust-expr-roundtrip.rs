@@ -33,7 +33,7 @@ use rustc_session::parse::ParseSess;
 use rustc_span::source_map::{Spanned, DUMMY_SP, FileName};
 use rustc_span::source_map::FilePathMapping;
 use rustc_span::symbol::Ident;
-use rustc_ast::ast::*;
+use rustc_ast::*;
 use rustc_ast::mut_visit::{self, MutVisitor, visit_clobber};
 use rustc_ast::ptr::P;
 
@@ -56,12 +56,13 @@ fn expr(kind: ExprKind) -> P<Expr> {
         kind,
         span: DUMMY_SP,
         attrs: ThinVec::new(),
+        tokens: None
     })
 }
 
 fn make_x() -> P<Expr> {
     let seg = PathSegment::from_ident(Ident::from_str("x"));
-    let path = Path { segments: vec![seg], span: DUMMY_SP };
+    let path = Path { segments: vec![seg], span: DUMMY_SP, tokens: None };
     expr(ExprKind::Path(None, path))
 }
 
@@ -83,9 +84,9 @@ fn iter_exprs(depth: usize, f: &mut dyn FnMut(P<Expr>)) {
             2 => {
                 let seg = PathSegment::from_ident(Ident::from_str("x"));
                 iter_exprs(depth - 1, &mut |e| g(ExprKind::MethodCall(
-                            seg.clone(), vec![e, make_x()])));
+                            seg.clone(), vec![e, make_x()], DUMMY_SP)));
                 iter_exprs(depth - 1, &mut |e| g(ExprKind::MethodCall(
-                            seg.clone(), vec![make_x(), e])));
+                            seg.clone(), vec![make_x(), e], DUMMY_SP)));
             },
             3..=8 => {
                 let op = Spanned {
@@ -112,6 +113,7 @@ fn iter_exprs(depth: usize, f: &mut dyn FnMut(P<Expr>)) {
                     id: DUMMY_NODE_ID,
                     rules: BlockCheckMode::Default,
                     span: DUMMY_SP,
+                    tokens: None,
                 });
                 iter_exprs(depth - 1, &mut |e| g(ExprKind::If(e, block.clone(), None)));
             },
@@ -163,6 +165,7 @@ fn iter_exprs(depth: usize, f: &mut dyn FnMut(P<Expr>)) {
                     id: DUMMY_NODE_ID,
                     kind: PatKind::Wild,
                     span: DUMMY_SP,
+                    tokens: None,
                 });
                 iter_exprs(depth - 1, &mut |e| g(ExprKind::Let(pat.clone(), e)))
             },
@@ -200,13 +203,14 @@ impl MutVisitor for AddParens {
                 kind: ExprKind::Paren(e),
                 span: DUMMY_SP,
                 attrs: ThinVec::new(),
+                tokens: None
             })
         });
     }
 }
 
 fn main() {
-    rustc_ast::with_default_globals(|| run());
+    rustc_span::with_default_session_globals(|| run());
 }
 
 fn run() {
