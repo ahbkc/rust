@@ -19,7 +19,6 @@ use std::process::Command;
 use build_helper::{output, t};
 
 use crate::builder::{Builder, RunConfig, ShouldRun, Step};
-use crate::channel;
 use crate::config::TargetSelection;
 use crate::util::{self, exe};
 use crate::GitRepo;
@@ -129,8 +128,10 @@ impl Step for Llvm {
                 Err(m) => m,
             };
 
-        if builder.config.llvm_link_shared && target.contains("windows") {
-            panic!("shared linking to LLVM is not currently supported on Windows");
+        if builder.config.llvm_link_shared
+            && (target.contains("windows") || target.contains("apple-darwin"))
+        {
+            panic!("shared linking to LLVM is not currently supported on {}", target.triple);
         }
 
         builder.info(&format!("Building LLVM for {}", target));
@@ -209,7 +210,10 @@ impl Step for Llvm {
         // which saves both memory during parallel links and overall disk space
         // for the tools. We don't do this on every platform as it doesn't work
         // equally well everywhere.
-        if builder.llvm_link_tools_dynamically(target) {
+        //
+        // If we're not linking rustc to a dynamic LLVM, though, then don't link
+        // tools to it.
+        if builder.llvm_link_tools_dynamically(target) && builder.config.llvm_link_shared {
             cfg.define("LLVM_LINK_LLVM_DYLIB", "ON");
         }
 
@@ -296,7 +300,7 @@ impl Step for Llvm {
             // release number on the dev channel.
             cfg.define("LLVM_VERSION_SUFFIX", "-rust-dev");
         } else {
-            let suffix = format!("-rust-{}-{}", channel::CFG_RELEASE_NUM, builder.config.channel);
+            let suffix = format!("-rust-{}-{}", builder.version, builder.config.channel);
             cfg.define("LLVM_VERSION_SUFFIX", suffix);
         }
 
@@ -626,7 +630,14 @@ impl Step for TestHelpers {
         if builder.config.dry_run {
             return;
         }
-        let target = self.target;
+        // The x86_64-fortanix-unknown-sgx target doesn't have a working C
+        // toolchain. However, some x86_64 ELF objects can be linked
+        // without issues. Use this hack to compile the test helpers.
+        let target = if self.target == "x86_64-fortanix-unknown-sgx" {
+            TargetSelection::from_user("x86_64-unknown-linux-gnu")
+        } else {
+            self.target
+        };
         let dst = builder.test_helpers_out(target);
         let src = builder.src.join("src/test/auxiliary/rust_test_helpers.c");
         if up_to_date(&src, &dst.join("librust_test_helpers.a")) {
@@ -650,7 +661,6 @@ impl Step for TestHelpers {
             }
             cfg.compiler(builder.cc(target));
         }
-
         cfg.cargo_metadata(false)
             .out_dir(&dst)
             .target(&target.triple)

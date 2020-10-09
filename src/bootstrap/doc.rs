@@ -433,7 +433,7 @@ impl Step for Std {
                 .arg("-Z")
                 .arg("unstable-options")
                 .arg("--resource-suffix")
-                .arg(crate::channel::CFG_RELEASE_NUM)
+                .arg(&builder.version)
                 .arg("--index-page")
                 .arg(&builder.src.join("src/doc/index.md"));
 
@@ -659,7 +659,7 @@ impl Step for ErrorIndex {
         let mut index = tool::ErrorIndex::command(builder, self.compiler);
         index.arg("html");
         index.arg(out.join("error-index.html"));
-        index.arg(crate::channel::CFG_RELEASE_NUM);
+        index.arg(&builder.version);
 
         builder.run(&mut index);
     }
@@ -752,6 +752,7 @@ impl Step for RustcBook {
         let out_listing = out_base.join("src/lints");
         builder.cp_r(&builder.src.join("src/doc/rustc"), &out_base);
         builder.info(&format!("Generating lint docs ({})", self.target));
+
         let rustc = builder.rustc(self.compiler);
         // The tool runs `rustc` for extracting output examples, so it needs a
         // functional sysroot.
@@ -762,7 +763,8 @@ impl Step for RustcBook {
         cmd.arg("--out");
         cmd.arg(&out_listing);
         cmd.arg("--rustc");
-        cmd.arg(rustc);
+        cmd.arg(&rustc);
+        cmd.arg("--rustc-target").arg(&self.target.rustc_target_arg());
         if builder.config.verbose() {
             cmd.arg("--verbose");
         }

@@ -439,9 +439,11 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             // This is maybe too permissive, since it allows
             // `let u = &raw const Box::new((1,)).0`, which creates an
             // immediately dangling raw pointer.
-            self.typeck_results.borrow().adjustments().get(base.hir_id).map_or(false, |x| {
-                x.iter().any(|adj| if let Adjust::Deref(_) = adj.kind { true } else { false })
-            })
+            self.typeck_results
+                .borrow()
+                .adjustments()
+                .get(base.hir_id)
+                .map_or(false, |x| x.iter().any(|adj| matches!(adj.kind, Adjust::Deref(_))))
         });
         if !is_named {
             self.tcx.sess.emit_err(AddressOfTemporaryTaken { span: oprnd.span })
@@ -1273,7 +1275,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
     /// Report an error for a struct field expression when there are fields which aren't provided.
     ///
-    /// ```ignore (diagnostic)
+    /// ```text
     /// error: missing field `you_can_use_this_field` in initializer of `foo::Foo`
     ///  --> src/main.rs:8:5
     ///   |
@@ -1325,7 +1327,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
     /// Report an error for a struct field expression when there are no visible fields.
     ///
-    /// ```ignore (diagnostic)
+    /// ```text
     /// error: cannot construct `Foo` with struct literal syntax due to inaccessible fields
     ///  --> src/main.rs:8:5
     ///   |

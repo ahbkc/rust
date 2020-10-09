@@ -305,8 +305,34 @@ impl<'a, 'b, 'tcx> ObligationProcessor for FulfillProcessor<'a, 'b, 'tcx> {
             return ProcessResult::Unchanged;
         }
 
-        // This part of the code is much colder.
+        self.progress_changed_obligations(pending_obligation)
+    }
 
+    fn process_backedge<'c, I>(
+        &mut self,
+        cycle: I,
+        _marker: PhantomData<&'c PendingPredicateObligation<'tcx>>,
+    ) where
+        I: Clone + Iterator<Item = &'c PendingPredicateObligation<'tcx>>,
+    {
+        if self.selcx.coinductive_match(cycle.clone().map(|s| s.obligation.predicate)) {
+            debug!("process_child_obligations: coinductive match");
+        } else {
+            let cycle: Vec<_> = cycle.map(|c| c.obligation.clone()).collect();
+            self.selcx.infcx().report_overflow_error_cycle(&cycle);
+        }
+    }
+}
+
+impl<'a, 'b, 'tcx> FulfillProcessor<'a, 'b, 'tcx> {
+    // The code calling this method is extremely hot and only rarely
+    // actually uses this, so move this part of the code
+    // out of that loop.
+    #[inline(never)]
+    fn progress_changed_obligations(
+        &mut self,
+        pending_obligation: &mut PendingPredicateObligation<'tcx>,
+    ) -> ProcessResult<PendingPredicateObligation<'tcx>, FulfillmentErrorCode<'tcx>> {
         pending_obligation.stalled_on.truncate(0);
 
         let obligation = &mut pending_obligation.obligation;
@@ -350,7 +376,7 @@ impl<'a, 'b, 'tcx> ObligationProcessor for FulfillProcessor<'a, 'b, 'tcx> {
                 | ty::PredicateAtom::Subtype(_)
                 | ty::PredicateAtom::ConstEvaluatable(..)
                 | ty::PredicateAtom::ConstEquate(..) => {
-                    let (pred, _) = infcx.replace_bound_vars_with_placeholders(binder);
+                    let pred = infcx.replace_bound_vars_with_placeholders(binder);
                     ProcessResult::Changed(mk_pending(vec![
                         obligation.with(pred.to_predicate(self.selcx.tcx())),
                     ]))
@@ -423,6 +449,7 @@ impl<'a, 'b, 'tcx> ObligationProcessor for FulfillProcessor<'a, 'b, 'tcx> {
                         self.selcx.infcx(),
                         obligation.param_env,
                         obligation.cause.body_id,
+                        obligation.recursion_depth + 1,
                         arg,
                         obligation.cause.span,
                     ) {
@@ -470,6 +497,13 @@ impl<'a, 'b, 'tcx> ObligationProcessor for FulfillProcessor<'a, 'b, 'tcx> {
                         obligation.cause.span,
                     ) {
                         Ok(()) => ProcessResult::Changed(vec![]),
+                        Err(ErrorHandled::TooGeneric) => {
+                            pending_obligation.stalled_on = substs
+                                .iter()
+                                .filter_map(|ty| TyOrConstInferVar::maybe_from_generic_arg(ty))
+                                .collect();
+                            ProcessResult::Unchanged
+                        }
                         Err(e) => ProcessResult::Error(CodeSelectionError(ConstEvalFailure(e))),
                     }
                 }
@@ -511,8 +545,10 @@ impl<'a, 'b, 'tcx> ObligationProcessor for FulfillProcessor<'a, 'b, 'tcx> {
                                 Err(ErrorHandled::TooGeneric) => {
                                     stalled_on.append(
                                         &mut substs
-                                            .types()
-                                            .filter_map(|ty| TyOrConstInferVar::maybe_from_ty(ty))
+                                            .iter()
+                                            .filter_map(|arg| {
+                                                TyOrConstInferVar::maybe_from_generic_arg(arg)
+                                            })
                                             .collect(),
                                     );
                                     Err(ErrorHandled::TooGeneric)
@@ -565,23 +601,6 @@ impl<'a, 'b, 'tcx> ObligationProcessor for FulfillProcessor<'a, 'b, 'tcx> {
         }
     }
 
-    fn process_backedge<'c, I>(
-        &mut self,
-        cycle: I,
-        _marker: PhantomData<&'c PendingPredicateObligation<'tcx>>,
-    ) where
-        I: Clone + Iterator<Item = &'c PendingPredicateObligation<'tcx>>,
-    {
-        if self.selcx.coinductive_match(cycle.clone().map(|s| s.obligation.predicate)) {
-            debug!("process_child_obligations: coinductive match");
-        } else {
-            let cycle: Vec<_> = cycle.map(|c| c.obligation.clone()).collect();
-            self.selcx.infcx().report_overflow_error_cycle(&cycle);
-        }
-    }
-}
-
-impl<'a, 'b, 'tcx> FulfillProcessor<'a, 'b, 'tcx> {
     fn process_trait_obligation(
         &mut self,
         obligation: &PredicateObligation<'tcx>,
@@ -654,7 +673,7 @@ impl<'a, 'b, 'tcx> FulfillProcessor<'a, 'b, 'tcx> {
             Ok(Ok(None)) => {
                 *stalled_on = trait_ref_infer_vars(
                     self.selcx,
-                    project_obligation.predicate.to_poly_trait_ref(self.selcx.tcx()),
+                    project_obligation.predicate.to_poly_trait_ref(tcx),
                 );
                 ProcessResult::Unchanged
             }

@@ -412,7 +412,7 @@ impl<T> Vec<T> {
     ///   (at least, it's highly likely to be incorrect if it wasn't).
     /// * `T` needs to have the same size and alignment as what `ptr` was allocated with.
     ///   (`T` having a less strict alignment is not sufficient, the alignment really
-    ///   needs to be equal to satsify the [`dealloc`] requirement that memory must be
+    ///   needs to be equal to satisfy the [`dealloc`] requirement that memory must be
     ///   allocated and deallocated with the same layout.)
     /// * `length` needs to be less than or equal to `capacity`.
     /// * `capacity` needs to be the capacity that the pointer was allocated with.
@@ -567,9 +567,10 @@ impl<T> Vec<T> {
         self.buf.try_reserve(self.len, additional)
     }
 
-    /// Tries to reserves the minimum capacity for exactly `additional` more elements to
-    /// be inserted in the given `Vec<T>`. After calling `try_reserve_exact`,
-    /// capacity will be greater than or equal to `self.len() + additional`.
+    /// Tries to reserve the minimum capacity for exactly `additional`
+    /// elements to be inserted in the given `Vec<T>`. After calling
+    /// `try_reserve_exact`, capacity will be greater than or equal to
+    /// `self.len() + additional` if it returns `Ok(())`.
     /// Does nothing if the capacity is already sufficient.
     ///
     /// Note that the allocator may give the collection more space than it
@@ -2099,7 +2100,6 @@ impl<T> Extend<T> for Vec<T> {
 /// |  slice::Iter                    |  |                     |
 /// |  Iterator<Item = &Clone>        |  +---------------------+
 /// +---------------------------------+
-///
 /// ```
 trait SpecFromIter<T, I> {
     fn from_iter(iter: I) -> Self;
@@ -2282,14 +2282,14 @@ where
 
         // use try-fold since
         // - it vectorizes better for some iterator adapters
-        // - unlike most internal iteration methods methods it only takes a &mut self
+        // - unlike most internal iteration methods, it only takes a &mut self
         // - it lets us thread the write pointer through its innards and get it back in the end
         let sink = InPlaceDrop { inner: dst_buf, dst: dst_buf };
         let sink = iterator
             .try_fold::<_, _, Result<_, !>>(sink, write_in_place_with_drop(dst_end))
             .unwrap();
         // iteration succeeded, don't drop head
-        let dst = mem::ManuallyDrop::new(sink).dst;
+        let dst = ManuallyDrop::new(sink).dst;
 
         let src = unsafe { iterator.as_inner().as_into_iter() };
         // check if SourceIter contract was upheld
@@ -2591,6 +2591,8 @@ __impl_slice_eq1! { [] Vec<A>, &[B], #[stable(feature = "rust1", since = "1.0.0"
 __impl_slice_eq1! { [] Vec<A>, &mut [B], #[stable(feature = "rust1", since = "1.0.0")] }
 __impl_slice_eq1! { [] &[A], Vec<B>, #[stable(feature = "partialeq_vec_for_ref_slice", since = "1.46.0")] }
 __impl_slice_eq1! { [] &mut [A], Vec<B>, #[stable(feature = "partialeq_vec_for_ref_slice", since = "1.46.0")] }
+__impl_slice_eq1! { [] Vec<A>, [B], #[stable(feature = "partialeq_vec_for_slice", since = "1.48.0")]  }
+__impl_slice_eq1! { [] [A], Vec<B>, #[stable(feature = "partialeq_vec_for_slice", since = "1.48.0")]  }
 __impl_slice_eq1! { [] Cow<'_, [A]>, Vec<B> where A: Clone, #[stable(feature = "rust1", since = "1.0.0")] }
 __impl_slice_eq1! { [] Cow<'_, [A]>, &[B] where A: Clone, #[stable(feature = "rust1", since = "1.0.0")] }
 __impl_slice_eq1! { [] Cow<'_, [A]>, &mut [B] where A: Clone, #[stable(feature = "rust1", since = "1.0.0")] }
@@ -2849,6 +2851,13 @@ where
 ///
 /// This `struct` is created by the `into_iter` method on [`Vec`] (provided
 /// by the [`IntoIterator`] trait).
+///
+/// # Example
+///
+/// ```
+/// let v = vec![0, 1, 2];
+/// let iter: std::vec::IntoIter<_> = v.into_iter();
+/// ```
 #[stable(feature = "rust1", since = "1.0.0")]
 pub struct IntoIter<T> {
     buf: NonNull<T>,
@@ -2974,12 +2983,18 @@ impl<T> Iterator for IntoIter<T> {
         self.len()
     }
 
-    unsafe fn get_unchecked(&mut self, i: usize) -> Self::Item
+    unsafe fn __iterator_get_unchecked(&mut self, i: usize) -> Self::Item
     where
         Self: TrustedRandomAccess,
     {
-        // SAFETY: the caller must uphold the contract for
-        // `Iterator::get_unchecked`.
+        // SAFETY: the caller must guarantee that `i` is in bounds of the
+        // `Vec<T>`, so `i` cannot overflow an `isize`, and the `self.ptr.add(i)`
+        // is guaranteed to pointer to an element of the `Vec<T>` and
+        // thus guaranteed to be valid to dereference.
+        //
+        // Also note the implementation of `Self: TrustedRandomAccess` requires
+        // that `T: Copy` so reading elements from the buffer doesn't invalidate
+        // them for `Drop`.
         unsafe {
             if mem::size_of::<T>() == 0 { mem::zeroed() } else { ptr::read(self.ptr.add(i)) }
         }
@@ -3092,6 +3107,13 @@ impl<T> AsIntoIter for IntoIter<T> {
 ///
 /// This `struct` is created by [`Vec::drain`].
 /// See its documentation for more.
+///
+/// # Example
+///
+/// ```
+/// let mut v = vec![0, 1, 2];
+/// let iter: std::vec::Drain<_> = v.drain(..);
+/// ```
 #[stable(feature = "drain", since = "1.6.0")]
 pub struct Drain<'a, T: 'a> {
     /// Index of tail to preserve
@@ -3221,6 +3243,14 @@ impl<T> FusedIterator for Drain<'_, T> {}
 ///
 /// This struct is created by [`Vec::splice()`].
 /// See its documentation for more.
+///
+/// # Example
+///
+/// ```
+/// let mut v = vec![0, 1, 2];
+/// let new = [7, 8];
+/// let iter: std::vec::Splice<_> = v.splice(1.., new.iter().cloned());
+/// ```
 #[derive(Debug)]
 #[stable(feature = "vec_splice", since = "1.21.0")]
 pub struct Splice<'a, I: Iterator + 'a> {
@@ -3337,6 +3367,15 @@ impl<T> Drain<'_, T> {
 ///
 /// This struct is created by [`Vec::drain_filter`].
 /// See its documentation for more.
+///
+/// # Example
+///
+/// ```
+/// #![feature(drain_filter)]
+///
+/// let mut v = vec![0, 1, 2];
+/// let iter: std::vec::DrainFilter<_, _> = v.drain_filter(|x| *x % 2 == 0);
+/// ```
 #[unstable(feature = "drain_filter", reason = "recently added", issue = "43244")]
 #[derive(Debug)]
 pub struct DrainFilter<'a, T, F>

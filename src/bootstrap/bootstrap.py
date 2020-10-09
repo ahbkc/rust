@@ -424,8 +424,19 @@ class RustBuild(object):
                     rustfmt_stamp.write(self.date + self.rustfmt_channel)
 
         if self.downloading_llvm():
-            llvm_sha = subprocess.check_output(["git", "log", "--author=bors",
-                "--format=%H", "-n1"]).decode(sys.getdefaultencoding()).strip()
+            # We want the most recent LLVM submodule update to avoid downloading
+            # LLVM more often than necessary.
+            #
+            # This git command finds that commit SHA, looking for bors-authored
+            # merges that modified src/llvm-project.
+            #
+            # This works even in a repository that has not yet initialized
+            # submodules.
+            llvm_sha = subprocess.check_output([
+                "git", "log", "--author=bors", "--format=%H", "-n1",
+                "-m", "--first-parent",
+                "--", "src/llvm-project"
+            ]).decode(sys.getdefaultencoding()).strip()
             llvm_assertions = self.get_toml('assertions', 'llvm') == 'true'
             if self.program_out_of_date(self.llvm_stamp(), llvm_sha + str(llvm_assertions)):
                 self._download_ci_llvm(llvm_sha, llvm_assertions)
@@ -881,8 +892,9 @@ class RustBuild(object):
         submodules_names = []
         for module in submodules:
             if module.endswith("llvm-project"):
-                if self.get_toml('llvm-config') and self.get_toml('lld') != 'true':
-                    continue
+                if self.get_toml('llvm-config') or self.get_toml('download-ci-llvm') == 'true':
+                    if self.get_toml('lld') != 'true':
+                        continue
             check = self.check_submodule(module, slow_submodules)
             filtered_submodules.append((module, check))
             submodules_names.append(module)
@@ -966,7 +978,6 @@ def bootstrap(help_triggered):
     parser = argparse.ArgumentParser(description='Build rust')
     parser.add_argument('--config')
     parser.add_argument('--build')
-    parser.add_argument('--src')
     parser.add_argument('--clean', action='store_true')
     parser.add_argument('-v', '--verbose', action='count', default=0)
 
@@ -975,7 +986,7 @@ def bootstrap(help_triggered):
 
     # Configure initial bootstrap
     build = RustBuild()
-    build.rust_root = args.src or os.path.abspath(os.path.join(__file__, '../../..'))
+    build.rust_root = os.path.abspath(os.path.join(__file__, '../../..'))
     build.verbose = args.verbose
     build.clean = args.clean
 
@@ -1032,18 +1043,12 @@ def bootstrap(help_triggered):
     args = [build.bootstrap_binary()]
     args.extend(sys.argv[1:])
     env = os.environ.copy()
-    env["BUILD"] = build.build
-    env["SRC"] = build.rust_root
     env["BOOTSTRAP_PARENT_ID"] = str(os.getpid())
     env["BOOTSTRAP_PYTHON"] = sys.executable
     env["BUILD_DIR"] = build.build_dir
     env["RUSTC_BOOTSTRAP"] = '1'
-    env["CARGO"] = build.cargo()
-    env["RUSTC"] = build.rustc()
     if toml_path:
         env["BOOTSTRAP_CONFIG"] = toml_path
-    if build.rustfmt():
-        env["RUSTFMT"] = build.rustfmt()
     run(args, env=env, verbose=build.verbose)
 
 

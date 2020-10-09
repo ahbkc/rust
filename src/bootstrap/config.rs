@@ -16,6 +16,7 @@ use crate::flags::Flags;
 pub use crate::flags::Subcommand;
 use crate::util::exe;
 use build_helper::t;
+use merge::Merge;
 use serde::Deserialize;
 
 macro_rules! check_ci_llvm {
@@ -41,6 +42,7 @@ macro_rules! check_ci_llvm {
 /// `config.toml.example`.
 #[derive(Default)]
 pub struct Config {
+    pub changelog_seen: Option<usize>,
     pub ccache: Option<String>,
     /// Call Build::ninja() instead of this.
     pub ninja_in_file: bool,
@@ -64,12 +66,13 @@ pub struct Config {
     pub test_compare_mode: bool,
     pub llvm_libunwind: bool,
 
-    pub skip_only_host_steps: bool,
-
     pub on_fail: Option<String>,
     pub stage: u32,
     pub keep_stage: Vec<u32>,
+    pub keep_stage_std: Vec<u32>,
     pub src: PathBuf,
+    // defaults to `config.toml`
+    pub config: PathBuf,
     pub jobs: Option<u32>,
     pub cmd: Subcommand,
     pub incremental: bool,
@@ -272,16 +275,41 @@ impl Target {
 #[derive(Deserialize, Default)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 struct TomlConfig {
+    changelog_seen: Option<usize>,
     build: Option<Build>,
     install: Option<Install>,
     llvm: Option<Llvm>,
     rust: Option<Rust>,
     target: Option<HashMap<String, TomlTarget>>,
     dist: Option<Dist>,
+    profile: Option<String>,
+}
+
+impl Merge for TomlConfig {
+    fn merge(
+        &mut self,
+        TomlConfig { build, install, llvm, rust, dist, target, profile: _, changelog_seen: _ }: Self,
+    ) {
+        fn do_merge<T: Merge>(x: &mut Option<T>, y: Option<T>) {
+            if let Some(new) = y {
+                if let Some(original) = x {
+                    original.merge(new);
+                } else {
+                    *x = Some(new);
+                }
+            }
+        };
+        do_merge(&mut self.build, build);
+        do_merge(&mut self.install, install);
+        do_merge(&mut self.llvm, llvm);
+        do_merge(&mut self.rust, rust);
+        do_merge(&mut self.dist, dist);
+        assert!(target.is_none(), "merging target-specific config is not currently supported");
+    }
 }
 
 /// TOML representation of various global build decisions.
-#[derive(Deserialize, Default, Clone)]
+#[derive(Deserialize, Default, Clone, Merge)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 struct Build {
     build: Option<String>,
@@ -291,7 +319,7 @@ struct Build {
     build_dir: Option<String>,
     cargo: Option<String>,
     rustc: Option<String>,
-    rustfmt: Option<String>, /* allow bootstrap.py to use rustfmt key */
+    rustfmt: Option<PathBuf>,
     docs: Option<bool>,
     compiler_docs: Option<bool>,
     submodules: Option<bool>,
@@ -321,7 +349,7 @@ struct Build {
 }
 
 /// TOML representation of various global install decisions.
-#[derive(Deserialize, Default, Clone)]
+#[derive(Deserialize, Default, Clone, Merge)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 struct Install {
     prefix: Option<String>,
@@ -338,7 +366,7 @@ struct Install {
 }
 
 /// TOML representation of how the LLVM build is configured.
-#[derive(Deserialize, Default)]
+#[derive(Deserialize, Default, Merge)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 struct Llvm {
     skip_rebuild: Option<bool>,
@@ -365,7 +393,7 @@ struct Llvm {
     download_ci_llvm: Option<bool>,
 }
 
-#[derive(Deserialize, Default, Clone)]
+#[derive(Deserialize, Default, Clone, Merge)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 struct Dist {
     sign_folder: Option<String>,
@@ -389,7 +417,7 @@ impl Default for StringOrBool {
 }
 
 /// TOML representation of how the Rust build is configured.
-#[derive(Deserialize, Default)]
+#[derive(Deserialize, Default, Merge)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 struct Rust {
     optimize: Option<bool>,
@@ -434,7 +462,7 @@ struct Rust {
 }
 
 /// TOML representation of how each build target is configured.
-#[derive(Deserialize, Default)]
+#[derive(Deserialize, Default, Merge)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 struct TomlTarget {
     cc: Option<String>,
@@ -487,13 +515,14 @@ impl Config {
         config.missing_tools = false;
 
         // set by bootstrap.py
-        config.build = TargetSelection::from_user(&env::var("BUILD").expect("'BUILD' to be set"));
-        config.src = Config::path_from_python("SRC");
+        config.build = TargetSelection::from_user(&env!("BUILD_TRIPLE"));
+        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        // Undo `src/bootstrap`
+        config.src = manifest_dir.parent().unwrap().parent().unwrap().to_owned();
         config.out = Config::path_from_python("BUILD_DIR");
 
-        config.initial_rustc = Config::path_from_python("RUSTC");
-        config.initial_cargo = Config::path_from_python("CARGO");
-        config.initial_rustfmt = env::var_os("RUSTFMT").map(Config::normalize_python_path);
+        config.initial_cargo = PathBuf::from(env!("CARGO"));
+        config.initial_rustc = PathBuf::from(env!("RUSTC"));
 
         config
     }
@@ -511,6 +540,7 @@ impl Config {
         config.incremental = flags.incremental;
         config.dry_run = flags.dry_run;
         config.keep_stage = flags.keep_stage;
+        config.keep_stage_std = flags.keep_stage_std;
         config.bindir = "bin".into(); // default
         if let Some(value) = flags.deny_warnings {
             config.deny_warnings = value;
@@ -523,34 +553,38 @@ impl Config {
         }
 
         #[cfg(test)]
-        let toml = TomlConfig::default();
+        let get_toml = |_| TomlConfig::default();
         #[cfg(not(test))]
-        let toml = flags
-            .config
-            .map(|file| {
-                use std::process;
+        let get_toml = |file: &Path| {
+            use std::process;
 
-                let contents = t!(fs::read_to_string(&file));
-                match toml::from_str(&contents) {
-                    Ok(table) => table,
-                    Err(err) => {
-                        println!(
-                            "failed to parse TOML configuration '{}': {}",
-                            file.display(),
-                            err
-                        );
-                        process::exit(2);
-                    }
+            let contents = t!(fs::read_to_string(file), "`include` config not found");
+            match toml::from_str(&contents) {
+                Ok(table) => table,
+                Err(err) => {
+                    println!("failed to parse TOML configuration '{}': {}", file.display(), err);
+                    process::exit(2);
                 }
-            })
-            .unwrap_or_else(TomlConfig::default);
+            }
+        };
+
+        let mut toml = flags.config.as_deref().map(get_toml).unwrap_or_else(TomlConfig::default);
+        if let Some(include) = &toml.profile {
+            let mut include_path = config.src.clone();
+            include_path.push("src");
+            include_path.push("bootstrap");
+            include_path.push("defaults");
+            include_path.push(format!("config.{}.toml", include));
+            let included_toml = get_toml(&include_path);
+            toml.merge(included_toml);
+        }
+
+        config.changelog_seen = toml.changelog_seen;
+        if let Some(cfg) = flags.config {
+            config.config = cfg;
+        }
 
         let build = toml.build.unwrap_or_default();
-
-        // If --target was specified but --host wasn't specified, don't run any host-only tests.
-        let has_hosts = build.host.is_some() || flags.host.is_some();
-        let has_targets = build.target.is_some() || flags.target.is_some();
-        config.skip_only_host_steps = !has_hosts && has_targets;
 
         config.hosts = if let Some(arg_host) = flags.host {
             arg_host
@@ -582,6 +616,9 @@ impl Config {
         set(&mut config.full_bootstrap, build.full_bootstrap);
         set(&mut config.extended, build.extended);
         config.tools = build.tools;
+        if build.rustfmt.is_some() {
+            config.initial_rustfmt = build.rustfmt;
+        }
         set(&mut config.verbose, build.verbose);
         set(&mut config.sanitizers, build.sanitizers);
         set(&mut config.profiler, build.profiler);
@@ -605,6 +642,7 @@ impl Config {
             | Subcommand::Clippy { .. }
             | Subcommand::Fix { .. }
             | Subcommand::Run { .. }
+            | Subcommand::Setup { .. }
             | Subcommand::Format { .. } => flags.stage.unwrap_or(0),
         };
 
@@ -629,6 +667,7 @@ impl Config {
                 | Subcommand::Clippy { .. }
                 | Subcommand::Fix { .. }
                 | Subcommand::Run { .. }
+                | Subcommand::Setup { .. }
                 | Subcommand::Format { .. } => {}
             }
         }
@@ -836,11 +875,14 @@ impl Config {
             set(&mut config.missing_tools, t.missing_tools);
         }
 
+        // Cargo does not provide a RUSTFMT environment variable, so we
+        // synthesize it manually. Note that we also later check the config.toml
+        // and set this to that path if necessary.
+        let rustfmt = config.initial_rustc.with_file_name(exe("rustfmt", config.build));
+        config.initial_rustfmt = if rustfmt.exists() { Some(rustfmt) } else { None };
+
         // Now that we've reached the end of our configuration, infer the
         // default values for all options that we haven't otherwise stored yet.
-
-        set(&mut config.initial_rustc, build.rustc.map(PathBuf::from));
-        set(&mut config.initial_cargo, build.cargo.map(PathBuf::from));
 
         config.llvm_skip_rebuild = llvm_skip_rebuild.unwrap_or(false);
 

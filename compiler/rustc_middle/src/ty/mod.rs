@@ -682,25 +682,31 @@ pub enum BorrowKind {
     /// implicit closure bindings. It is needed when the closure
     /// is borrowing or mutating a mutable referent, e.g.:
     ///
-    ///    let x: &mut isize = ...;
-    ///    let y = || *x += 5;
+    /// ```
+    /// let x: &mut isize = ...;
+    /// let y = || *x += 5;
+    /// ```
     ///
     /// If we were to try to translate this closure into a more explicit
     /// form, we'd encounter an error with the code as written:
     ///
-    ///    struct Env { x: & &mut isize }
-    ///    let x: &mut isize = ...;
-    ///    let y = (&mut Env { &x }, fn_ptr);  // Closure is pair of env and fn
-    ///    fn fn_ptr(env: &mut Env) { **env.x += 5; }
+    /// ```
+    /// struct Env { x: & &mut isize }
+    /// let x: &mut isize = ...;
+    /// let y = (&mut Env { &x }, fn_ptr);  // Closure is pair of env and fn
+    /// fn fn_ptr(env: &mut Env) { **env.x += 5; }
+    /// ```
     ///
     /// This is then illegal because you cannot mutate a `&mut` found
     /// in an aliasable location. To solve, you'd have to translate with
     /// an `&mut` borrow:
     ///
-    ///    struct Env { x: & &mut isize }
-    ///    let x: &mut isize = ...;
-    ///    let y = (&mut Env { &mut x }, fn_ptr); // changed from &x to &mut x
-    ///    fn fn_ptr(env: &mut Env) { **env.x += 5; }
+    /// ```
+    /// struct Env { x: & &mut isize }
+    /// let x: &mut isize = ...;
+    /// let y = (&mut Env { &mut x }, fn_ptr); // changed from &x to &mut x
+    /// fn fn_ptr(env: &mut Env) { **env.x += 5; }
+    /// ```
     ///
     /// Now the assignment to `**env.x` is legal, but creating a
     /// mutable pointer to `x` is not because `x` is not mutable. We
@@ -2672,18 +2678,18 @@ impl<'tcx> ClosureKind {
         }
     }
 
-    /// Returns `true` if this a type that impls this closure kind
+    /// Returns `true` if a type that impls this closure kind
     /// must also implement `other`.
     pub fn extends(self, other: ty::ClosureKind) -> bool {
-        match (self, other) {
-            (ClosureKind::Fn, ClosureKind::Fn) => true,
-            (ClosureKind::Fn, ClosureKind::FnMut) => true,
-            (ClosureKind::Fn, ClosureKind::FnOnce) => true,
-            (ClosureKind::FnMut, ClosureKind::FnMut) => true,
-            (ClosureKind::FnMut, ClosureKind::FnOnce) => true,
-            (ClosureKind::FnOnce, ClosureKind::FnOnce) => true,
-            _ => false,
-        }
+        matches!(
+            (self, other),
+            (ClosureKind::Fn, ClosureKind::Fn)
+                | (ClosureKind::Fn, ClosureKind::FnMut)
+                | (ClosureKind::Fn, ClosureKind::FnOnce)
+                | (ClosureKind::FnMut, ClosureKind::FnMut)
+                | (ClosureKind::FnMut, ClosureKind::FnOnce)
+                | (ClosureKind::FnOnce, ClosureKind::FnOnce)
+        )
     }
 
     /// Returns the representative scalar type for this closure kind.
@@ -2809,15 +2815,15 @@ impl<'tcx> TyCtxt<'tcx> {
 
     pub fn opt_associated_item(self, def_id: DefId) -> Option<&'tcx AssocItem> {
         let is_associated_item = if let Some(def_id) = def_id.as_local() {
-            match self.hir().get(self.hir().local_def_id_to_hir_id(def_id)) {
-                Node::TraitItem(_) | Node::ImplItem(_) => true,
-                _ => false,
-            }
+            matches!(
+                self.hir().get(self.hir().local_def_id_to_hir_id(def_id)),
+                Node::TraitItem(_) | Node::ImplItem(_)
+            )
         } else {
-            match self.def_kind(def_id) {
-                DefKind::AssocConst | DefKind::AssocFn | DefKind::AssocTy => true,
-                _ => false,
-            }
+            matches!(
+                self.def_kind(def_id),
+                DefKind::AssocConst | DefKind::AssocFn | DefKind::AssocTy
+            )
         };
 
         is_associated_item.then(|| self.associated_item(def_id))
@@ -3028,10 +3034,12 @@ impl<'tcx> TyCtxt<'tcx> {
                 .hygienic_eq(def_name.span.ctxt(), self.expansion_that_defined(def_parent_def_id))
     }
 
-    fn expansion_that_defined(self, scope: DefId) -> ExpnId {
+    pub fn expansion_that_defined(self, scope: DefId) -> ExpnId {
         match scope.as_local() {
+            // Parsing and expansion aren't incremental, so we don't
+            // need to go through a query for the same-crate case.
             Some(scope) => self.hir().definitions().expansion_that_defined(scope),
-            None => ExpnId::root(),
+            None => self.expn_that_defined(scope),
         }
     }
 

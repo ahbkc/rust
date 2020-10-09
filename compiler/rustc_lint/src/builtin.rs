@@ -613,6 +613,19 @@ impl<'tcx> LateLintPass<'tcx> for MissingDoc {
         );
     }
 
+    fn check_foreign_item(&mut self, cx: &LateContext<'_>, foreign_item: &hir::ForeignItem<'_>) {
+        let def_id = cx.tcx.hir().local_def_id(foreign_item.hir_id);
+        let (article, desc) = cx.tcx.article_and_description(def_id.to_def_id());
+        self.check_missing_docs_attrs(
+            cx,
+            Some(foreign_item.hir_id),
+            &foreign_item.attrs,
+            foreign_item.span,
+            article,
+            desc,
+        );
+    }
+
     fn check_struct_field(&mut self, cx: &LateContext<'_>, sf: &hir::StructField<'_>) {
         if !sf.is_positional() {
             self.check_missing_docs_attrs(
@@ -1474,21 +1487,19 @@ declare_lint_pass!(
     UnusedBrokenConst => []
 );
 
-fn check_const(cx: &LateContext<'_>, body_id: hir::BodyId) {
-    let def_id = cx.tcx.hir().body_owner_def_id(body_id).to_def_id();
-    // trigger the query once for all constants since that will already report the errors
-    // FIXME: Use ensure here
-    let _ = cx.tcx.const_eval_poly(def_id);
-}
-
 impl<'tcx> LateLintPass<'tcx> for UnusedBrokenConst {
     fn check_item(&mut self, cx: &LateContext<'_>, it: &hir::Item<'_>) {
         match it.kind {
             hir::ItemKind::Const(_, body_id) => {
-                check_const(cx, body_id);
+                let def_id = cx.tcx.hir().body_owner_def_id(body_id).to_def_id();
+                // trigger the query once for all constants since that will already report the errors
+                // FIXME: Use ensure here
+                let _ = cx.tcx.const_eval_poly(def_id);
             }
             hir::ItemKind::Static(_, _, body_id) => {
-                check_const(cx, body_id);
+                let def_id = cx.tcx.hir().body_owner_def_id(body_id).to_def_id();
+                // FIXME: Use ensure here
+                let _ = cx.tcx.eval_static_initializer(def_id);
             }
             _ => {}
         }
@@ -1986,9 +1997,9 @@ impl ExplicitOutlivesRequirements {
             .filter_map(|(i, bound)| {
                 if let hir::GenericBound::Outlives(lifetime) = bound {
                     let is_inferred = match tcx.named_region(lifetime.hir_id) {
-                        Some(Region::Static) if infer_static => inferred_outlives
-                            .iter()
-                            .any(|r| if let ty::ReStatic = r { true } else { false }),
+                        Some(Region::Static) if infer_static => {
+                            inferred_outlives.iter().any(|r| matches!(r, ty::ReStatic))
+                        }
                         Some(Region::EarlyBound(index, ..)) => inferred_outlives.iter().any(|r| {
                             if let ty::ReEarlyBound(ebr) = r { ebr.index == index } else { false }
                         }),
@@ -2080,9 +2091,10 @@ impl<'tcx> LateLintPass<'tcx> for ExplicitOutlivesRequirements {
             let mut lint_spans = Vec::new();
 
             for param in hir_generics.params {
-                let has_lifetime_bounds = param.bounds.iter().any(|bound| {
-                    if let hir::GenericBound::Outlives(_) = bound { true } else { false }
-                });
+                let has_lifetime_bounds = param
+                    .bounds
+                    .iter()
+                    .any(|bound| matches!(bound, hir::GenericBound::Outlives(_)));
                 if !has_lifetime_bounds {
                     continue;
                 }
@@ -2351,13 +2363,6 @@ impl<'tcx> LateLintPass<'tcx> for InvalidValue {
 
         /// Determine if this expression is a "dangerous initialization".
         fn is_dangerous_init(cx: &LateContext<'_>, expr: &hir::Expr<'_>) -> Option<InitKind> {
-            // `transmute` is inside an anonymous module (the `extern` block?);
-            // `Invalid` represents the empty string and matches that.
-            // FIXME(#66075): use diagnostic items.  Somehow, that does not seem to work
-            // on intrinsics right now.
-            const TRANSMUTE_PATH: &[Symbol] =
-                &[sym::core, sym::intrinsics, kw::Invalid, sym::transmute];
-
             if let hir::ExprKind::Call(ref path_expr, ref args) = expr.kind {
                 // Find calls to `mem::{uninitialized,zeroed}` methods.
                 if let hir::ExprKind::Path(ref qpath) = path_expr.kind {
@@ -2367,7 +2372,7 @@ impl<'tcx> LateLintPass<'tcx> for InvalidValue {
                         return Some(InitKind::Zeroed);
                     } else if cx.tcx.is_diagnostic_item(sym::mem_uninitialized, def_id) {
                         return Some(InitKind::Uninit);
-                    } else if cx.match_def_path(def_id, TRANSMUTE_PATH) {
+                    } else if cx.tcx.is_diagnostic_item(sym::transmute, def_id) {
                         if is_zero(&args[0]) {
                             return Some(InitKind::Zeroed);
                         }

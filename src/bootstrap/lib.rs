@@ -141,6 +141,7 @@ mod metadata;
 mod native;
 mod run;
 mod sanity;
+mod setup;
 mod test;
 mod tool;
 mod toolstate;
@@ -165,7 +166,7 @@ mod job {
 
 use crate::cache::{Interned, INTERNER};
 pub use crate::config::Config;
-use crate::flags::Subcommand;
+pub use crate::flags::Subcommand;
 
 const LLVM_TOOLS: &[&str] = &[
     "llvm-nm", // used to inspect binaries; it shows symbol names, their sizes and visibility
@@ -217,6 +218,9 @@ pub enum GitRepo {
 pub struct Build {
     /// User-specified configuration from `config.toml`.
     config: Config,
+
+    // Version information
+    version: String,
 
     // Properties derived from the above configuration
     src: PathBuf,
@@ -380,6 +384,10 @@ impl Build {
             .unwrap()
             .to_path_buf();
 
+        let version = std::fs::read_to_string(src.join("src").join("version"))
+            .expect("failed to read src/version");
+        let version = version.trim();
+
         let mut build = Build {
             initial_rustc: config.initial_rustc.clone(),
             initial_cargo: config.initial_cargo.clone(),
@@ -395,6 +403,7 @@ impl Build {
             targets: config.targets.clone(),
 
             config,
+            version: version.to_string(),
             src,
             out,
 
@@ -433,8 +442,7 @@ impl Build {
             .next()
             .unwrap()
             .trim();
-        let my_version = channel::CFG_RELEASE_NUM;
-        if local_release.split('.').take(2).eq(my_version.split('.').take(2)) {
+        if local_release.split('.').take(2).eq(version.split('.').take(2)) {
             build.verbose(&format!("auto-detected local-rebuild {}", local_release));
             build.local_rebuild = true;
         }
@@ -461,6 +469,10 @@ impl Build {
 
         if let Subcommand::Clean { all } = self.config.cmd {
             return clean::clean(self, all);
+        }
+
+        if let Subcommand::Setup { profile } = &self.config.cmd {
+            return setup::setup(&self.config.src, *profile);
         }
 
         {
@@ -785,7 +797,7 @@ impl Build {
 
         match which {
             GitRepo::Rustc => {
-                let sha = self.rust_sha().unwrap_or(channel::CFG_RELEASE_NUM);
+                let sha = self.rust_sha().unwrap_or(&self.version);
                 Some(format!("/rustc/{}", sha))
             }
             GitRepo::Llvm => Some(String::from("/rustc/llvm")),
@@ -1016,7 +1028,7 @@ impl Build {
 
     /// Returns the value of `release` above for Rust itself.
     fn rust_release(&self) -> String {
-        self.release(channel::CFG_RELEASE_NUM)
+        self.release(&self.version)
     }
 
     /// Returns the "package version" for a component given the `num` release
@@ -1036,7 +1048,7 @@ impl Build {
 
     /// Returns the value of `package_vers` above for Rust itself.
     fn rust_package_vers(&self) -> String {
-        self.package_vers(channel::CFG_RELEASE_NUM)
+        self.package_vers(&self.version)
     }
 
     /// Returns the value of `package_vers` above for Cargo
@@ -1070,7 +1082,7 @@ impl Build {
     }
 
     fn llvm_tools_package_vers(&self) -> String {
-        self.package_vers(channel::CFG_RELEASE_NUM)
+        self.package_vers(&self.version)
     }
 
     fn llvm_tools_vers(&self) -> String {
@@ -1087,7 +1099,7 @@ impl Build {
     /// Note that this is a descriptive string which includes the commit date,
     /// sha, version, etc.
     fn rust_version(&self) -> String {
-        self.rust_info.version(self, channel::CFG_RELEASE_NUM)
+        self.rust_info.version(self, &self.version)
     }
 
     /// Returns the full commit hash.

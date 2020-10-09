@@ -89,6 +89,7 @@ provide! { <'tcx> tcx, def_id, other, cdata,
     explicit_predicates_of => { cdata.get_explicit_predicates(def_id.index, tcx) }
     inferred_outlives_of => { cdata.get_inferred_outlives(def_id.index, tcx) }
     super_predicates_of => { cdata.get_super_predicates(def_id.index, tcx) }
+    explicit_item_bounds => { cdata.get_explicit_item_bounds(def_id.index, tcx) }
     trait_def => { cdata.get_trait_def(def_id.index, tcx.sess) }
     adt_def => { cdata.get_adt_def(def_id.index, tcx) }
     adt_destructor => {
@@ -179,8 +180,11 @@ provide! { <'tcx> tcx, def_id, other, cdata,
         })
     }
     proc_macro_decls_static => {
-        cdata.root.proc_macro_decls_static.map(|index| {
-            DefId { krate: def_id.krate, index }
+        cdata.root.proc_macro_data.as_ref().map(|data| {
+            DefId {
+                krate: def_id.krate,
+                index: data.proc_macro_decls_static,
+            }
         })
     }
     crate_disambiguator => { cdata.root.disambiguator }
@@ -235,6 +239,7 @@ provide! { <'tcx> tcx, def_id, other, cdata,
     }
 
     crate_extern_paths => { cdata.source().paths().cloned().collect() }
+    expn_that_defined => { cdata.get_expn_that_defined(def_id.index, tcx.sess) }
 }
 
 pub fn provide(providers: &mut Providers) {

@@ -18,7 +18,6 @@ use build_helper::{output, t};
 
 use crate::builder::{Builder, RunConfig, ShouldRun, Step};
 use crate::cache::{Interned, INTERNER};
-use crate::channel;
 use crate::compile;
 use crate::config::TargetSelection;
 use crate::tool::{self, Tool};
@@ -47,7 +46,7 @@ pub fn pkgname(builder: &Builder<'_>, component: &str) -> String {
     }
 }
 
-fn distdir(builder: &Builder<'_>) -> PathBuf {
+pub(crate) fn distdir(builder: &Builder<'_>) -> PathBuf {
     builder.out.join("dist")
 }
 
@@ -569,7 +568,7 @@ impl Step for Rustc {
                     &page_dst,
                     &[
                         ("<INSERT DATE HERE>", &month_year),
-                        ("<INSERT VERSION HERE>", channel::CFG_RELEASE_NUM),
+                        ("<INSERT VERSION HERE>", &builder.version),
                     ],
                 );
             }
@@ -1034,7 +1033,7 @@ impl Step for Src {
         copy_src_dirs(
             builder,
             &builder.src,
-            &["library"],
+            &["library", "src/llvm-project/libunwind"],
             &[
                 // not needed and contains symlinks which rustup currently
                 // chokes on when unpacking.
@@ -2301,9 +2300,9 @@ impl Step for Extended {
 }
 
 fn add_env(builder: &Builder<'_>, cmd: &mut Command, target: TargetSelection) {
-    let mut parts = channel::CFG_RELEASE_NUM.split('.');
+    let mut parts = builder.version.split('.');
     cmd.env("CFG_RELEASE_INFO", builder.rust_version())
-        .env("CFG_RELEASE_NUM", channel::CFG_RELEASE_NUM)
+        .env("CFG_RELEASE_NUM", &builder.version)
         .env("CFG_RELEASE", builder.rust_release())
         .env("CFG_VER_MAJOR", parts.next().unwrap())
         .env("CFG_VER_MINOR", parts.next().unwrap())
@@ -2369,15 +2368,10 @@ impl Step for HashSign {
         cmd.arg(sign);
         cmd.arg(distdir(builder));
         cmd.arg(today.trim());
-        cmd.arg(builder.rust_package_vers());
         cmd.arg(addr);
-        cmd.arg(builder.package_vers(&builder.release_num("cargo")));
-        cmd.arg(builder.package_vers(&builder.release_num("rls")));
-        cmd.arg(builder.package_vers(&builder.release_num("rust-analyzer/crates/rust-analyzer")));
-        cmd.arg(builder.package_vers(&builder.release_num("clippy")));
-        cmd.arg(builder.package_vers(&builder.release_num("miri")));
-        cmd.arg(builder.package_vers(&builder.release_num("rustfmt")));
-        cmd.arg(builder.llvm_tools_package_vers());
+        cmd.arg(&builder.config.channel);
+        cmd.arg(&builder.src);
+        cmd.env("BUILD_MANIFEST_LEGACY", "1");
 
         builder.create_dir(&distdir(builder));
 
@@ -2401,14 +2395,11 @@ fn maybe_install_llvm(builder: &Builder<'_>, target: TargetSelection, dst_libdir
         return;
     }
 
-    // On macOS for some reason the llvm-config binary behaves differently and
-    // and fails on missing .a files if run without --link-shared. If run with
-    // that option, it still fails, but because we only ship a libLLVM.dylib
-    // rather than libLLVM-11-rust-....dylib file.
-    //
-    // For now just don't use llvm-config here on macOS; that will fail to
-    // support CI-built LLVM, but until we work out the different behavior that
-    // is fine as it is off by default.
+    // On macOS, rustc (and LLVM tools) link to an unversioned libLLVM.dylib
+    // instead of libLLVM-11-rust-....dylib, as on linux. It's not entirely
+    // clear why this is the case, though. llvm-config will emit the versioned
+    // paths and we don't want those in the sysroot (as we're expecting
+    // unversioned paths).
     if target.contains("apple-darwin") {
         let src_libdir = builder.llvm_out(target).join("lib");
         let llvm_dylib_path = src_libdir.join("libLLVM.dylib");

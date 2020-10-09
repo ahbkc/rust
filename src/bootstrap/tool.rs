@@ -7,7 +7,6 @@ use std::process::{exit, Command};
 use build_helper::t;
 
 use crate::builder::{Builder, Cargo as CargoCommand, RunConfig, ShouldRun, Step};
-use crate::channel;
 use crate::channel::GitInfo;
 use crate::compile;
 use crate::config::TargetSelection;
@@ -255,7 +254,7 @@ pub fn prepare_tool_cargo(
     cargo.env("CFG_RELEASE", builder.rust_release());
     cargo.env("CFG_RELEASE_CHANNEL", &builder.config.channel);
     cargo.env("CFG_VERSION", builder.rust_version());
-    cargo.env("CFG_RELEASE_NUM", channel::CFG_RELEASE_NUM);
+    cargo.env("CFG_RELEASE_NUM", &builder.version);
 
     let info = GitInfo::new(builder.config.ignore_git, &dir);
     if let Some(sha) = info.sha() {
@@ -471,7 +470,11 @@ impl Step for Rustdoc {
 
     fn make_run(run: RunConfig<'_>) {
         run.builder.ensure(Rustdoc {
-            compiler: run.builder.compiler(run.builder.top_stage, run.build_triple()),
+            // Note: this is somewhat unique in that we actually want a *target*
+            // compiler here, because rustdoc *is* a compiler. We won't be using
+            // this as the compiler to build with, but rather this is "what
+            // compiler are we producing"?
+            compiler: run.builder.compiler(run.builder.top_stage, run.target),
         });
     }
 
@@ -701,6 +704,10 @@ impl<'a> Builder<'a> {
         }
 
         add_dylib_path(lib_paths, &mut cmd);
+
+        // Provide a RUSTC for this command to use.
+        cmd.env("RUSTC", &self.initial_rustc);
+
         cmd
     }
 }

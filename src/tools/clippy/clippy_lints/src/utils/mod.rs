@@ -10,6 +10,7 @@ pub mod comparisons;
 pub mod conf;
 pub mod constants;
 mod diagnostics;
+pub mod eager_or_lazy;
 pub mod higher;
 mod hir_utils;
 pub mod inspector;
@@ -19,6 +20,7 @@ pub mod paths;
 pub mod ptr;
 pub mod sugg;
 pub mod usage;
+pub mod qualify_min_const_fn;
 
 pub use self::attrs::*;
 pub use self::diagnostics::*;
@@ -130,6 +132,9 @@ pub fn is_wild<'tcx>(pat: &impl std::ops::Deref<Target = Pat<'tcx>>) -> bool {
 }
 
 /// Checks if type is struct, enum or union type with the given def path.
+///
+/// If the type is a diagnostic item, use `is_type_diagnostic_item` instead.
+/// If you change the signature, remember to update the internal lint `MatchTypeOnDiagItem`
 pub fn match_type(cx: &LateContext<'_>, ty: Ty<'_>, path: &[&str]) -> bool {
     match ty.kind() {
         ty::Adt(adt, _) => match_def_path(cx, adt.did, path),
@@ -138,6 +143,8 @@ pub fn match_type(cx: &LateContext<'_>, ty: Ty<'_>, path: &[&str]) -> bool {
 }
 
 /// Checks if the type is equal to a diagnostic item
+///
+/// If you change the signature, remember to update the internal lint `MatchTypeOnDiagItem`
 pub fn is_type_diagnostic_item(cx: &LateContext<'_>, ty: Ty<'_>, diag_item: Symbol) -> bool {
     match ty.kind() {
         ty::Adt(adt, _) => cx.tcx.is_diagnostic_item(diag_item, adt.did),
@@ -748,14 +755,6 @@ pub fn walk_ptrs_hir_ty<'tcx>(ty: &'tcx hir::Ty<'tcx>) -> &'tcx hir::Ty<'tcx> {
     }
 }
 
-/// Returns the base type for references and raw pointers.
-pub fn walk_ptrs_ty(ty: Ty<'_>) -> Ty<'_> {
-    match ty.kind() {
-        ty::Ref(_, ty, _) => walk_ptrs_ty(ty),
-        _ => ty,
-    }
-}
-
 /// Returns the base type for references and raw pointers, and count reference
 /// depth.
 pub fn walk_ptrs_ty_depth(ty: Ty<'_>) -> (Ty<'_>, usize) {
@@ -1286,9 +1285,10 @@ pub fn is_must_use_ty<'tcx>(cx: &LateContext<'tcx>, ty: Ty<'tcx>) -> bool {
         },
         ty::Tuple(ref substs) => substs.types().any(|ty| is_must_use_ty(cx, ty)),
         ty::Opaque(ref def_id, _) => {
-            for (predicate, _) in cx.tcx.predicates_of(*def_id).predicates {
+            for (predicate, _) in cx.tcx.explicit_item_bounds(*def_id) {
                 if let ty::PredicateAtom::Trait(trait_predicate, _) = predicate.skip_binders() {
-                    if must_use_attr(&cx.tcx.get_attrs(trait_predicate.trait_ref.def_id)).is_some() {
+                    if must_use_attr(&cx.tcx.get_attrs(trait_predicate.trait_ref.def_id)).is_some()
+                    {
                         return true;
                     }
                 }

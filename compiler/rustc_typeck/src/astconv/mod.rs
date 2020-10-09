@@ -35,8 +35,8 @@ use rustc_trait_selection::traits::error_reporting::report_object_safety_error;
 use rustc_trait_selection::traits::wf::object_region_bounds;
 
 use smallvec::SmallVec;
+use std::array;
 use std::collections::BTreeSet;
-use std::iter;
 use std::slice;
 
 #[derive(Debug)]
@@ -360,7 +360,21 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                 (GenericParamDefKind::Lifetime, GenericArg::Lifetime(lt)) => {
                     self.ast_region_to_region(&lt, Some(param)).into()
                 }
-                (GenericParamDefKind::Type { .. }, GenericArg::Type(ty)) => {
+                (GenericParamDefKind::Type { has_default, .. }, GenericArg::Type(ty)) => {
+                    if *has_default {
+                        tcx.check_optional_stability(
+                            param.def_id,
+                            Some(arg.id()),
+                            arg.span(),
+                            |_, _| {
+                                // Default generic parameters may not be marked
+                                // with stability attributes, i.e. when the
+                                // default parameter was defined at the same time
+                                // as the rest of the type. As such, we ignore missing
+                                // stability attributes.
+                            },
+                        )
+                    }
                     if let (hir::TyKind::Infer, false) = (&ty.kind, self.allow_ty_infer()) {
                         inferred_params.push(ty.span);
                         tcx.ty_error().into()
@@ -1332,7 +1346,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
             debug!("one_bound_for_assoc_type: bound2 = {:?}", bound2);
 
             let is_equality = is_equality();
-            let bounds = iter::once(bound).chain(iter::once(bound2)).chain(matching_candidates);
+            let bounds = array::IntoIter::new([bound, bound2]).chain(matching_candidates);
             let mut err = if is_equality.is_some() {
                 // More specific Error Index entry.
                 struct_span_err!(

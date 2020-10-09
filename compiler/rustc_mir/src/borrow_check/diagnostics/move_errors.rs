@@ -331,7 +331,7 @@ impl<'a, 'tcx> MirBorrowckCtxt<'a, 'tcx> {
                 self.cannot_move_out_of_interior_noncopy(span, ty, None)
             }
             ty::Closure(def_id, closure_substs)
-                if def_id.as_local() == Some(self.mir_def_id) && upvar_field.is_some() =>
+                if def_id.as_local() == Some(self.mir_def_id()) && upvar_field.is_some() =>
             {
                 let closure_kind_ty = closure_substs.as_closure().kind_ty();
                 let closure_kind = closure_kind_ty.to_opt_closure_kind();
@@ -492,8 +492,8 @@ impl<'a, 'tcx> MirBorrowckCtxt<'a, 'tcx> {
             {
                 if let Ok(pat_snippet) = self.infcx.tcx.sess.source_map().span_to_snippet(pat_span)
                 {
-                    if pat_snippet.starts_with('&') {
-                        let pat_snippet = pat_snippet[1..].trim_start();
+                    if let Some(stripped) = pat_snippet.strip_prefix('&') {
+                        let pat_snippet = stripped.trim_start();
                         let (suggestion, to_remove) = if pat_snippet.starts_with("mut")
                             && pat_snippet["mut".len()..].starts_with(rustc_lexer::is_whitespace)
                         {

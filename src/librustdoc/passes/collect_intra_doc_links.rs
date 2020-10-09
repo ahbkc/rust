@@ -2,17 +2,19 @@ use rustc_ast as ast;
 use rustc_data_structures::stable_set::FxHashSet;
 use rustc_errors::{Applicability, DiagnosticBuilder};
 use rustc_expand::base::SyntaxExtensionKind;
-use rustc_feature::UnstableFeatures;
 use rustc_hir as hir;
 use rustc_hir::def::{
     DefKind,
     Namespace::{self, *},
     PerNS, Res,
 };
-use rustc_hir::def_id::DefId;
+use rustc_hir::def_id::{CrateNum, DefId};
 use rustc_middle::ty;
 use rustc_resolve::ParentScope;
-use rustc_session::lint;
+use rustc_session::lint::{
+    builtin::{BROKEN_INTRA_DOC_LINKS, PRIVATE_INTRA_DOC_LINKS},
+    Lint,
+};
 use rustc_span::hygiene::MacroKind;
 use rustc_span::symbol::Ident;
 use rustc_span::symbol::Symbol;
@@ -38,13 +40,8 @@ pub const COLLECT_INTRA_DOC_LINKS: Pass = Pass {
 };
 
 pub fn collect_intra_doc_links(krate: Crate, cx: &DocContext<'_>) -> Crate {
-    if !UnstableFeatures::from_environment().is_nightly_build() {
-        krate
-    } else {
-        let mut coll = LinkCollector::new(cx);
-
-        coll.fold_crate(krate)
-    }
+    let mut coll = LinkCollector::new(cx);
+    coll.fold_crate(krate)
 }
 
 enum ErrorKind<'a> {
@@ -63,45 +60,16 @@ enum ResolutionFailure<'a> {
     /// This resolved, but with the wrong namespace.
     /// `Namespace` is the expected namespace (as opposed to the actual).
     WrongNamespace(Res, Namespace),
-    /// This has a partial resolution, but is not in the TypeNS and so cannot
-    /// have associated items or fields.
-    CannotHaveAssociatedItems(Res, Namespace),
-    /// `name` is the base name of the path (not necessarily the whole link)
-    NotInScope { module_id: DefId, name: Cow<'a, str> },
-    /// this is a primitive type without an impls (no associated methods)
-    /// when will this actually happen?
-    /// the `Res` is the primitive it resolved to
-    NoPrimitiveImpl(Res, String),
-    /// `[u8::not_found]`
-    /// the `Res` is the primitive it resolved to
-    NoPrimitiveAssocItem { res: Res, prim_name: &'a str, assoc_item: Symbol },
-    /// `[S::not_found]`
-    /// the `String` is the associated item that wasn't found
-    NoAssocItem(Res, Symbol),
+    /// The link failed to resolve. `resolution_failure` should look to see if there's
+    /// a more helpful error that can be given.
+    NotResolved { module_id: DefId, partial_res: Option<Res>, unresolved: Cow<'a, str> },
     /// should not ever happen
     NoParentItem,
-    /// this could be an enum variant, but the last path fragment wasn't resolved.
-    /// the `String` is the variant that didn't exist
-    NotAVariant(Res, Symbol),
     /// used to communicate that this should be ignored, but shouldn't be reported to the user
     Dummy,
 }
 
 impl ResolutionFailure<'a> {
-    // A partial or full resolution
-    fn res(&self) -> Option<Res> {
-        use ResolutionFailure::*;
-        match self {
-            NoPrimitiveAssocItem { res, .. }
-            | NoAssocItem(res, _)
-            | NoPrimitiveImpl(res, _)
-            | NotAVariant(res, _)
-            | WrongNamespace(res, _)
-            | CannotHaveAssociatedItems(res, _) => Some(*res),
-            NotInScope { .. } | NoParentItem | Dummy => None,
-        }
-    }
-
     // This resolved fully (not just partially) but is erroneous for some other reason
     fn full_res(&self) -> Option<Res> {
         match self {
@@ -136,22 +104,25 @@ impl<'a, 'tcx> LinkCollector<'a, 'tcx> {
         path_str: &'path str,
         current_item: &Option<String>,
         module_id: DefId,
-        extra_fragment: &Option<String>,
     ) -> Result<(Res, Option<String>), ErrorKind<'path>> {
         let cx = self.cx;
+        let no_res = || ResolutionFailure::NotResolved {
+            module_id,
+            partial_res: None,
+            unresolved: path_str.into(),
+        };
 
         debug!("looking for enum variant {}", path_str);
         let mut split = path_str.rsplitn(3, "::");
-        let variant_field_name = split
+        let (variant_field_str, variant_field_name) = split
             .next()
-            .map(|f| Symbol::intern(f))
+            .map(|f| (f, Symbol::intern(f)))
             .expect("fold_item should ensure link is non-empty");
-        let variant_name =
+        let (variant_str, variant_name) =
             // we're not sure this is a variant at all, so use the full string
-            split.next().map(|f| Symbol::intern(f)).ok_or_else(|| ResolutionFailure::NotInScope {
-                module_id,
-                name: path_str.into(),
-            })?;
+            // If there's no second component, the link looks like `[path]`.
+            // So there's no partial res and we should say the whole link failed to resolve.
+            split.next().map(|f| (f, Symbol::intern(f))).ok_or_else(no_res)?;
         let path = split
             .next()
             .map(|f| {
@@ -162,10 +133,9 @@ impl<'a, 'tcx> LinkCollector<'a, 'tcx> {
                 }
                 f.to_owned()
             })
-            .ok_or_else(|| ResolutionFailure::NotInScope {
-                module_id,
-                name: variant_name.to_string().into(),
-            })?;
+            // If there's no third component, we saw `[a::b]` before and it failed to resolve.
+            // So there's no partial res.
+            .ok_or_else(no_res)?;
         let ty_res = cx
             .enter_resolver(|resolver| {
                 resolver.resolve_str_path_error(DUMMY_SP, &path, TypeNS, module_id)
@@ -173,7 +143,7 @@ impl<'a, 'tcx> LinkCollector<'a, 'tcx> {
             .map(|(_, res)| res)
             .unwrap_or(Res::Err);
         if let Res::Err = ty_res {
-            return Err(ResolutionFailure::NotInScope { module_id, name: path.into() }.into());
+            return Err(no_res().into());
         }
         let ty_res = ty_res.map_id(|_| panic!("unexpected node_id"));
         match ty_res {
@@ -196,38 +166,27 @@ impl<'a, 'tcx> LinkCollector<'a, 'tcx> {
                                 ty_res,
                                 Some(format!(
                                     "variant.{}.field.{}",
-                                    variant_name, variant_field_name
+                                    variant_str, variant_field_name
                                 )),
                             ))
                         } else {
-                            Err(ResolutionFailure::NotAVariant(ty_res, variant_field_name).into())
+                            Err(ResolutionFailure::NotResolved {
+                                module_id,
+                                partial_res: Some(Res::Def(DefKind::Enum, def.did)),
+                                unresolved: variant_field_str.into(),
+                            }
+                            .into())
                         }
                     }
                     _ => unreachable!(),
                 }
             }
-            // `variant_field` looks at 3 different path segments in a row.
-            // But `NoAssocItem` assumes there are only 2. Check to see if there's
-            // an intermediate segment that resolves.
-            _ => {
-                let intermediate_path = format!("{}::{}", path, variant_name);
-                // NOTE: we have to be careful here, because we're already in `resolve`.
-                // We know this doesn't recurse forever because we use a shorter path each time.
-                // NOTE: this uses `TypeNS` because nothing else has a valid path segment after
-                let kind = if let Some(intermediate) = self.check_full_res(
-                    TypeNS,
-                    &intermediate_path,
-                    module_id,
-                    current_item,
-                    extra_fragment,
-                ) {
-                    ResolutionFailure::NoAssocItem(intermediate, variant_field_name)
-                } else {
-                    // Even with the shorter path, it didn't resolve, so say that.
-                    ResolutionFailure::NoAssocItem(ty_res, variant_name)
-                };
-                Err(kind.into())
+            _ => Err(ResolutionFailure::NotResolved {
+                module_id,
+                partial_res: Some(ty_res),
+                unresolved: variant_str.into(),
             }
+            .into()),
         }
     }
 
@@ -248,11 +207,11 @@ impl<'a, 'tcx> LinkCollector<'a, 'tcx> {
                 false,
             ) {
                 if let SyntaxExtensionKind::LegacyBang { .. } = ext.kind {
-                    return Some(Ok(res.map_id(|_| panic!("unexpected id"))));
+                    return Ok(res.map_id(|_| panic!("unexpected id")));
                 }
             }
             if let Some(res) = resolver.all_macros().get(&Symbol::intern(path_str)) {
-                return Some(Ok(res.map_id(|_| panic!("unexpected id"))));
+                return Ok(res.map_id(|_| panic!("unexpected id")));
             }
             debug!("resolving {} as a macro in the module {:?}", path_str, module_id);
             if let Ok((_, res)) =
@@ -261,28 +220,14 @@ impl<'a, 'tcx> LinkCollector<'a, 'tcx> {
                 // don't resolve builtins like `#[derive]`
                 if let Res::Def(..) = res {
                     let res = res.map_id(|_| panic!("unexpected node_id"));
-                    return Some(Ok(res));
+                    return Ok(res);
                 }
             }
-            None
-        })
-        // This weird control flow is so we don't borrow the resolver more than once at a time
-        .unwrap_or_else(|| {
-            let mut split = path_str.rsplitn(2, "::");
-            if let Some((parent, base)) = split.next().and_then(|x| Some((split.next()?, x))) {
-                if let Some(res) = self.check_full_res(TypeNS, parent, module_id, &None, &None) {
-                    return Err(if matches!(res, Res::PrimTy(_)) {
-                        ResolutionFailure::NoPrimitiveAssocItem {
-                            res,
-                            prim_name: parent,
-                            assoc_item: Symbol::intern(base),
-                        }
-                    } else {
-                        ResolutionFailure::NoAssocItem(res, Symbol::intern(base))
-                    });
-                }
-            }
-            Err(ResolutionFailure::NotInScope { module_id, name: path_str.into() })
+            Err(ResolutionFailure::NotResolved {
+                module_id,
+                partial_res: None,
+                unresolved: path_str.into(),
+            })
         })
     }
 
@@ -318,13 +263,13 @@ impl<'a, 'tcx> LinkCollector<'a, 'tcx> {
                     return handle_variant(cx, res, extra_fragment);
                 }
                 // Not a trait item; just return what we found.
-                Res::PrimTy(..) => {
+                Res::PrimTy(ty) => {
                     if extra_fragment.is_some() {
                         return Err(ErrorKind::AnchorFailure(
                             AnchorFailure::RustdocAnchorConflict(res),
                         ));
                     }
-                    return Ok((res, Some(path_str.to_owned())));
+                    return Ok((res, Some(ty.name_str().to_owned())));
                 }
                 Res::Def(DefKind::Mod, _) => {
                     return Ok((res, extra_fragment.clone()));
@@ -337,6 +282,7 @@ impl<'a, 'tcx> LinkCollector<'a, 'tcx> {
             if value != (ns == ValueNS) {
                 return Err(ResolutionFailure::WrongNamespace(res, ns).into());
             }
+        // FIXME: why is this necessary?
         } else if let Some((path, prim)) = is_primitive(path_str, ns) {
             if extra_fragment.is_some() {
                 return Err(ErrorKind::AnchorFailure(AnchorFailure::RustdocAnchorConflict(prim)));
@@ -347,7 +293,7 @@ impl<'a, 'tcx> LinkCollector<'a, 'tcx> {
         // Try looking for methods and associated items.
         let mut split = path_str.rsplitn(2, "::");
         // this can be an `unwrap()` because we ensure the link is never empty
-        let item_name = Symbol::intern(split.next().unwrap());
+        let (item_str, item_name) = split.next().map(|i| (i, Symbol::intern(i))).unwrap();
         let path_root = split
             .next()
             .map(|f| {
@@ -362,12 +308,20 @@ impl<'a, 'tcx> LinkCollector<'a, 'tcx> {
             // So we can be sure that `rustc_resolve` was accurate when it said it wasn't resolved.
             .ok_or_else(|| {
                 debug!("found no `::`, assumming {} was correctly not in scope", item_name);
-                ResolutionFailure::NotInScope { module_id, name: item_name.to_string().into() }
+                ResolutionFailure::NotResolved {
+                    module_id,
+                    partial_res: None,
+                    unresolved: item_str.into(),
+                }
             })?;
 
         if let Some((path, prim)) = is_primitive(&path_root, TypeNS) {
-            let impls = primitive_impl(cx, &path)
-                .ok_or_else(|| ResolutionFailure::NoPrimitiveImpl(prim, path_root.into()))?;
+            let impls =
+                primitive_impl(cx, &path).ok_or_else(|| ResolutionFailure::NotResolved {
+                    module_id,
+                    partial_res: Some(prim),
+                    unresolved: item_str.into(),
+                })?;
             for &impl_ in impls {
                 let link = cx
                     .tcx
@@ -383,7 +337,7 @@ impl<'a, 'tcx> LinkCollector<'a, 'tcx> {
                         ty::AssocKind::Const => "associatedconstant",
                         ty::AssocKind::Type => "associatedtype",
                     })
-                    .map(|out| (prim, Some(format!("{}#{}.{}", path, out, item_name))));
+                    .map(|out| (prim, Some(format!("{}#{}.{}", path, out, item_str))));
                 if let Some(link) = link {
                     return Ok(link);
                 }
@@ -394,10 +348,10 @@ impl<'a, 'tcx> LinkCollector<'a, 'tcx> {
                 item_name,
                 ns.descr()
             );
-            return Err(ResolutionFailure::NoPrimitiveAssocItem {
-                res: prim,
-                prim_name: path,
-                assoc_item: item_name,
+            return Err(ResolutionFailure::NotResolved {
+                module_id,
+                partial_res: Some(prim),
+                unresolved: item_str.into(),
             }
             .into());
         }
@@ -411,25 +365,14 @@ impl<'a, 'tcx> LinkCollector<'a, 'tcx> {
         let ty_res = match ty_res {
             Err(()) | Ok(Res::Err) => {
                 return if ns == Namespace::ValueNS {
-                    self.variant_field(path_str, current_item, module_id, extra_fragment)
+                    self.variant_field(path_str, current_item, module_id)
                 } else {
-                    // See if it only broke because of the namespace.
-                    let kind = cx.enter_resolver(|resolver| {
-                        // NOTE: this doesn't use `check_full_res` because we explicitly want to ignore `TypeNS` (we already checked it)
-                        for &ns in &[MacroNS, ValueNS] {
-                            match resolver
-                                .resolve_str_path_error(DUMMY_SP, &path_root, ns, module_id)
-                            {
-                                Ok((_, Res::Err)) | Err(()) => {}
-                                Ok((_, res)) => {
-                                    let res = res.map_id(|_| panic!("unexpected node_id"));
-                                    return ResolutionFailure::CannotHaveAssociatedItems(res, ns);
-                                }
-                            }
-                        }
-                        ResolutionFailure::NotInScope { module_id, name: path_root.into() }
-                    });
-                    Err(kind.into())
+                    Err(ResolutionFailure::NotResolved {
+                        module_id,
+                        partial_res: None,
+                        unresolved: path_root.into(),
+                    }
+                    .into())
                 };
             }
             Ok(res) => res,
@@ -479,7 +422,7 @@ impl<'a, 'tcx> LinkCollector<'a, 'tcx> {
                         // but the disambiguator logic expects the associated item.
                         // Store the kind in a side channel so that only the disambiguator logic looks at it.
                         self.kind_side_channel.set(Some((kind.as_def_kind(), id)));
-                        Ok((ty_res, Some(format!("{}.{}", out, item_name))))
+                        Ok((ty_res, Some(format!("{}.{}", out, item_str))))
                     })
                 } else if ns == Namespace::ValueNS {
                     debug!("looking for variants or fields named {} for {:?}", item_name, did);
@@ -522,7 +465,12 @@ impl<'a, 'tcx> LinkCollector<'a, 'tcx> {
                     }
                 } else {
                     // We already know this isn't in ValueNS, so no need to check variant_field
-                    return Err(ResolutionFailure::NoAssocItem(ty_res, item_name).into());
+                    return Err(ResolutionFailure::NotResolved {
+                        module_id,
+                        partial_res: Some(ty_res),
+                        unresolved: item_str.into(),
+                    }
+                    .into());
                 }
             }
             Res::Def(DefKind::Trait, did) => cx
@@ -546,16 +494,21 @@ impl<'a, 'tcx> LinkCollector<'a, 'tcx> {
                         Err(ErrorKind::AnchorFailure(AnchorFailure::RustdocAnchorConflict(ty_res)))
                     } else {
                         let res = Res::Def(item.kind.as_def_kind(), item.def_id);
-                        Ok((res, Some(format!("{}.{}", kind, item_name))))
+                        Ok((res, Some(format!("{}.{}", kind, item_str))))
                     }
                 }),
             _ => None,
         };
         res.unwrap_or_else(|| {
             if ns == Namespace::ValueNS {
-                self.variant_field(path_str, current_item, module_id, extra_fragment)
+                self.variant_field(path_str, current_item, module_id)
             } else {
-                Err(ResolutionFailure::NoAssocItem(ty_res, item_name).into())
+                Err(ResolutionFailure::NotResolved {
+                    module_id,
+                    partial_res: Some(ty_res),
+                    unresolved: item_str.into(),
+                }
+                .into())
             }
         })
     }
@@ -814,9 +767,6 @@ impl<'a, 'tcx> DocFolder for LinkCollector<'a, 'tcx> {
             self.mod_ids.push(item.def_id);
         }
 
-        let dox = item.attrs.collapsed_doc_value().unwrap_or_else(String::new);
-        trace!("got documentation '{}'", dox);
-
         // find item's parent to resolve `Self` in item's docs below
         let parent_name = self.cx.as_local_hir_id(item.def_id).and_then(|item_hir| {
             let parent_hir = self.cx.tcx.hir().get_parent_item(item_hir);
@@ -854,16 +804,53 @@ impl<'a, 'tcx> DocFolder for LinkCollector<'a, 'tcx> {
             }
         });
 
-        for (ori_link, link_range) in markdown_links(&dox) {
-            self.resolve_link(
-                &mut item,
-                &dox,
-                &current_item,
-                parent_node,
-                &parent_name,
-                ori_link,
-                link_range,
-            );
+        // We want to resolve in the lexical scope of the documentation.
+        // In the presence of re-exports, this is not the same as the module of the item.
+        // Rather than merging all documentation into one, resolve it one attribute at a time
+        // so we know which module it came from.
+        let mut attrs = item.attrs.doc_strings.iter().peekable();
+        while let Some(attr) = attrs.next() {
+            // `collapse_docs` does not have the behavior we want:
+            // we want `///` and `#[doc]` to count as the same attribute,
+            // but currently it will treat them as separate.
+            // As a workaround, combine all attributes with the same parent module into the same attribute.
+            let mut combined_docs = attr.doc.clone();
+            loop {
+                match attrs.peek() {
+                    Some(next) if next.parent_module == attr.parent_module => {
+                        combined_docs.push('\n');
+                        combined_docs.push_str(&attrs.next().unwrap().doc);
+                    }
+                    _ => break,
+                }
+            }
+            debug!("combined_docs={}", combined_docs);
+
+            let (krate, parent_node) = if let Some(id) = attr.parent_module {
+                trace!("docs {:?} came from {:?}", attr.doc, id);
+                (id.krate, Some(id))
+            } else {
+                trace!("no parent found for {:?}", attr.doc);
+                (item.def_id.krate, parent_node)
+            };
+            // NOTE: if there are links that start in one crate and end in another, this will not resolve them.
+            // This is a degenerate case and it's not supported by rustdoc.
+            // FIXME: this will break links that start in `#[doc = ...]` and end as a sugared doc. Should this be supported?
+            for (ori_link, link_range) in markdown_links(&combined_docs) {
+                let link = self.resolve_link(
+                    &item,
+                    &combined_docs,
+                    &current_item,
+                    parent_node,
+                    &parent_name,
+                    krate,
+                    ori_link,
+                    link_range,
+                );
+                if let Some(link) = link {
+                    item.attrs.links.push(link);
+                }
+            }
         }
 
         if item.is_mod() && !item.attrs.inner_docs {
@@ -885,24 +872,25 @@ impl<'a, 'tcx> DocFolder for LinkCollector<'a, 'tcx> {
 impl LinkCollector<'_, '_> {
     fn resolve_link(
         &self,
-        item: &mut Item,
+        item: &Item,
         dox: &str,
         current_item: &Option<String>,
         parent_node: Option<DefId>,
         parent_name: &Option<String>,
+        krate: CrateNum,
         ori_link: String,
         link_range: Option<Range<usize>>,
-    ) {
+    ) -> Option<ItemLink> {
         trace!("considering link '{}'", ori_link);
 
         // Bail early for real links.
         if ori_link.contains('/') {
-            return;
+            return None;
         }
 
         // [] is mostly likely not supposed to be a link
         if ori_link.is_empty() {
-            return;
+            return None;
         }
 
         let cx = self.cx;
@@ -910,11 +898,11 @@ impl LinkCollector<'_, '_> {
         let parts = link.split('#').collect::<Vec<_>>();
         let (link, extra_fragment) = if parts.len() > 2 {
             anchor_failure(cx, &item, &link, dox, link_range, AnchorFailure::MultipleAnchors);
-            return;
+            return None;
         } else if parts.len() == 2 {
             if parts[0].trim().is_empty() {
                 // This is an anchor to an element of the current page, nothing to do in here!
-                return;
+                return None;
             }
             (parts[0], Some(parts[1].to_owned()))
         } else {
@@ -935,7 +923,7 @@ impl LinkCollector<'_, '_> {
             .trim();
 
             if path_str.contains(|ch: char| !(ch.is_alphanumeric() || ch == ':' || ch == '_')) {
-                return;
+                return None;
             }
 
             // We stripped `()` and `!` when parsing the disambiguator.
@@ -961,7 +949,7 @@ impl LinkCollector<'_, '_> {
                 parent_node
             };
 
-            let module_id = if let Some(id) = base_node {
+            let mut module_id = if let Some(id) = base_node {
                 id
             } else {
                 debug!("attempting to resolve item without parent module: {}", path_str);
@@ -975,7 +963,7 @@ impl LinkCollector<'_, '_> {
                     link_range,
                     smallvec![err_kind],
                 );
-                return;
+                return None;
             };
 
             // replace `Self` with suitable item's parent name
@@ -984,6 +972,17 @@ impl LinkCollector<'_, '_> {
                     resolved_self = format!("{}::{}", name, &path_str[6..]);
                     path_str = &resolved_self;
                 }
+            } else if path_str.starts_with("crate::") {
+                use rustc_span::def_id::CRATE_DEF_INDEX;
+
+                // HACK(jynelson): rustc_resolve thinks that `crate` is the crate currently being documented.
+                // But rustdoc wants it to mean the crate this item was originally present in.
+                // To work around this, remove it and resolve relative to the crate root instead.
+                // HACK(jynelson)(2): If we just strip `crate::` then suddenly primitives become ambiguous
+                // (consider `crate::char`). Instead, change it to `self::`. This works because 'self' is now the crate root.
+                resolved_self = format!("self::{}", &path_str["crate::".len()..]);
+                path_str = &resolved_self;
+                module_id = DefId { krate, index: CRATE_DEF_INDEX };
             }
 
             match self.resolve_with_disambiguator(
@@ -998,7 +997,7 @@ impl LinkCollector<'_, '_> {
                 link_range.clone(),
             ) {
                 Some(x) => x,
-                None => return,
+                None => return None,
             }
         };
 
@@ -1022,7 +1021,7 @@ impl LinkCollector<'_, '_> {
                             link_range,
                             AnchorFailure::RustdocAnchorConflict(prim),
                         );
-                        return;
+                        return None;
                     }
                     res = prim;
                     fragment = Some(path.to_owned());
@@ -1030,7 +1029,7 @@ impl LinkCollector<'_, '_> {
                     // `[char]` when a `char` module is in scope
                     let candidates = vec![res, prim];
                     ambiguity_error(cx, &item, path_str, dox, link_range, candidates);
-                    return;
+                    return None;
                 }
             }
         }
@@ -1038,7 +1037,7 @@ impl LinkCollector<'_, '_> {
         let report_mismatch = |specified: Disambiguator, resolved: Disambiguator| {
             // The resolved item did not match the disambiguator; give a better error than 'not found'
             let msg = format!("incompatible link kind for `{}`", path_str);
-            report_diagnostic(cx, &msg, &item, dox, &link_range, |diag, sp| {
+            let callback = |diag: &mut DiagnosticBuilder<'_>, sp| {
                 let note = format!(
                     "this link resolved to {} {}, which is not {} {}",
                     resolved.article(),
@@ -1048,21 +1047,17 @@ impl LinkCollector<'_, '_> {
                 );
                 diag.note(&note);
                 suggest_disambiguator(resolved, diag, path_str, dox, sp, &link_range);
-            });
+            };
+            report_diagnostic(cx, BROKEN_INTRA_DOC_LINKS, &msg, &item, dox, &link_range, callback);
         };
-        if let Res::PrimTy(_) = res {
+        if let Res::PrimTy(..) = res {
             match disambiguator {
                 Some(Disambiguator::Primitive | Disambiguator::Namespace(_)) | None => {
-                    item.attrs.links.push(ItemLink {
-                        link: ori_link,
-                        link_text: path_str.to_owned(),
-                        did: None,
-                        fragment,
-                    });
+                    Some(ItemLink { link: ori_link, link_text, did: None, fragment })
                 }
                 Some(other) => {
                     report_mismatch(other, Disambiguator::Primitive);
-                    return;
+                    None
                 }
             }
         } else {
@@ -1085,7 +1080,7 @@ impl LinkCollector<'_, '_> {
                     (actual, Some(Disambiguator::Kind(expected))) if actual == expected => {}
                     (_, Some(specified @ Disambiguator::Kind(_) | specified @ Disambiguator::Primitive)) => {
                         report_mismatch(specified, Disambiguator::Kind(kind));
-                        return;
+                        return None;
                     }
                 }
             }
@@ -1105,18 +1100,17 @@ impl LinkCollector<'_, '_> {
                     && !self.cx.tcx.privacy_access_levels(LOCAL_CRATE).is_exported(hir_dst)
                 {
                     privacy_error(cx, &item, &path_str, dox, link_range);
-                    return;
                 }
             }
             let id = register_res(cx, res);
-            item.attrs.links.push(ItemLink { link: ori_link, link_text, did: Some(id), fragment });
+            Some(ItemLink { link: ori_link, link_text, did: Some(id), fragment })
         }
     }
 
     fn resolve_with_disambiguator(
         &self,
         disambiguator: Option<Disambiguator>,
-        item: &mut Item,
+        item: &Item,
         dox: &str,
         path_str: &str,
         current_item: &Option<String>,
@@ -1133,6 +1127,8 @@ impl LinkCollector<'_, '_> {
                         // We only looked in one namespace. Try to give a better error if possible.
                         if kind.full_res().is_none() {
                             let other_ns = if ns == ValueNS { TypeNS } else { ValueNS };
+                            // FIXME: really it should be `resolution_failure` that does this, not `resolve_with_disambiguator`
+                            // See https://github.com/rust-lang/rust/pull/76955#discussion_r493953382 for a good approach
                             for &new_ns in &[other_ns, MacroNS] {
                                 if let Some(res) = self.check_full_res(
                                     new_ns,
@@ -1465,6 +1461,7 @@ impl Suggestion {
 /// to it.
 fn report_diagnostic(
     cx: &DocContext<'_>,
+    lint: &'static Lint,
     msg: &str,
     item: &Item,
     dox: &str,
@@ -1483,7 +1480,7 @@ fn report_diagnostic(
     let attrs = &item.attrs;
     let sp = span_of_attrs(attrs).unwrap_or(item.source.span());
 
-    cx.tcx.struct_span_lint_hir(lint::builtin::BROKEN_INTRA_DOC_LINKS, hir_id, sp, |lint| {
+    cx.tcx.struct_span_lint_hir(lint, hir_id, sp, |lint| {
         let mut diag = lint.build(msg);
 
         let span = link_range
@@ -1530,12 +1527,12 @@ fn resolution_failure(
 ) {
     report_diagnostic(
         collector.cx,
+        BROKEN_INTRA_DOC_LINKS,
         &format!("unresolved link to `{}`", path_str),
         item,
         dox,
         &link_range,
         |diag, sp| {
-            let in_scope = kinds.iter().any(|kind| kind.res().is_some());
             let item = |res: Res| {
                 format!(
                     "the {} `{}`",
@@ -1556,53 +1553,147 @@ fn resolution_failure(
             // ignore duplicates
             let mut variants_seen = SmallVec::<[_; 3]>::new();
             for mut failure in kinds {
-                // Check if _any_ parent of the path gets resolved.
-                // If so, report it and say the first which failed; if not, say the first path segment didn't resolve.
-                if let ResolutionFailure::NotInScope { module_id, name } = &mut failure {
-                    let mut current = name.as_ref();
-                    loop {
-                        current = match current.rsplitn(2, "::").nth(1) {
-                            Some(p) => p,
-                            None => {
-                                *name = current.to_owned().into();
-                                break;
-                            }
-                        };
-                        if let Some(res) =
-                            collector.check_full_res(TypeNS, &current, *module_id, &None, &None)
-                        {
-                            failure = ResolutionFailure::NoAssocItem(res, Symbol::intern(current));
-                            break;
-                        }
-                    }
-                }
                 let variant = std::mem::discriminant(&failure);
                 if variants_seen.contains(&variant) {
                     continue;
                 }
                 variants_seen.push(variant);
-                let note = match failure {
-                    ResolutionFailure::NotInScope { module_id, name, .. } => {
-                        if in_scope {
-                            continue;
+
+                if let ResolutionFailure::NotResolved { module_id, partial_res, unresolved } =
+                    &mut failure
+                {
+                    use DefKind::*;
+
+                    let module_id = *module_id;
+                    // FIXME(jynelson): this might conflict with my `Self` fix in #76467
+                    // FIXME: maybe use itertools `collect_tuple` instead?
+                    fn split(path: &str) -> Option<(&str, &str)> {
+                        let mut splitter = path.rsplitn(2, "::");
+                        splitter.next().and_then(|right| splitter.next().map(|left| (left, right)))
+                    }
+
+                    // Check if _any_ parent of the path gets resolved.
+                    // If so, report it and say the first which failed; if not, say the first path segment didn't resolve.
+                    let mut name = path_str;
+                    'outer: loop {
+                        let (start, end) = if let Some(x) = split(name) {
+                            x
+                        } else {
+                            // avoid bug that marked [Quux::Z] as missing Z, not Quux
+                            if partial_res.is_none() {
+                                *unresolved = name.into();
+                            }
+                            break;
+                        };
+                        name = start;
+                        for &ns in &[TypeNS, ValueNS, MacroNS] {
+                            if let Some(res) =
+                                collector.check_full_res(ns, &start, module_id, &None, &None)
+                            {
+                                debug!("found partial_res={:?}", res);
+                                *partial_res = Some(res);
+                                *unresolved = end.into();
+                                break 'outer;
+                            }
                         }
-                        // NOTE: uses an explicit `continue` so the `note:` will come before the `help:`
-                        let module_name = collector.cx.tcx.item_name(module_id);
-                        let note = format!("no item named `{}` in `{}`", name, module_name);
+                        *unresolved = end.into();
+                    }
+
+                    let last_found_module = match *partial_res {
+                        Some(Res::Def(DefKind::Mod, id)) => Some(id),
+                        None => Some(module_id),
+                        _ => None,
+                    };
+                    // See if this was a module: `[path]` or `[std::io::nope]`
+                    if let Some(module) = last_found_module {
+                        let note = if partial_res.is_some() {
+                            // Part of the link resolved; e.g. `std::io::nonexistent`
+                            let module_name = collector.cx.tcx.item_name(module);
+                            format!("no item named `{}` in module `{}`", unresolved, module_name)
+                        } else {
+                            // None of the link resolved; e.g. `Notimported`
+                            format!("no item named `{}` in scope", unresolved)
+                        };
                         if let Some(span) = sp {
                             diag.span_label(span, &note);
                         } else {
                             diag.note(&note);
                         }
-                        // If the link has `::` in the path, assume it's meant to be an intra-doc link
+
+                        // If the link has `::` in it, assume it was meant to be an intra-doc link.
+                        // Otherwise, the `[]` might be unrelated.
+                        // FIXME: don't show this for autolinks (`<>`), `()` style links, or reference links
                         if !path_str.contains("::") {
-                            // Otherwise, the `[]` might be unrelated.
-                            // FIXME(https://github.com/raphlinus/pulldown-cmark/issues/373):
-                            // don't show this for autolinks (`<>`), `()` style links, or reference links
                             diag.help(r#"to escape `[` and `]` characters, add '\' before them like `\[` or `\]`"#);
                         }
+
                         continue;
                     }
+
+                    // Otherwise, it must be an associated item or variant
+                    let res = partial_res.expect("None case was handled by `last_found_module`");
+                    let diagnostic_name;
+                    let (kind, name) = match res {
+                        Res::Def(kind, def_id) => {
+                            diagnostic_name = collector.cx.tcx.item_name(def_id).as_str();
+                            (Some(kind), &*diagnostic_name)
+                        }
+                        Res::PrimTy(ty) => (None, ty.name_str()),
+                        _ => unreachable!("only ADTs and primitives are in scope at module level"),
+                    };
+                    let path_description = if let Some(kind) = kind {
+                        match kind {
+                            Mod | ForeignMod => "inner item",
+                            Struct => "field or associated item",
+                            Enum | Union => "variant or associated item",
+                            Variant
+                            | Field
+                            | Closure
+                            | Generator
+                            | AssocTy
+                            | AssocConst
+                            | AssocFn
+                            | Fn
+                            | Macro(_)
+                            | Const
+                            | ConstParam
+                            | ExternCrate
+                            | Use
+                            | LifetimeParam
+                            | Ctor(_, _)
+                            | AnonConst => {
+                                let note = assoc_item_not_allowed(res);
+                                if let Some(span) = sp {
+                                    diag.span_label(span, &note);
+                                } else {
+                                    diag.note(&note);
+                                }
+                                return;
+                            }
+                            Trait | TyAlias | ForeignTy | OpaqueTy | TraitAlias | TyParam
+                            | Static => "associated item",
+                            Impl | GlobalAsm => unreachable!("not a path"),
+                        }
+                    } else {
+                        "associated item"
+                    };
+                    let note = format!(
+                        "the {} `{}` has no {} named `{}`",
+                        res.descr(),
+                        name,
+                        disambiguator.map_or(path_description, |d| d.descr()),
+                        unresolved,
+                    );
+                    if let Some(span) = sp {
+                        diag.span_label(span, &note);
+                    } else {
+                        diag.note(&note);
+                    }
+
+                    continue;
+                }
+                let note = match failure {
+                    ResolutionFailure::NotResolved { .. } => unreachable!("handled above"),
                     ResolutionFailure::Dummy => continue,
                     ResolutionFailure::WrongNamespace(res, expected_ns) => {
                         if let Res::Def(kind, _) = res {
@@ -1627,79 +1718,6 @@ fn resolution_failure(
                         diag.level = rustc_errors::Level::Bug;
                         "all intra doc links should have a parent item".to_owned()
                     }
-                    ResolutionFailure::NoPrimitiveImpl(res, _) => format!(
-                        "this link partially resolves to {}, which does not have any associated items",
-                        item(res),
-                    ),
-                    ResolutionFailure::NoPrimitiveAssocItem { prim_name, assoc_item, .. } => {
-                        format!(
-                            "the builtin type `{}` does not have an associated item named `{}`",
-                            prim_name, assoc_item
-                        )
-                    }
-                    ResolutionFailure::NoAssocItem(res, assoc_item) => {
-                        use DefKind::*;
-
-                        let (kind, def_id) = match res {
-                            Res::Def(kind, def_id) => (kind, def_id),
-                            x => unreachable!(
-                                "primitives are covered above and other `Res` variants aren't possible at module scope: {:?}",
-                                x,
-                            ),
-                        };
-                        let name = collector.cx.tcx.item_name(def_id);
-                        let path_description = if let Some(disambiguator) = disambiguator {
-                            disambiguator.descr()
-                        } else {
-                            match kind {
-                                Mod | ForeignMod => "inner item",
-                                Struct => "field or associated item",
-                                Enum | Union => "variant or associated item",
-                                Variant
-                                | Field
-                                | Closure
-                                | Generator
-                                | AssocTy
-                                | AssocConst
-                                | AssocFn
-                                | Fn
-                                | Macro(_)
-                                | Const
-                                | ConstParam
-                                | ExternCrate
-                                | Use
-                                | LifetimeParam
-                                | Ctor(_, _)
-                                | AnonConst => {
-                                    let note = assoc_item_not_allowed(res);
-                                    if let Some(span) = sp {
-                                        diag.span_label(span, &note);
-                                    } else {
-                                        diag.note(&note);
-                                    }
-                                    return;
-                                }
-                                Trait | TyAlias | ForeignTy | OpaqueTy | TraitAlias | TyParam
-                                | Static => "associated item",
-                                Impl | GlobalAsm => unreachable!("not a path"),
-                            }
-                        };
-                        format!(
-                            "the {} `{}` has no {} named `{}`",
-                            res.descr(),
-                            name,
-                            path_description,
-                            assoc_item
-                        )
-                    }
-                    ResolutionFailure::CannotHaveAssociatedItems(res, _) => {
-                        assoc_item_not_allowed(res)
-                    }
-                    ResolutionFailure::NotAVariant(res, variant) => format!(
-                        "this link partially resolves to {}, but there is no variant named {}",
-                        item(res),
-                        variant
-                    ),
                 };
                 if let Some(span) = sp {
                     diag.span_label(span, &note);
@@ -1728,7 +1746,7 @@ fn anchor_failure(
         ),
     };
 
-    report_diagnostic(cx, &msg, item, dox, &link_range, |diag, sp| {
+    report_diagnostic(cx, BROKEN_INTRA_DOC_LINKS, &msg, item, dox, &link_range, |diag, sp| {
         if let Some(sp) = sp {
             diag.span_label(sp, "contains invalid anchor");
         }
@@ -1767,7 +1785,7 @@ fn ambiguity_error(
         }
     }
 
-    report_diagnostic(cx, &msg, item, dox, &link_range, |diag, sp| {
+    report_diagnostic(cx, BROKEN_INTRA_DOC_LINKS, &msg, item, dox, &link_range, |diag, sp| {
         if let Some(sp) = sp {
             diag.span_label(sp, "ambiguous link");
         } else {
@@ -1817,7 +1835,7 @@ fn privacy_error(
     let msg =
         format!("public documentation for `{}` links to private item `{}`", item_name, path_str);
 
-    report_diagnostic(cx, &msg, item, dox, &link_range, |diag, sp| {
+    report_diagnostic(cx, PRIVATE_INTRA_DOC_LINKS, &msg, item, dox, &link_range, |diag, sp| {
         if let Some(sp) = sp {
             diag.span_label(sp, "this item is private");
         }

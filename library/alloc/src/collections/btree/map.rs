@@ -47,7 +47,6 @@ use UnderflowResult::*;
 /// any other key, as determined by the [`Ord`] trait, changes while it is in the map. This is
 /// normally only possible through [`Cell`], [`RefCell`], global state, I/O, or unsafe code.
 ///
-/// [`Ord`]: core::cmp::Ord
 /// [`Cell`]: core::cell::Cell
 /// [`RefCell`]: core::cell::RefCell
 ///
@@ -93,9 +92,10 @@ use UnderflowResult::*;
 /// }
 /// ```
 ///
-/// `BTreeMap` also implements an [`Entry API`](#method.entry), which allows
-/// for more complex methods of getting, setting, updating and removing keys and
-/// their values:
+/// `BTreeMap` also implements an [`Entry API`], which allows for more complex
+/// methods of getting, setting, updating and removing keys and their values:
+///
+/// [`Entry API`]: BTreeMap::entry
 ///
 /// ```
 /// use std::collections::BTreeMap;
@@ -297,14 +297,23 @@ pub struct IntoIter<K, V> {
     length: usize,
 }
 
-#[stable(feature = "collection_debug", since = "1.17.0")]
-impl<K: fmt::Debug, V: fmt::Debug> fmt::Debug for IntoIter<K, V> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl<K, V> IntoIter<K, V> {
+    /// Returns an iterator of references over the remaining items.
+    #[inline]
+    pub(super) fn iter(&self) -> Iter<'_, K, V> {
         let range = Range {
             front: self.front.as_ref().map(|f| f.reborrow()),
             back: self.back.as_ref().map(|b| b.reborrow()),
         };
-        f.debug_list().entries(range).finish()
+
+        Iter { range: range, length: self.length }
+    }
+}
+
+#[stable(feature = "collection_debug", since = "1.17.0")]
+impl<K: fmt::Debug, V: fmt::Debug> fmt::Debug for IntoIter<K, V> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_list().entries(self.iter()).finish()
     }
 }
 
@@ -351,9 +360,15 @@ impl<K, V: fmt::Debug> fmt::Debug for Values<'_, K, V> {
 ///
 /// [`values_mut`]: BTreeMap::values_mut
 #[stable(feature = "map_values_mut", since = "1.10.0")]
-#[derive(Debug)]
 pub struct ValuesMut<'a, K: 'a, V: 'a> {
     inner: IterMut<'a, K, V>,
+}
+
+#[stable(feature = "map_values_mut", since = "1.10.0")]
+impl<K, V: fmt::Debug> fmt::Debug for ValuesMut<'_, K, V> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_list().entries(self.inner.iter().map(|(_, val)| val)).finish()
+    }
 }
 
 /// An owning iterator over the keys of a `BTreeMap`.
@@ -363,9 +378,15 @@ pub struct ValuesMut<'a, K: 'a, V: 'a> {
 ///
 /// [`into_keys`]: BTreeMap::into_keys
 #[unstable(feature = "map_into_keys_values", issue = "75294")]
-#[derive(Debug)]
 pub struct IntoKeys<K, V> {
     inner: IntoIter<K, V>,
+}
+
+#[unstable(feature = "map_into_keys_values", issue = "75294")]
+impl<K: fmt::Debug, V> fmt::Debug for IntoKeys<K, V> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_list().entries(self.inner.iter().map(|(key, _)| key)).finish()
+    }
 }
 
 /// An owning iterator over the values of a `BTreeMap`.
@@ -375,9 +396,15 @@ pub struct IntoKeys<K, V> {
 ///
 /// [`into_values`]: BTreeMap::into_values
 #[unstable(feature = "map_into_keys_values", issue = "75294")]
-#[derive(Debug)]
 pub struct IntoValues<K, V> {
     inner: IntoIter<K, V>,
+}
+
+#[unstable(feature = "map_into_keys_values", issue = "75294")]
+impl<K, V: fmt::Debug> fmt::Debug for IntoValues<K, V> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_list().entries(self.inner.iter().map(|(_, val)| val)).finish()
+    }
 }
 
 /// An iterator over a sub-range of entries in a `BTreeMap`.
@@ -453,8 +480,6 @@ impl<K: Debug + Ord, V: Debug> Debug for Entry<'_, K, V> {
 
 /// A view into a vacant entry in a `BTreeMap`.
 /// It is part of the [`Entry`] enum.
-///
-/// [`Entry`]: enum.Entry.html
 #[stable(feature = "rust1", since = "1.0.0")]
 pub struct VacantEntry<'a, K: 'a, V: 'a> {
     key: K,
@@ -474,8 +499,6 @@ impl<K: Debug + Ord, V> Debug for VacantEntry<'_, K, V> {
 
 /// A view into an occupied entry in a `BTreeMap`.
 /// It is part of the [`Entry`] enum.
-///
-/// [`Entry`]: enum.Entry.html
 #[stable(feature = "rust1", since = "1.0.0")]
 pub struct OccupiedEntry<'a, K: 'a, V: 'a> {
     handle: Handle<NodeRef<marker::Mut<'a>, K, V, marker::LeafOrInternal>, marker::KV>,
@@ -1469,6 +1492,14 @@ impl<K, V> ExactSizeIterator for IterMut<'_, K, V> {
 #[stable(feature = "fused", since = "1.26.0")]
 impl<K, V> FusedIterator for IterMut<'_, K, V> {}
 
+impl<'a, K, V> IterMut<'a, K, V> {
+    /// Returns an iterator of references over the remaining items.
+    #[inline]
+    pub(super) fn iter(&self) -> Iter<'_, K, V> {
+        Iter { range: self.range.iter(), length: self.length }
+    }
+}
+
 #[stable(feature = "rust1", since = "1.0.0")]
 impl<K, V> IntoIterator for BTreeMap<K, V> {
     type Item = (K, V);
@@ -1670,10 +1701,14 @@ where
 /// Most of the implementation of DrainFilter, independent of the type
 /// of the predicate, thus also serving for BTreeSet::DrainFilter.
 pub(super) struct DrainFilterInner<'a, K: 'a, V: 'a> {
+    /// Reference to the length field in the borrowed map, updated live.
     length: &'a mut usize,
-    // dormant_root is wrapped in an Option to be able to `take` it.
+    /// Burried reference to the root field in the borrowed map.
+    /// Wrapped in `Option` to allow drop handler to `take` it.
     dormant_root: Option<DormantMutRef<'a, node::Root<K, V>>>,
-    // cur_leaf_edge is wrapped in an Option because maps without root lack a leaf edge.
+    /// Contains a leaf edge preceding the next element to be returned, or the last leaf edge.
+    /// Empty if the map has no root, if iteration went beyond the last leaf edge,
+    /// or if a panic occurred in the predicate.
     cur_leaf_edge: Option<Handle<NodeRef<marker::Mut<'a>, K, V, marker::Leaf>, marker::Edge>>,
 }
 
@@ -1719,7 +1754,7 @@ impl<'a, K: 'a, V: 'a> DrainFilterInner<'a, K, V> {
     /// Allow Debug implementations to predict the next element.
     pub(super) fn peek(&self) -> Option<(&K, &V)> {
         let edge = self.cur_leaf_edge.as_ref()?;
-        edge.reborrow().next_kv().ok().map(|kv| kv.into_kv())
+        edge.reborrow().next_kv().ok().map(Handle::into_kv)
     }
 
     /// Implementation of a typical `DrainFilter::next` method, given the predicate.
@@ -1748,6 +1783,10 @@ impl<'a, K: 'a, V: 'a> DrainFilterInner<'a, K, V> {
 
     /// Implementation of a typical `DrainFilter::size_hint` method.
     pub(super) fn size_hint(&self) -> (usize, Option<usize>) {
+        // In most of the btree iterators, `self.length` is the number of elements
+        // yet to be visited. Here, it includes elements that were visited and that
+        // the predicate decided not to drain. Making this upper bound more accurate
+        // requires maintaining an extra field and is not worth while.
         (0, Some(*self.length))
     }
 }
@@ -1952,6 +1991,15 @@ impl<'a, K, V> RangeMut<'a, K, V> {
 
     unsafe fn next_unchecked(&mut self) -> (&'a K, &'a mut V) {
         unsafe { unwrap_unchecked(self.front.as_mut()).next_unchecked() }
+    }
+
+    /// Returns an iterator of references over the remaining items.
+    #[inline]
+    pub(super) fn iter(&self) -> Range<'_, K, V> {
+        Range {
+            front: self.front.as_ref().map(|f| f.reborrow()),
+            back: self.back.as_ref().map(|b| b.reborrow()),
+        }
     }
 }
 
@@ -2554,7 +2602,7 @@ impl<'a, K: Ord, V> OccupiedEntry<'a, K, V> {
     /// If you need a reference to the `OccupiedEntry` that may outlive the
     /// destruction of the `Entry` value, see [`into_mut`].
     ///
-    /// [`into_mut`]: #method.into_mut
+    /// [`into_mut`]: OccupiedEntry::into_mut
     ///
     /// # Examples
     ///
@@ -2584,7 +2632,7 @@ impl<'a, K: Ord, V> OccupiedEntry<'a, K, V> {
     ///
     /// If you need multiple references to the `OccupiedEntry`, see [`get_mut`].
     ///
-    /// [`get_mut`]: #method.get_mut
+    /// [`get_mut`]: OccupiedEntry::get_mut
     ///
     /// # Examples
     ///

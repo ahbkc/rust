@@ -152,7 +152,10 @@ impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
                     sym::type_name => self.tcx.mk_static_str(),
                     _ => bug!("already checked for nullary intrinsics"),
                 };
-                let val = self.const_eval(gid, ty)?;
+                let val =
+                    self.tcx.const_eval_global_id(self.param_env, gid, Some(self.tcx.span))?;
+                let const_ = ty::Const { val: ty::ConstKind::Value(val), ty };
+                let val = self.const_to_op(&const_, None)?;
                 self.copy_op(val, dest)?;
             }
 
@@ -431,6 +434,12 @@ impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
             sym::likely | sym::unlikely => {
                 // These just return their argument
                 self.copy_op(args[0], dest)?;
+            }
+            sym::assume => {
+                let cond = self.read_scalar(args[0])?.check_init()?.to_bool()?;
+                if !cond {
+                    throw_ub_format!("`assume` intrinsic called with `false`");
+                }
             }
             _ => return Ok(false),
         }

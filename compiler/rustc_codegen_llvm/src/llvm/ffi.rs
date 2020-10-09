@@ -483,6 +483,7 @@ pub enum DiagnosticKind {
     OptimizationFailure,
     PGOProfile,
     Linker,
+    Unsupported,
 }
 
 /// LLVMRustDiagnosticLevel
@@ -948,7 +949,6 @@ extern "C" {
 
     // Operations on other types
     pub fn LLVMVoidTypeInContext(C: &Context) -> &Type;
-    pub fn LLVMX86MMXTypeInContext(C: &Context) -> &Type;
     pub fn LLVMRustMetadataTypeInContext(C: &Context) -> &Type;
 
     // Operations on all values
