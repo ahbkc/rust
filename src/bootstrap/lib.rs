@@ -121,7 +121,7 @@ use std::os::windows::fs::symlink_file;
 use build_helper::{mtime, output, run, run_suppressed, t, try_run, try_run_suppressed};
 use filetime::FileTime;
 
-use crate::config::TargetSelection;
+use crate::config::{LlvmLibunwind, TargetSelection};
 use crate::util::{exe, libdir, CiEnv};
 
 mod builder;
@@ -177,7 +177,12 @@ const LLVM_TOOLS: &[&str] = &[
     "llvm-size", // used to prints the size of the linker sections of a program
     "llvm-strip", // used to discard symbols from binary files to reduce their size
     "llvm-ar", // used for creating and modifying archive files
+    "llvm-dis", // used to disassemble LLVM bitcode
+    "llc",     // used to compile LLVM bytecode
+    "opt",     // used to optimize LLVM bytecode
 ];
+
+pub const VERSION: usize = 2;
 
 /// A structure representing a Rust compiler.
 ///
@@ -301,6 +306,9 @@ pub enum Mode {
 
     /// Build librustc, and compiler libraries, placing output in the "stageN-rustc" directory.
     Rustc,
+
+    /// Build a codegen backend for rustc, placing the output in the "stageN-codegen" directory.
+    Codegen,
 
     /// Build a tool, placing output in the "stage0-bootstrap-tools"
     /// directory. This is for miscellaneous sets of tools that are built
@@ -532,8 +540,10 @@ impl Build {
     fn std_features(&self) -> String {
         let mut features = "panic-unwind".to_string();
 
-        if self.config.llvm_libunwind {
-            features.push_str(" llvm-libunwind");
+        match self.config.llvm_libunwind.unwrap_or_default() {
+            LlvmLibunwind::InTree => features.push_str(" llvm-libunwind"),
+            LlvmLibunwind::System => features.push_str(" system-llvm-libunwind"),
+            LlvmLibunwind::No => {}
         }
         if self.config.backtrace {
             features.push_str(" backtrace");
@@ -589,6 +599,7 @@ impl Build {
         let suffix = match mode {
             Mode::Std => "-std",
             Mode::Rustc => "-rustc",
+            Mode::Codegen => "-codegen",
             Mode::ToolBootstrap => "-bootstrap-tools",
             Mode::ToolStd | Mode::ToolRustc => "-tools",
         };
@@ -1048,40 +1059,6 @@ impl Build {
 
     /// Returns the value of `package_vers` above for Rust itself.
     fn rust_package_vers(&self) -> String {
-        self.package_vers(&self.version)
-    }
-
-    /// Returns the value of `package_vers` above for Cargo
-    fn cargo_package_vers(&self) -> String {
-        self.package_vers(&self.release_num("cargo"))
-    }
-
-    /// Returns the value of `package_vers` above for rls
-    fn rls_package_vers(&self) -> String {
-        self.package_vers(&self.release_num("rls"))
-    }
-
-    /// Returns the value of `package_vers` above for rust-analyzer
-    fn rust_analyzer_package_vers(&self) -> String {
-        self.package_vers(&self.release_num("rust-analyzer/crates/rust-analyzer"))
-    }
-
-    /// Returns the value of `package_vers` above for clippy
-    fn clippy_package_vers(&self) -> String {
-        self.package_vers(&self.release_num("clippy"))
-    }
-
-    /// Returns the value of `package_vers` above for miri
-    fn miri_package_vers(&self) -> String {
-        self.package_vers(&self.release_num("miri"))
-    }
-
-    /// Returns the value of `package_vers` above for rustfmt
-    fn rustfmt_package_vers(&self) -> String {
-        self.package_vers(&self.release_num("rustfmt"))
-    }
-
-    fn llvm_tools_package_vers(&self) -> String {
         self.package_vers(&self.version)
     }
 

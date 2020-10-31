@@ -35,6 +35,9 @@
 #![feature(never_type)]
 #![feature(nll)]
 #![feature(or_patterns)]
+#![feature(half_open_range_patterns)]
+#![feature(exclusive_range_pattern)]
+#![feature(control_flow_enum)]
 #![recursion_limit = "256"]
 
 #[macro_use]
@@ -49,6 +52,7 @@ mod early;
 mod internal;
 mod late;
 mod levels;
+mod methods;
 mod non_ascii_idents;
 mod nonstandard_style;
 mod passes;
@@ -73,6 +77,7 @@ use rustc_span::Span;
 use array_into_iter::ArrayIntoIter;
 use builtin::*;
 use internal::*;
+use methods::*;
 use non_ascii_idents::*;
 use nonstandard_style::*;
 use redundant_semicolon::*;
@@ -160,6 +165,7 @@ macro_rules! late_lint_passes {
                 ArrayIntoIter: ArrayIntoIter,
                 ClashingExternDeclarations: ClashingExternDeclarations::new(),
                 DropTraitConstraints: DropTraitConstraints,
+                TemporaryCStringAsPtr: TemporaryCStringAsPtr,
             ]
         );
     };

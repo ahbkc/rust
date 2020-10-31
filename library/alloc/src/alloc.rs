@@ -2,8 +2,13 @@
 
 #![stable(feature = "alloc_module", since = "1.28.0")]
 
-use core::intrinsics::{self, min_align_of_val, size_of_val};
-use core::ptr::{self, NonNull, Unique};
+#[cfg(not(test))]
+use core::intrinsics;
+use core::intrinsics::{min_align_of_val, size_of_val};
+
+use core::ptr::Unique;
+#[cfg(not(test))]
+use core::ptr::{self, NonNull};
 
 #[stable(feature = "alloc_module", since = "1.28.0")]
 #[doc(inline)]
@@ -14,8 +19,9 @@ mod tests;
 
 extern "Rust" {
     // These are the magic symbols to call the global allocator.  rustc generates
-    // them from the `#[global_allocator]` attribute if there is one, or uses the
-    // default implementations in libstd (`__rdl_alloc` etc in `src/libstd/alloc.rs`)
+    // them to call `__rg_alloc` etc. if there is a `#[global_allocator]` attribute
+    // (the code expanding that attribute macro generates those functions), or to call
+    // the default implementations in libstd (`__rdl_alloc` etc. in `library/std/src/alloc.rs`)
     // otherwise.
     #[rustc_allocator]
     #[rustc_allocator_nounwind]
@@ -26,8 +32,6 @@ extern "Rust" {
     fn __rust_realloc(ptr: *mut u8, old_size: usize, align: usize, new_size: usize) -> *mut u8;
     #[rustc_allocator_nounwind]
     fn __rust_alloc_zeroed(size: usize, align: usize) -> *mut u8;
-    #[rustc_allocator_nounwind]
-    fn __rust_alloc_error_handler(size: usize, align: usize) -> !;
 }
 
 /// The global memory allocator.
@@ -37,10 +41,14 @@ extern "Rust" {
 /// if there is one, or the `std` crate’s default.
 ///
 /// Note: while this type is unstable, the functionality it provides can be
-/// accessed through the [free functions in `alloc`](index.html#functions).
+/// accessed through the [free functions in `alloc`](self#functions).
 #[unstable(feature = "allocator_api", issue = "32838")]
 #[derive(Copy, Clone, Default, Debug)]
+#[cfg(not(test))]
 pub struct Global;
+
+#[cfg(test)]
+pub use std::alloc::Global;
 
 /// Allocate memory with the global allocator.
 ///
@@ -145,6 +153,7 @@ pub unsafe fn alloc_zeroed(layout: Layout) -> *mut u8 {
     unsafe { __rust_alloc_zeroed(layout.size(), layout.align()) }
 }
 
+#[cfg(not(test))]
 impl Global {
     #[inline]
     fn alloc_impl(&self, layout: Layout, zeroed: bool) -> Result<NonNull<[u8]>, AllocError> {
@@ -208,6 +217,7 @@ impl Global {
 }
 
 #[unstable(feature = "allocator_api", issue = "32838")]
+#[cfg(not(test))]
 unsafe impl AllocRef for Global {
     #[inline]
     fn alloc(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
@@ -314,13 +324,23 @@ unsafe fn exchange_malloc(size: usize, align: usize) -> *mut u8 {
 // well.
 // For example if `Box` is changed to  `struct Box<T: ?Sized, A: AllocRef>(Unique<T>, A)`,
 // this function has to be changed to `fn box_free<T: ?Sized, A: AllocRef>(Unique<T>, A)` as well.
-pub(crate) unsafe fn box_free<T: ?Sized>(ptr: Unique<T>) {
+pub(crate) unsafe fn box_free<T: ?Sized, A: AllocRef>(ptr: Unique<T>, alloc: A) {
     unsafe {
         let size = size_of_val(ptr.as_ref());
         let align = min_align_of_val(ptr.as_ref());
         let layout = Layout::from_size_align_unchecked(size, align);
-        Global.dealloc(ptr.cast().into(), layout)
+        alloc.dealloc(ptr.cast().into(), layout)
     }
+}
+
+// # Allocation error handler
+
+extern "Rust" {
+    // This is the magic symbol to call the global alloc error handler.  rustc generates
+    // it to call `__rg_oom` if there is a `#[alloc_error_handler]`, or to call the
+    // default implementations below (`__rdl_oom`) otherwise.
+    #[rustc_allocator_nounwind]
+    fn __rust_alloc_error_handler(size: usize, align: usize) -> !;
 }
 
 /// Abort on memory allocation error or failure.
@@ -363,11 +383,11 @@ pub fn handle_alloc_error(layout: Layout) -> ! {
     unsafe { oom_impl(layout) }
 }
 
-#[cfg(not(any(test, bootstrap)))]
+#[cfg(not(any(target_os = "hermit", test, bootstrap)))]
 #[doc(hidden)]
 #[allow(unused_attributes)]
 #[unstable(feature = "alloc_internals", issue = "none")]
-pub mod __default_lib_allocator {
+pub mod __alloc_error_handler {
     use crate::alloc::Layout;
 
     // called via generated `__rust_alloc_error_handler`

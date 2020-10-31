@@ -21,7 +21,8 @@ use rustc_middle::ty::{
 };
 use rustc_middle::ty::{TypeAndMut, TypeckResults};
 use rustc_span::symbol::{kw, sym, Ident, Symbol};
-use rustc_span::{MultiSpan, Span, DUMMY_SP};
+use rustc_span::{BytePos, MultiSpan, Span, DUMMY_SP};
+use rustc_target::spec::abi;
 use std::fmt;
 
 use super::InferCtxtPrivExt;
@@ -1157,15 +1158,15 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                     tcx.mk_ty_infer(ty::TyVar(ty::TyVid { index: 0 })),
                     false,
                     hir::Unsafety::Normal,
-                    ::rustc_target::spec::abi::Abi::Rust,
+                    abi::Abi::Rust,
                 )
             } else {
                 tcx.mk_fn_sig(
-                    ::std::iter::once(inputs),
+                    std::iter::once(inputs),
                     tcx.mk_ty_infer(ty::TyVar(ty::TyVid { index: 0 })),
                     false,
                     hir::Unsafety::Normal,
-                    ::rustc_target::spec::abi::Abi::Rust,
+                    abi::Abi::Rust,
                 )
             };
             ty::Binder::bind(sig).to_string()
@@ -1307,6 +1308,9 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
         let mut generator = None;
         let mut outer_generator = None;
         let mut next_code = Some(&obligation.cause.code);
+
+        let mut seen_upvar_tys_infer_tuple = false;
+
         while let Some(code) = next_code {
             debug!("maybe_note_obligation_cause_for_async_await: code={:?}", code);
             match code {
@@ -1327,6 +1331,13 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                             outer_generator = Some(did);
                         }
                         ty::GeneratorWitness(..) => {}
+                        ty::Tuple(_) if !seen_upvar_tys_infer_tuple => {
+                            // By introducing a tuple of upvar types into the chain of obligations
+                            // of a generator, the first non-generator item is now the tuple itself,
+                            // we shall ignore this.
+
+                            seen_upvar_tys_infer_tuple = true;
+                        }
                         _ if generator.is_none() => {
                             trait_ref = Some(derived_obligation.parent_trait_ref.skip_binder());
                             target_ty = Some(ty);
@@ -1834,9 +1845,9 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                     err.note("all function arguments must have a statically known size");
                 }
                 if tcx.sess.opts.unstable_features.is_nightly_build()
-                    && !self.tcx.features().unsized_locals
+                    && !self.tcx.features().unsized_fn_params
                 {
-                    err.help("unsized locals are gated as an unstable feature");
+                    err.help("unsized fn params are gated as an unstable feature");
                 }
             }
             ObligationCauseCode::SizedReturnType => {
@@ -1912,7 +1923,29 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                     return;
                 }
 
-                err.note(&format!("required because it appears within the type `{}`", ty));
+                // If the obligation for a tuple is set directly by a Generator or Closure,
+                // then the tuple must be the one containing capture types.
+                let is_upvar_tys_infer_tuple = if !matches!(ty.kind(), ty::Tuple(..)) {
+                    false
+                } else {
+                    if let ObligationCauseCode::BuiltinDerivedObligation(ref data) =
+                        *data.parent_code
+                    {
+                        let parent_trait_ref =
+                            self.resolve_vars_if_possible(&data.parent_trait_ref);
+                        let ty = parent_trait_ref.skip_binder().self_ty();
+                        matches!(ty.kind(), ty::Generator(..))
+                            || matches!(ty.kind(), ty::Closure(..))
+                    } else {
+                        false
+                    }
+                };
+
+                // Don't print the tuple of capture types
+                if !is_upvar_tys_infer_tuple {
+                    err.note(&format!("required because it appears within the type `{}`", ty));
+                }
+
                 obligated_types.push(ty);
 
                 let parent_predicate = parent_trait_ref.without_const().to_predicate(tcx);
@@ -2081,10 +2114,10 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                 if self.predicate_may_hold(&try_obligation) && impls_future {
                     if let Ok(snippet) = self.tcx.sess.source_map().span_to_snippet(span) {
                         if snippet.ends_with('?') {
-                            err.span_suggestion(
-                                span,
-                                "consider using `.await` here",
-                                format!("{}.await?", snippet.trim_end_matches('?')),
+                            err.span_suggestion_verbose(
+                                span.with_hi(span.hi() - BytePos(1)).shrink_to_hi(),
+                                "consider `await`ing on the `Future`",
+                                ".await".to_string(),
                                 Applicability::MaybeIncorrect,
                             );
                         }

@@ -26,7 +26,7 @@ pub struct FunctionCx<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>> {
 
     mir: &'tcx mir::Body<'tcx>,
 
-    debug_context: Option<FunctionDebugContext<Bx::DIScope>>,
+    debug_context: Option<FunctionDebugContext<Bx::DIScope, Bx::DILocation>>,
 
     llfn: Bx::Function,
 
@@ -153,7 +153,7 @@ pub fn codegen_mir<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>>(
         bx.set_personality_fn(cx.eh_personality());
     }
 
-    bx.sideeffect();
+    bx.sideeffect(false);
 
     let cleanup_kinds = analyze::cleanup_kinds(&mir);
     // Allocate a `Block` for every basic block, except

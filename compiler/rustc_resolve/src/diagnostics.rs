@@ -469,24 +469,17 @@ impl<'a> Resolver<'a> {
             ResolutionError::ParamInNonTrivialAnonConst { name, is_type } => {
                 let mut err = self.session.struct_span_err(
                     span,
-                    "generic parameters must not be used inside of non-trivial constant values",
+                    "generic parameters may not be used in const operations",
                 );
-                err.span_label(
-                    span,
-                    &format!(
-                        "non-trivial anonymous constants must not depend on the parameter `{}`",
-                        name
-                    ),
-                );
+                err.span_label(span, &format!("cannot perform const operation using `{}`", name));
 
                 if is_type {
-                    err.note("type parameters are currently not permitted in anonymous constants");
+                    err.note("type parameters may not be used in const expressions");
                 } else {
-                    err.help(
-                        &format!("it is currently only allowed to use either `{0}` or `{{ {0} }}` as generic constants",
-                                 name
-                        )
-                    );
+                    err.help(&format!(
+                        "const parameters may only be used as standalone arguments, i.e. `{}`",
+                        name
+                    ));
                 }
 
                 err
@@ -929,6 +922,12 @@ impl<'a> Resolver<'a> {
         );
         self.add_typo_suggestion(err, suggestion, ident.span);
 
+        let import_suggestions =
+            self.lookup_import_candidates(ident, Namespace::MacroNS, parent_scope, |res| {
+                matches!(res, Res::Def(DefKind::Macro(MacroKind::Bang), _))
+            });
+        show_candidates(err, None, &import_suggestions, false, true);
+
         if macro_kind == MacroKind::Derive && (ident.name == sym::Send || ident.name == sym::Sync) {
             let msg = format!("unsafe traits like `{}` should be implemented explicitly", ident);
             err.span_note(ident.span, &msg);
@@ -1006,11 +1005,9 @@ impl<'a> Resolver<'a> {
     fn binding_description(&self, b: &NameBinding<'_>, ident: Ident, from_prelude: bool) -> String {
         let res = b.res();
         if b.span.is_dummy() {
-            let add_built_in = match b.res() {
-                // These already contain the "built-in" prefix or look bad with it.
-                Res::NonMacroAttr(..) | Res::PrimTy(..) | Res::ToolMod => false,
-                _ => true,
-            };
+            // These already contain the "built-in" prefix or look bad with it.
+            let add_built_in =
+                !matches!(b.res(), Res::NonMacroAttr(..) | Res::PrimTy(..) | Res::ToolMod);
             let (built_in, from) = if from_prelude {
                 ("", " from prelude")
             } else if b.is_extern_crate()
@@ -1606,10 +1603,7 @@ fn find_span_immediately_after_crate_name(
         if *c == ':' {
             num_colons += 1;
         }
-        match c {
-            ':' if num_colons == 2 => false,
-            _ => true,
-        }
+        !matches!(c, ':' if num_colons == 2)
     });
     // Find everything after the second colon.. `foo::{baz, makro};`
     let from_second_colon = use_span.with_lo(until_second_colon.hi() + BytePos(1));

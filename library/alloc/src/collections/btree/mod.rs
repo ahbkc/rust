@@ -1,9 +1,13 @@
 mod borrow;
 pub mod map;
+mod mem;
+mod merge_iter;
 mod navigate;
 mod node;
+mod remove;
 mod search;
 pub mod set;
+mod split;
 
 #[doc(hidden)]
 trait Recover<Q: ?Sized> {

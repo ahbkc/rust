@@ -154,7 +154,7 @@ pub struct ConstStability {
 }
 
 /// The available stability levels.
-#[derive(Encodable, Decodable, PartialEq, PartialOrd, Copy, Clone, Debug, Eq, Hash)]
+#[derive(Encodable, Decodable, PartialEq, Copy, Clone, Debug, Eq, Hash)]
 #[derive(HashStable_Generic)]
 pub enum StabilityLevel {
     // Reason for the current stability level and the relevant rust-lang issue
@@ -901,38 +901,36 @@ pub fn find_repr_attrs(sess: &Session, attr: &Attribute) -> Vec<ReprAttr> {
                         )
                         .emit();
                     }
-                } else {
-                    if let Some(meta_item) = item.meta_item() {
-                        if meta_item.has_name(sym::align) {
-                            if let MetaItemKind::NameValue(ref value) = meta_item.kind {
-                                recognised = true;
-                                let mut err = struct_span_err!(
-                                    diagnostic,
-                                    item.span(),
-                                    E0693,
-                                    "incorrect `repr(align)` attribute format"
-                                );
-                                match value.kind {
-                                    ast::LitKind::Int(int, ast::LitIntType::Unsuffixed) => {
-                                        err.span_suggestion(
-                                            item.span(),
-                                            "use parentheses instead",
-                                            format!("align({})", int),
-                                            Applicability::MachineApplicable,
-                                        );
-                                    }
-                                    ast::LitKind::Str(s, _) => {
-                                        err.span_suggestion(
-                                            item.span(),
-                                            "use parentheses instead",
-                                            format!("align({})", s),
-                                            Applicability::MachineApplicable,
-                                        );
-                                    }
-                                    _ => {}
+                } else if let Some(meta_item) = item.meta_item() {
+                    if meta_item.has_name(sym::align) {
+                        if let MetaItemKind::NameValue(ref value) = meta_item.kind {
+                            recognised = true;
+                            let mut err = struct_span_err!(
+                                diagnostic,
+                                item.span(),
+                                E0693,
+                                "incorrect `repr(align)` attribute format"
+                            );
+                            match value.kind {
+                                ast::LitKind::Int(int, ast::LitIntType::Unsuffixed) => {
+                                    err.span_suggestion(
+                                        item.span(),
+                                        "use parentheses instead",
+                                        format!("align({})", int),
+                                        Applicability::MachineApplicable,
+                                    );
                                 }
-                                err.emit();
+                                ast::LitKind::Str(s, _) => {
+                                    err.span_suggestion(
+                                        item.span(),
+                                        "use parentheses instead",
+                                        format!("align({})", s),
+                                        Applicability::MachineApplicable,
+                                    );
+                                }
+                                _ => {}
                             }
+                            err.emit();
                         }
                     }
                 }
@@ -1013,13 +1011,28 @@ pub fn allow_internal_unstable<'a>(
     sess: &'a Session,
     attrs: &'a [Attribute],
 ) -> Option<impl Iterator<Item = Symbol> + 'a> {
-    let attrs = sess.filter_by_name(attrs, sym::allow_internal_unstable);
+    allow_unstable(sess, attrs, sym::allow_internal_unstable)
+}
+
+pub fn rustc_allow_const_fn_unstable<'a>(
+    sess: &'a Session,
+    attrs: &'a [Attribute],
+) -> Option<impl Iterator<Item = Symbol> + 'a> {
+    allow_unstable(sess, attrs, sym::rustc_allow_const_fn_unstable)
+}
+
+fn allow_unstable<'a>(
+    sess: &'a Session,
+    attrs: &'a [Attribute],
+    symbol: Symbol,
+) -> Option<impl Iterator<Item = Symbol> + 'a> {
+    let attrs = sess.filter_by_name(attrs, symbol);
     let list = attrs
         .filter_map(move |attr| {
             attr.meta_item_list().or_else(|| {
                 sess.diagnostic().span_err(
                     attr.span,
-                    "`allow_internal_unstable` expects a list of feature names",
+                    &format!("`{}` expects a list of feature names", symbol.to_ident_string()),
                 );
                 None
             })
@@ -1029,8 +1042,10 @@ pub fn allow_internal_unstable<'a>(
     Some(list.into_iter().filter_map(move |it| {
         let name = it.ident().map(|ident| ident.name);
         if name.is_none() {
-            sess.diagnostic()
-                .span_err(it.span(), "`allow_internal_unstable` expects feature names");
+            sess.diagnostic().span_err(
+                it.span(),
+                &format!("`{}` expects feature names", symbol.to_ident_string()),
+            );
         }
         name
     }))

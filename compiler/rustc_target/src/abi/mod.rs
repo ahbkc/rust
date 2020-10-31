@@ -164,12 +164,12 @@ impl TargetDataLayout {
             ));
         }
 
-        if dl.pointer_size.bits().to_string() != target.target_pointer_width {
+        if dl.pointer_size.bits() != target.pointer_width.into() {
             return Err(format!(
                 "inconsistent target specification: \"data-layout\" claims \
                                 pointers are {}-bit, while \"target-pointer-width\" is `{}`",
                 dl.pointer_size.bits(),
-                target.target_pointer_width
+                target.pointer_width
             ));
         }
 
@@ -557,17 +557,11 @@ impl Primitive {
     }
 
     pub fn is_float(self) -> bool {
-        match self {
-            F32 | F64 => true,
-            _ => false,
-        }
+        matches!(self, F32 | F64)
     }
 
     pub fn is_int(self) -> bool {
-        match self {
-            Int(..) => true,
-            _ => false,
-        }
+        matches!(self, Int(..))
     }
 }
 
@@ -794,18 +788,12 @@ impl Abi {
 
     /// Returns `true` if this is an uninhabited type
     pub fn is_uninhabited(&self) -> bool {
-        match *self {
-            Abi::Uninhabited => true,
-            _ => false,
-        }
+        matches!(*self, Abi::Uninhabited)
     }
 
     /// Returns `true` is this is a scalar type
     pub fn is_scalar(&self) -> bool {
-        match *self {
-            Abi::Scalar(_) => true,
-            _ => false,
-        }
+        matches!(*self, Abi::Scalar(_))
     }
 }
 

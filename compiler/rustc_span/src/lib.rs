@@ -52,7 +52,7 @@ use std::cell::RefCell;
 use std::cmp::{self, Ordering};
 use std::fmt;
 use std::hash::Hash;
-use std::ops::{Add, Sub};
+use std::ops::{Add, Range, Sub};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
@@ -221,12 +221,6 @@ impl FileName {
             | DocTest(_, _)
             | InlineAsm(_) => false,
         }
-    }
-
-    pub fn quote_expansion_source_code(src: &str) -> FileName {
-        let mut hasher = StableHasher::new();
-        src.hash(&mut hasher);
-        FileName::QuoteExpansion(hasher.finish())
     }
 
     pub fn macro_expansion_source_code(src: &str) -> FileName {
@@ -744,14 +738,14 @@ impl<D: Decoder> Decodable<D> for Span {
 }
 
 /// Calls the provided closure, using the provided `SourceMap` to format
-/// any spans that are debug-printed during the closure'e exectuino.
+/// any spans that are debug-printed during the closure's execution.
 ///
 /// Normally, the global `TyCtxt` is used to retrieve the `SourceMap`
 /// (see `rustc_interface::callbacks::span_debug1). However, some parts
 /// of the compiler (e.g. `rustc_parse`) may debug-print `Span`s before
 /// a `TyCtxt` is available. In this case, we fall back to
 /// the `SourceMap` provided to this function. If that is not available,
-/// we fall back to printing the raw `Span` field values
+/// we fall back to printing the raw `Span` field values.
 pub fn with_source_map<T, F: FnOnce() -> T>(source_map: Lrc<SourceMap>, f: F) -> T {
     SESSION_GLOBALS.with(|session_globals| {
         *session_globals.source_map.borrow_mut() = Some(source_map);
@@ -1432,22 +1426,31 @@ impl SourceFile {
         if line_index >= 0 { Some(line_index as usize) } else { None }
     }
 
-    pub fn line_bounds(&self, line_index: usize) -> (BytePos, BytePos) {
-        if self.start_pos == self.end_pos {
-            return (self.start_pos, self.end_pos);
+    pub fn line_bounds(&self, line_index: usize) -> Range<BytePos> {
+        if self.is_empty() {
+            return self.start_pos..self.end_pos;
         }
 
         assert!(line_index < self.lines.len());
         if line_index == (self.lines.len() - 1) {
-            (self.lines[line_index], self.end_pos)
+            self.lines[line_index]..self.end_pos
         } else {
-            (self.lines[line_index], self.lines[line_index + 1])
+            self.lines[line_index]..self.lines[line_index + 1]
         }
     }
 
+    /// Returns whether or not the file contains the given `SourceMap` byte
+    /// position. The position one past the end of the file is considered to be
+    /// contained by the file. This implies that files for which `is_empty`
+    /// returns true still contain one byte position according to this function.
     #[inline]
     pub fn contains(&self, byte_pos: BytePos) -> bool {
         byte_pos >= self.start_pos && byte_pos <= self.end_pos
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.start_pos == self.end_pos
     }
 
     /// Calculates the original byte position relative to the start of the file
@@ -1861,7 +1864,7 @@ where
         }
 
         if *self == DUMMY_SP {
-            std::hash::Hash::hash(&TAG_INVALID_SPAN, hasher);
+            Hash::hash(&TAG_INVALID_SPAN, hasher);
             return;
         }
 
@@ -1872,28 +1875,28 @@ where
         let (file_lo, line_lo, col_lo) = match ctx.byte_pos_to_line_and_col(span.lo) {
             Some(pos) => pos,
             None => {
-                std::hash::Hash::hash(&TAG_INVALID_SPAN, hasher);
+                Hash::hash(&TAG_INVALID_SPAN, hasher);
                 span.ctxt.hash_stable(ctx, hasher);
                 return;
             }
         };
 
         if !file_lo.contains(span.hi) {
-            std::hash::Hash::hash(&TAG_INVALID_SPAN, hasher);
+            Hash::hash(&TAG_INVALID_SPAN, hasher);
             span.ctxt.hash_stable(ctx, hasher);
             return;
         }
 
-        std::hash::Hash::hash(&TAG_VALID_SPAN, hasher);
+        Hash::hash(&TAG_VALID_SPAN, hasher);
         // We truncate the stable ID hash and line and column numbers. The chances
         // of causing a collision this way should be minimal.
-        std::hash::Hash::hash(&(file_lo.name_hash as u64), hasher);
+        Hash::hash(&(file_lo.name_hash as u64), hasher);
 
         let col = (col_lo.0 as u64) & 0xFF;
         let line = ((line_lo as u64) & 0xFF_FF_FF) << 8;
         let len = ((span.hi - span.lo).0 as u64) << 32;
         let line_col_len = col | line | len;
-        std::hash::Hash::hash(&line_col_len, hasher);
+        Hash::hash(&line_col_len, hasher);
         span.ctxt.hash_stable(ctx, hasher);
     }
 }
@@ -1931,9 +1934,7 @@ impl<CTX: HashStableContext> HashStable<CTX> for ExpnId {
             return;
         }
 
-        TAG_NOT_ROOT.hash_stable(ctx, hasher);
         let index = self.as_u32() as usize;
-
         let res = CACHE.with(|cache| cache.borrow().get(index).copied().flatten());
 
         if let Some(res) = res {
@@ -1942,6 +1943,7 @@ impl<CTX: HashStableContext> HashStable<CTX> for ExpnId {
             let new_len = index + 1;
 
             let mut sub_hasher = StableHasher::new();
+            TAG_NOT_ROOT.hash_stable(ctx, &mut sub_hasher);
             self.expn_data().hash_stable(ctx, &mut sub_hasher);
             let sub_hash: Fingerprint = sub_hasher.finish();
 

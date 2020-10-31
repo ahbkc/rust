@@ -193,36 +193,36 @@ impl StepDescription {
             );
         }
 
-        if paths.is_empty() {
-            for (desc, should_run) in v.iter().zip(should_runs) {
+        if paths.is_empty() || builder.config.include_default_paths {
+            for (desc, should_run) in v.iter().zip(&should_runs) {
                 if desc.default && should_run.is_really_default {
                     for pathset in &should_run.paths {
                         desc.maybe_run(builder, pathset);
                     }
                 }
             }
-        } else {
-            for path in paths {
-                // strip CurDir prefix if present
-                let path = match path.strip_prefix(".") {
-                    Ok(p) => p,
-                    Err(_) => path,
-                };
+        }
 
-                let mut attempted_run = false;
-                for (desc, should_run) in v.iter().zip(&should_runs) {
-                    if let Some(suite) = should_run.is_suite_path(path) {
-                        attempted_run = true;
-                        desc.maybe_run(builder, suite);
-                    } else if let Some(pathset) = should_run.pathset_for_path(path) {
-                        attempted_run = true;
-                        desc.maybe_run(builder, pathset);
-                    }
-                }
+        for path in paths {
+            // strip CurDir prefix if present
+            let path = match path.strip_prefix(".") {
+                Ok(p) => p,
+                Err(_) => path,
+            };
 
-                if !attempted_run {
-                    panic!("error: no rules matched {}", path.display());
+            let mut attempted_run = false;
+            for (desc, should_run) in v.iter().zip(&should_runs) {
+                if let Some(suite) = should_run.is_suite_path(path) {
+                    attempted_run = true;
+                    desc.maybe_run(builder, suite);
+                } else if let Some(pathset) = should_run.pathset_for_path(path) {
+                    attempted_run = true;
+                    desc.maybe_run(builder, pathset);
                 }
+            }
+
+            if !attempted_run {
+                panic!("error: no rules matched {}", path.display());
             }
         }
     }
@@ -344,6 +344,7 @@ impl<'a> Builder<'a> {
             Kind::Build => describe!(
                 compile::Std,
                 compile::Rustc,
+                compile::CodegenBackend,
                 compile::StartupObjects,
                 tool::BuildManifest,
                 tool::Rustbook,
@@ -370,9 +371,14 @@ impl<'a> Builder<'a> {
                 tool::CargoMiri,
                 native::Lld
             ),
-            Kind::Check | Kind::Clippy | Kind::Fix | Kind::Format => {
-                describe!(check::Std, check::Rustc, check::Rustdoc, check::Clippy, check::Bootstrap)
-            }
+            Kind::Check | Kind::Clippy | Kind::Fix | Kind::Format => describe!(
+                check::Std,
+                check::Rustc,
+                check::Rustdoc,
+                check::CodegenBackend,
+                check::Clippy,
+                check::Bootstrap
+            ),
             Kind::Test => describe!(
                 crate::toolstate::ToolStateCheck,
                 test::ExpandYamlAnchors,
@@ -462,6 +468,7 @@ impl<'a> Builder<'a> {
                 dist::LlvmTools,
                 dist::RustDev,
                 dist::Extended,
+                dist::BuildManifest,
                 dist::HashSign
             ),
             Kind::Install => describe!(
@@ -629,6 +636,10 @@ impl<'a> Builder<'a> {
         self.ensure(Libdir { compiler, target })
     }
 
+    pub fn sysroot_codegen_backends(&self, compiler: Compiler) -> PathBuf {
+        self.sysroot_libdir(compiler, compiler.host).with_file_name("codegen-backends")
+    }
+
     /// Returns the compiler's libdir where it stores the dynamic libraries that
     /// it itself links against.
     ///
@@ -697,6 +708,15 @@ impl<'a> Builder<'a> {
         }
     }
 
+    /// Gets the paths to all of the compiler's codegen backends.
+    fn codegen_backends(&self, compiler: Compiler) -> impl Iterator<Item = PathBuf> {
+        fs::read_dir(self.sysroot_codegen_backends(compiler))
+            .into_iter()
+            .flatten()
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+    }
+
     pub fn rustdoc(&self, compiler: Compiler) -> PathBuf {
         self.ensure(tool::Rustdoc { compiler })
     }
@@ -760,6 +780,12 @@ impl<'a> Builder<'a> {
     ) -> Cargo {
         let mut cargo = Command::new(&self.initial_cargo);
         let out_dir = self.stage_out(compiler, mode);
+
+        // Codegen backends are not yet tracked by -Zbinary-dep-depinfo,
+        // so we need to explicitly clear out if they've been updated.
+        for backend in self.codegen_backends(compiler) {
+            self.clear_if_dirty(&out_dir, &backend);
+        }
 
         if cmd == "doc" || cmd == "rustdoc" {
             let my_out = match mode {
@@ -842,7 +868,7 @@ impl<'a> Builder<'a> {
 
         match mode {
             Mode::Std | Mode::ToolBootstrap | Mode::ToolStd => {}
-            Mode::Rustc | Mode::ToolRustc => {
+            Mode::Rustc | Mode::Codegen | Mode::ToolRustc => {
                 // Build proc macros both for the host and the target
                 if target != compiler.host && cmd != "check" {
                     cargo.arg("-Zdual-proc-macros");
@@ -903,6 +929,8 @@ impl<'a> Builder<'a> {
             // problem, somehow -- not really clear why -- but we know that this
             // fixes things.
             Mode::ToolRustc => metadata.push_str("tool-rustc"),
+            // Same for codegen backends.
+            Mode::Codegen => metadata.push_str("codegen"),
             _ => {}
         }
         cargo.env("__CARGO_DEFAULT_LIB_METADATA", &metadata);
@@ -1029,7 +1057,7 @@ impl<'a> Builder<'a> {
         }
 
         let debuginfo_level = match mode {
-            Mode::Rustc => self.config.rust_debuginfo_level_rustc,
+            Mode::Rustc | Mode::Codegen => self.config.rust_debuginfo_level_rustc,
             Mode::Std => self.config.rust_debuginfo_level_std,
             Mode::ToolBootstrap | Mode::ToolStd | Mode::ToolRustc => {
                 self.config.rust_debuginfo_level_tools

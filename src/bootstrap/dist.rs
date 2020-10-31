@@ -26,24 +26,7 @@ use crate::{Compiler, DependencyType, Mode, LLVM_TOOLS};
 use time::{self, Timespec};
 
 pub fn pkgname(builder: &Builder<'_>, component: &str) -> String {
-    if component == "cargo" {
-        format!("{}-{}", component, builder.cargo_package_vers())
-    } else if component == "rls" {
-        format!("{}-{}", component, builder.rls_package_vers())
-    } else if component == "rust-analyzer" {
-        format!("{}-{}", component, builder.rust_analyzer_package_vers())
-    } else if component == "clippy" {
-        format!("{}-{}", component, builder.clippy_package_vers())
-    } else if component == "miri" {
-        format!("{}-{}", component, builder.miri_package_vers())
-    } else if component == "rustfmt" {
-        format!("{}-{}", component, builder.rustfmt_package_vers())
-    } else if component == "llvm-tools" {
-        format!("{}-{}", component, builder.llvm_tools_package_vers())
-    } else {
-        assert!(component.starts_with("rust"));
-        format!("{}-{}", component, builder.rust_package_vers())
-    }
+    format!("{}-{}", component, builder.rust_package_vers())
 }
 
 pub(crate) fn distdir(builder: &Builder<'_>) -> PathBuf {
@@ -520,6 +503,19 @@ impl Step for Rustc {
                     }
                 }
             }
+
+            // Copy over the codegen backends
+            let backends_src = builder.sysroot_codegen_backends(compiler);
+            let backends_rel = backends_src
+                .strip_prefix(&src)
+                .unwrap()
+                .strip_prefix(builder.sysroot_libdir_relative(compiler))
+                .unwrap();
+            // Don't use custom libdir here because ^lib/ will be resolved again with installer
+            let backends_dst = image.join("lib").join(&backends_rel);
+
+            t!(fs::create_dir_all(&backends_dst));
+            builder.cp_r(&backends_src, &backends_dst);
 
             // Copy libLLVM.so to the lib dir as well, if needed. While not
             // technically needed by rustc itself it's needed by lots of other
@@ -1132,6 +1128,7 @@ impl Step for PlainSourceTarball {
             cmd.arg("vendor")
                 .arg("--sync")
                 .arg(builder.src.join("./src/tools/rust-analyzer/Cargo.toml"))
+                .arg(builder.src.join("./compiler/rustc_codegen_cranelift/Cargo.toml"))
                 .current_dir(&plain_dst_src);
             builder.run(&mut cmd);
         }
@@ -2370,7 +2367,6 @@ impl Step for HashSign {
         cmd.arg(today.trim());
         cmd.arg(addr);
         cmd.arg(&builder.config.channel);
-        cmd.arg(&builder.src);
         cmd.env("BUILD_MANIFEST_LEGACY", "1");
 
         builder.create_dir(&distdir(builder));
@@ -2556,8 +2552,15 @@ impl Step for RustDev {
         let dst_bindir = image.join("bin");
         t!(fs::create_dir_all(&dst_bindir));
 
-        let exe = builder.llvm_out(target).join("bin").join(exe("llvm-config", target));
-        builder.install(&exe, &dst_bindir, 0o755);
+        let src_bindir = builder.llvm_out(target).join("bin");
+        let install_bin =
+            |name| builder.install(&src_bindir.join(exe(name, target)), &dst_bindir, 0o755);
+        install_bin("llvm-config");
+        install_bin("llvm-ar");
+        install_bin("llvm-objdump");
+        install_bin("llvm-profdata");
+        install_bin("llvm-bcanalyzer");
+        install_bin("llvm-cov");
         builder.install(&builder.llvm_filecheck(target), &dst_bindir, 0o755);
 
         // Copy the include directory as well; needed mostly to build
@@ -2599,5 +2602,72 @@ impl Step for RustDev {
 
         builder.run(&mut cmd);
         Some(distdir(builder).join(format!("{}-{}.tar.gz", name, target.triple)))
+    }
+}
+
+/// Tarball containing a prebuilt version of the build-manifest tool, intented to be used by the
+/// release process to avoid cloning the monorepo and building stuff.
+///
+/// Should not be considered stable by end users.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct BuildManifest {
+    pub target: TargetSelection,
+}
+
+impl Step for BuildManifest {
+    type Output = PathBuf;
+    const DEFAULT: bool = false;
+    const ONLY_HOSTS: bool = true;
+
+    fn should_run(run: ShouldRun<'_>) -> ShouldRun<'_> {
+        run.path("src/tools/build-manifest")
+    }
+
+    fn make_run(run: RunConfig<'_>) {
+        run.builder.ensure(BuildManifest { target: run.target });
+    }
+
+    fn run(self, builder: &Builder<'_>) -> PathBuf {
+        let build_manifest = builder.tool_exe(Tool::BuildManifest);
+
+        let name = pkgname(builder, "build-manifest");
+        let tmp = tmpdir(builder);
+
+        // Prepare the image.
+        let image = tmp.join("build-manifest-image");
+        let image_bin = image.join("bin");
+        let _ = fs::remove_dir_all(&image);
+        t!(fs::create_dir_all(&image_bin));
+        builder.install(&build_manifest, &image_bin, 0o755);
+
+        // Prepare the overlay.
+        let overlay = tmp.join("build-manifest-overlay");
+        let _ = fs::remove_dir_all(&overlay);
+        builder.create_dir(&overlay);
+        builder.create(&overlay.join("version"), &builder.rust_version());
+        for file in &["COPYRIGHT", "LICENSE-APACHE", "LICENSE-MIT", "README.md"] {
+            builder.install(&builder.src.join(file), &overlay, 0o644);
+        }
+
+        // Create the final tarball.
+        let mut cmd = rust_installer(builder);
+        cmd.arg("generate")
+            .arg("--product-name=Rust")
+            .arg("--rel-manifest-dir=rustlib")
+            .arg("--success-message=build-manifest installed.")
+            .arg("--image-dir")
+            .arg(&image)
+            .arg("--work-dir")
+            .arg(&tmpdir(builder))
+            .arg("--output-dir")
+            .arg(&distdir(builder))
+            .arg("--non-installed-overlay")
+            .arg(&overlay)
+            .arg(format!("--package-name={}-{}", name, self.target.triple))
+            .arg("--legacy-manifest-dirs=rustlib,cargo")
+            .arg("--component-name=build-manifest");
+
+        builder.run(&mut cmd);
+        distdir(builder).join(format!("{}-{}.tar.gz", name, self.target.triple))
     }
 }
