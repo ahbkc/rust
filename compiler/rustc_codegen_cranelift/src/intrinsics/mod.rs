@@ -9,6 +9,7 @@ pub(crate) use cpuid::codegen_cpuid_call;
 pub(crate) use llvm::codegen_llvm_intrinsic_call;
 
 use crate::prelude::*;
+use rustc_middle::ty::print::with_no_trimmed_paths;
 
 macro intrinsic_pat {
     (_) => {
@@ -30,10 +31,10 @@ macro intrinsic_arg {
         $arg
     },
     (c $fx:expr, $arg:ident) => {
-        trans_operand($fx, $arg)
+        codegen_operand($fx, $arg)
     },
     (v $fx:expr, $arg:ident) => {
-        trans_operand($fx, $arg).load_scalar($fx)
+        codegen_operand($fx, $arg).load_scalar($fx)
     }
 }
 
@@ -89,7 +90,7 @@ macro call_intrinsic_match {
                     assert!($substs.is_noop());
                     if let [$(ref $arg),*] = *$args {
                         let ($($arg,)*) = (
-                            $(trans_operand($fx, $arg),)*
+                            $(codegen_operand($fx, $arg),)*
                         );
                         let res = $fx.easy_call(stringify!($func), &[$($arg),*], $fx.tcx.types.$ty);
                         $ret.write_cvalue($fx, res);
@@ -145,12 +146,12 @@ macro atomic_minmax($fx:expr, $cc:expr, <$T:ident> ($ptr:ident, $src:ident) -> $
 
 macro validate_atomic_type($fx:ident, $intrinsic:ident, $span:ident, $ty:expr) {
     match $ty.kind() {
-        ty::Uint(_) | ty::Int(_) => {}
+        ty::Uint(_) | ty::Int(_) | ty::RawPtr(..) => {}
         _ => {
             $fx.tcx.sess.span_err(
                 $span,
                 &format!(
-                    "`{}` intrinsic: expected basic integer type, found `{:?}`",
+                    "`{}` intrinsic: expected basic integer or raw pointer type, found `{:?}`",
                     $intrinsic, $ty
                 ),
             );
@@ -262,6 +263,48 @@ fn simd_pair_for_each_lane<'tcx, M: Module>(
     }
 }
 
+fn simd_reduce<'tcx, M: Module>(
+    fx: &mut FunctionCx<'_, 'tcx, M>,
+    val: CValue<'tcx>,
+    ret: CPlace<'tcx>,
+    f: impl Fn(&mut FunctionCx<'_, 'tcx, M>, TyAndLayout<'tcx>, Value, Value) -> Value,
+) {
+    let (lane_layout, lane_count) = lane_type_and_count(fx.tcx, val.layout());
+    assert_eq!(lane_layout, ret.layout());
+
+    let mut res_val = val.value_field(fx, mir::Field::new(0)).load_scalar(fx);
+    for lane_idx in 1..lane_count {
+        let lane = val
+            .value_field(fx, mir::Field::new(lane_idx.into()))
+            .load_scalar(fx);
+        res_val = f(fx, lane_layout, res_val, lane);
+    }
+    let res = CValue::by_val(res_val, lane_layout);
+    ret.write_cvalue(fx, res);
+}
+
+fn simd_reduce_bool<'tcx, M: Module>(
+    fx: &mut FunctionCx<'_, 'tcx, M>,
+    val: CValue<'tcx>,
+    ret: CPlace<'tcx>,
+    f: impl Fn(&mut FunctionCx<'_, 'tcx, M>, Value, Value) -> Value,
+) {
+    let (_lane_layout, lane_count) = lane_type_and_count(fx.tcx, val.layout());
+    assert!(ret.layout().ty.is_bool());
+
+    let res_val = val.value_field(fx, mir::Field::new(0)).load_scalar(fx);
+    let mut res_val = fx.bcx.ins().band_imm(res_val, 1); // mask to boolean
+    for lane_idx in 1..lane_count {
+        let lane = val
+            .value_field(fx, mir::Field::new(lane_idx.into()))
+            .load_scalar(fx);
+        let lane = fx.bcx.ins().band_imm(lane, 1); // mask to boolean
+        res_val = f(fx, res_val, lane);
+    }
+    let res = CValue::by_val(res_val, ret.layout());
+    ret.write_cvalue(fx, res);
+}
+
 fn bool_to_zero_or_max_uint<'tcx>(
     fx: &mut FunctionCx<'_, 'tcx, impl Module>,
     layout: TyAndLayout<'tcx>,
@@ -286,7 +329,7 @@ fn bool_to_zero_or_max_uint<'tcx>(
 }
 
 macro simd_cmp {
-    ($fx:expr, $cc:ident($x:ident, $y:ident) -> $ret:ident) => {
+    ($fx:expr, $cc:ident|$cc_f:ident($x:ident, $y:ident) -> $ret:ident) => {
         let vector_ty = clif_vector_type($fx.tcx, $x.layout());
 
         if let Some(vector_ty) = vector_ty {
@@ -307,6 +350,7 @@ macro simd_cmp {
                 |fx, lane_layout, res_lane_layout, x_lane, y_lane| {
                     let res_lane = match lane_layout.ty.kind() {
                         ty::Uint(_) | ty::Int(_) => fx.bcx.ins().icmp(IntCC::$cc, x_lane, y_lane),
+                        ty::Float(_) => fx.bcx.ins().fcmp(FloatCC::$cc_f, x_lane, y_lane),
                         _ => unreachable!("{:?}", lane_layout.ty),
                     };
                     bool_to_zero_or_max_uint(fx, res_lane_layout, res_lane)
@@ -314,7 +358,7 @@ macro simd_cmp {
             );
         }
     },
-    ($fx:expr, $cc_u:ident|$cc_s:ident($x:ident, $y:ident) -> $ret:ident) => {
+    ($fx:expr, $cc_u:ident|$cc_s:ident|$cc_f:ident($x:ident, $y:ident) -> $ret:ident) => {
         // FIXME use vector icmp when possible
         simd_pair_for_each_lane(
             $fx,
@@ -325,6 +369,7 @@ macro simd_cmp {
                 let res_lane = match lane_layout.ty.kind() {
                     ty::Uint(_) => fx.bcx.ins().icmp(IntCC::$cc_u, x_lane, y_lane),
                     ty::Int(_) => fx.bcx.ins().icmp(IntCC::$cc_s, x_lane, y_lane),
+                    ty::Float(_) => fx.bcx.ins().fcmp(FloatCC::$cc_f, x_lane, y_lane),
                     _ => unreachable!("{:?}", lane_layout.ty),
                 };
                 bool_to_zero_or_max_uint(fx, res_lane_layout, res_lane)
@@ -496,12 +541,12 @@ pub(crate) fn codegen_intrinsic_call<'tcx>(
         };
         copy | copy_nonoverlapping, <elem_ty> (v src, v dst, v count) {
             let elem_size: u64 = fx.layout_of(elem_ty).size.bytes();
-            let elem_size = fx
-                .bcx
-                .ins()
-                .iconst(fx.pointer_type, elem_size as i64);
             assert_eq!(args.len(), 3);
-            let byte_amount = fx.bcx.ins().imul(count, elem_size);
+            let byte_amount = if elem_size != 1 {
+                fx.bcx.ins().imul_imm(count, elem_size as i64)
+            } else {
+                count
+            };
 
             if intrinsic.contains("nonoverlapping") {
                 // FIXME emit_small_memcpy
@@ -514,12 +559,12 @@ pub(crate) fn codegen_intrinsic_call<'tcx>(
         // NOTE: the volatile variants have src and dst swapped
         volatile_copy_memory | volatile_copy_nonoverlapping_memory, <elem_ty> (v dst, v src, v count) {
             let elem_size: u64 = fx.layout_of(elem_ty).size.bytes();
-            let elem_size = fx
-                .bcx
-                .ins()
-                .iconst(fx.pointer_type, elem_size as i64);
             assert_eq!(args.len(), 3);
-            let byte_amount = fx.bcx.ins().imul(count, elem_size);
+            let byte_amount = if elem_size != 1 {
+                fx.bcx.ins().imul_imm(count, elem_size as i64)
+            } else {
+                count
+            };
 
             // FIXME make the copy actually volatile when using emit_small_mem{cpy,move}
             if intrinsic.contains("nonoverlapping") {
@@ -576,7 +621,7 @@ pub(crate) fn codegen_intrinsic_call<'tcx>(
                 "unchecked_shr" => BinOp::Shr,
                 _ => unreachable!("intrinsic {}", intrinsic),
             };
-            let res = crate::num::trans_int_binop(fx, bin_op, x, y);
+            let res = crate::num::codegen_int_binop(fx, bin_op, x, y);
             ret.write_cvalue(fx, res);
         };
         _ if intrinsic.ends_with("_with_overflow"), (c x, c y) {
@@ -588,7 +633,7 @@ pub(crate) fn codegen_intrinsic_call<'tcx>(
                 _ => unreachable!("intrinsic {}", intrinsic),
             };
 
-            let res = crate::num::trans_checked_int_binop(
+            let res = crate::num::codegen_checked_int_binop(
                 fx,
                 bin_op,
                 x,
@@ -604,7 +649,7 @@ pub(crate) fn codegen_intrinsic_call<'tcx>(
                 "wrapping_mul" => BinOp::Mul,
                 _ => unreachable!("intrinsic {}", intrinsic),
             };
-            let res = crate::num::trans_int_binop(
+            let res = crate::num::codegen_int_binop(
                 fx,
                 bin_op,
                 x,
@@ -622,7 +667,7 @@ pub(crate) fn codegen_intrinsic_call<'tcx>(
 
             let signed = type_sign(T);
 
-            let checked_res = crate::num::trans_checked_int_binop(
+            let checked_res = crate::num::codegen_checked_int_binop(
                 fx,
                 bin_op,
                 lhs,
@@ -675,7 +720,11 @@ pub(crate) fn codegen_intrinsic_call<'tcx>(
         offset | arith_offset, (c base, v offset) {
             let pointee_ty = base.layout().ty.builtin_deref(true).unwrap().ty;
             let pointee_size = fx.layout_of(pointee_ty).size.bytes();
-            let ptr_diff = fx.bcx.ins().imul_imm(offset, pointee_size as i64);
+            let ptr_diff = if pointee_size != 1 {
+                fx.bcx.ins().imul_imm(offset, pointee_size as i64)
+            } else {
+                offset
+            };
             let base_val = base.load_scalar(fx);
             let res = fx.bcx.ins().iadd(base_val, ptr_diff);
             ret.write_cvalue(fx, CValue::by_val(res, base.layout()));
@@ -687,7 +736,11 @@ pub(crate) fn codegen_intrinsic_call<'tcx>(
         write_bytes | volatile_set_memory, (c dst, v val, v count) {
             let pointee_ty = dst.layout().ty.builtin_deref(true).unwrap().ty;
             let pointee_size = fx.layout_of(pointee_ty).size.bytes();
-            let count = fx.bcx.ins().imul_imm(count, pointee_size as i64);
+            let count = if pointee_size != 1 {
+                fx.bcx.ins().imul_imm(count, pointee_size as i64)
+            } else {
+                count
+            };
             let dst_ptr = dst.load_scalar(fx);
             // FIXME make the memset actually volatile when switching to emit_small_memset
             // FIXME use emit_small_memset
@@ -819,29 +872,29 @@ pub(crate) fn codegen_intrinsic_call<'tcx>(
         assert_inhabited | assert_zero_valid | assert_uninit_valid, <T> () {
             let layout = fx.layout_of(T);
             if layout.abi.is_uninhabited() {
-                crate::base::codegen_panic(
+                with_no_trimmed_paths(|| crate::base::codegen_panic(
                     fx,
                     &format!("attempted to instantiate uninhabited type `{}`", T),
                     span,
-                );
+                ));
                 return;
             }
 
             if intrinsic == "assert_zero_valid" && !layout.might_permit_raw_init(fx, /*zero:*/ true).unwrap() {
-                crate::base::codegen_panic(
+                with_no_trimmed_paths(|| crate::base::codegen_panic(
                     fx,
                     &format!("attempted to zero-initialize type `{}`, which is invalid", T),
                     span,
-                );
+                ));
                 return;
             }
 
             if intrinsic == "assert_uninit_valid" && !layout.might_permit_raw_init(fx, /*zero:*/ false).unwrap() {
-                crate::base::codegen_panic(
+                with_no_trimmed_paths(|| crate::base::codegen_panic(
                     fx,
                     &format!("attempted to leave type `{}` uninitialized, which is invalid", T),
                     span,
-                );
+                ));
                 return;
             }
         };
@@ -866,7 +919,7 @@ pub(crate) fn codegen_intrinsic_call<'tcx>(
         size_of | pref_align_of | min_align_of | needs_drop | type_id | type_name | variant_count, () {
             let const_val =
                 fx.tcx.const_eval_instance(ParamEnv::reveal_all(), instance, None).unwrap();
-            let val = crate::constant::trans_const_value(
+            let val = crate::constant::codegen_const_value(
                 fx,
                 const_val,
                 ret.layout().ty,
@@ -885,12 +938,12 @@ pub(crate) fn codegen_intrinsic_call<'tcx>(
         };
 
         ptr_guaranteed_eq, (c a, c b) {
-            let val = crate::num::trans_ptr_binop(fx, BinOp::Eq, a, b);
+            let val = crate::num::codegen_ptr_binop(fx, BinOp::Eq, a, b);
             ret.write_cvalue(fx, val);
         };
 
         ptr_guaranteed_ne, (c a, c b) {
-            let val = crate::num::trans_ptr_binop(fx, BinOp::Ne, a, b);
+            let val = crate::num::codegen_ptr_binop(fx, BinOp::Ne, a, b);
             ret.write_cvalue(fx, val);
         };
 
@@ -1063,12 +1116,13 @@ pub(crate) fn codegen_intrinsic_call<'tcx>(
 
             fx.bcx.ins().call_indirect(f_sig, f, &[data]);
 
-            let ret_val = CValue::const_val(fx, ret.layout(), 0);
+            let layout = ret.layout();
+            let ret_val = CValue::const_val(fx, layout, ty::ScalarInt::null(layout.size));
             ret.write_cvalue(fx, ret_val);
         };
 
         fadd_fast | fsub_fast | fmul_fast | fdiv_fast | frem_fast, (c x, c y) {
-            let res = crate::num::trans_float_binop(fx, match intrinsic {
+            let res = crate::num::codegen_float_binop(fx, match intrinsic {
                 "fadd_fast" => BinOp::Add,
                 "fsub_fast" => BinOp::Sub,
                 "fmul_fast" => BinOp::Mul,

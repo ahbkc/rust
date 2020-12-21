@@ -2,11 +2,11 @@ use crate::interface::{Compiler, Result};
 use crate::proc_macro_decls;
 use crate::util;
 
-use rustc_ast::mut_visit::{self, MutVisitor};
-use rustc_ast::ptr::P;
-use rustc_ast::{self as ast, token, visit};
+use rustc_ast::mut_visit::MutVisitor;
+use rustc_ast::{self as ast, visit};
 use rustc_codegen_ssa::back::link::emit_metadata;
 use rustc_codegen_ssa::traits::CodegenBackend;
+use rustc_data_structures::steal::Steal;
 use rustc_data_structures::sync::{par_iter, Lrc, OnceCell, ParallelIterator, WorkerLocal};
 use rustc_data_structures::temp_dir::MaybeTempDir;
 use rustc_data_structures::{box_region_allow_access, declare_box_region_type, parallel};
@@ -21,7 +21,6 @@ use rustc_middle::dep_graph::DepGraph;
 use rustc_middle::middle;
 use rustc_middle::middle::cstore::{CrateStore, MetadataLoader, MetadataLoaderDyn};
 use rustc_middle::ty::query::Providers;
-use rustc_middle::ty::steal::Steal;
 use rustc_middle::ty::{self, GlobalCtxt, ResolverOutputs, TyCtxt};
 use rustc_mir as mir;
 use rustc_mir_build as mir_build;
@@ -37,7 +36,6 @@ use rustc_span::symbol::Symbol;
 use rustc_span::{FileName, RealFileName};
 use rustc_trait_selection::traits;
 use rustc_typeck as typeck;
-use smallvec::SmallVec;
 use tracing::{info, warn};
 
 use rustc_serialize::json;
@@ -52,71 +50,6 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::{env, fs, iter, mem};
 
-/// Remove alls `LazyTokenStreams` from an AST struct
-/// Normally, this is done during AST lowering. However,
-/// printing the AST JSON requires us to serialize
-/// the entire AST, and we don't want to serialize
-/// a `LazyTokenStream`.
-struct TokenStripper;
-impl mut_visit::MutVisitor for TokenStripper {
-    fn flat_map_item(&mut self, mut i: P<ast::Item>) -> SmallVec<[P<ast::Item>; 1]> {
-        i.tokens = None;
-        mut_visit::noop_flat_map_item(i, self)
-    }
-    fn flat_map_foreign_item(
-        &mut self,
-        mut i: P<ast::ForeignItem>,
-    ) -> SmallVec<[P<ast::ForeignItem>; 1]> {
-        i.tokens = None;
-        mut_visit::noop_flat_map_foreign_item(i, self)
-    }
-    fn visit_block(&mut self, b: &mut P<ast::Block>) {
-        b.tokens = None;
-        mut_visit::noop_visit_block(b, self);
-    }
-    fn flat_map_stmt(&mut self, mut stmt: ast::Stmt) -> SmallVec<[ast::Stmt; 1]> {
-        stmt.tokens = None;
-        mut_visit::noop_flat_map_stmt(stmt, self)
-    }
-    fn visit_pat(&mut self, p: &mut P<ast::Pat>) {
-        p.tokens = None;
-        mut_visit::noop_visit_pat(p, self);
-    }
-    fn visit_ty(&mut self, ty: &mut P<ast::Ty>) {
-        ty.tokens = None;
-        mut_visit::noop_visit_ty(ty, self);
-    }
-    fn visit_attribute(&mut self, attr: &mut ast::Attribute) {
-        attr.tokens = None;
-        if let ast::AttrKind::Normal(ast::AttrItem { tokens, .. }) = &mut attr.kind {
-            *tokens = None;
-        }
-        mut_visit::noop_visit_attribute(attr, self);
-    }
-
-    fn visit_interpolated(&mut self, nt: &mut token::Nonterminal) {
-        if let token::Nonterminal::NtMeta(meta) = nt {
-            meta.tokens = None;
-        }
-        // Handles all of the other cases
-        mut_visit::noop_visit_interpolated(nt, self);
-    }
-
-    fn visit_path(&mut self, p: &mut ast::Path) {
-        p.tokens = None;
-        mut_visit::noop_visit_path(p, self);
-    }
-    fn visit_vis(&mut self, vis: &mut ast::Visibility) {
-        vis.tokens = None;
-        mut_visit::noop_visit_vis(vis, self);
-    }
-    fn visit_expr(&mut self, e: &mut P<ast::Expr>) {
-        e.tokens = None;
-        mut_visit::noop_visit_expr(e, self);
-    }
-    fn visit_mac(&mut self, _mac: &mut ast::MacCall) {}
-}
-
 pub fn parse<'a>(sess: &'a Session, input: &Input) -> PResult<'a, ast::Crate> {
     let krate = sess.time("parse_crate", || match input {
         Input::File(file) => parse_crate_from_file(file, &sess.parse_sess),
@@ -126,10 +59,6 @@ pub fn parse<'a>(sess: &'a Session, input: &Input) -> PResult<'a, ast::Crate> {
     })?;
 
     if sess.opts.debugging_opts.ast_json_noexpand {
-        // Set any `token` fields to `None` before
-        // we display the AST.
-        let mut krate = krate.clone();
-        TokenStripper.visit_crate(&mut krate);
         println!("{}", json::as_json(&krate));
     }
 
@@ -275,7 +204,10 @@ pub fn register_plugins<'a>(
         }
     });
 
-    Ok((krate, Lrc::new(lint_store)))
+    let lint_store = Lrc::new(lint_store);
+    sess.init_lint_store(lint_store.clone());
+
+    Ok((krate, lint_store))
 }
 
 fn pre_expansion_lint(sess: &Session, lint_store: &LintStore, krate: &ast::Crate) {
@@ -307,16 +239,12 @@ fn configure_and_expand_inner<'a>(
 
     krate = sess.time("crate_injection", || {
         let alt_std_name = sess.opts.alt_std_name.as_ref().map(|s| Symbol::intern(s));
-        let (krate, name) = rustc_builtin_macros::standard_library_imports::inject(
+        rustc_builtin_macros::standard_library_imports::inject(
             krate,
             &mut resolver,
             &sess,
             alt_std_name,
-        );
-        if let Some(name) = name {
-            sess.parse_sess.injected_crate_name.set(name).expect("not yet initialized");
-        }
-        krate
+        )
     });
 
     util::check_attr_crate_type(&sess, &krate.attrs, &mut resolver.lint_buffer());
@@ -450,10 +378,6 @@ fn configure_and_expand_inner<'a>(
     }
 
     if sess.opts.debugging_opts.ast_json {
-        // Set any `token` fields to `None` before
-        // we display the AST.
-        let mut krate = krate.clone();
-        TokenStripper.visit_crate(&mut krate);
         println!("{}", json::as_json(&krate));
     }
 
@@ -775,7 +699,7 @@ pub static DEFAULT_QUERY_PROVIDERS: SyncLazy<Providers> = SyncLazy::new(|| {
     rustc_passes::provide(providers);
     rustc_resolve::provide(providers);
     rustc_traits::provide(providers);
-    rustc_ty::provide(providers);
+    rustc_ty_utils::provide(providers);
     rustc_metadata::provide(providers);
     rustc_lint::provide(providers);
     rustc_symbol_mangling::provide(providers);
@@ -823,7 +747,7 @@ pub fn create_global_ctxt<'tcx>(
         Definitions::new(crate_name, sess.local_crate_disambiguator()),
     ));
 
-    let query_result_on_disk_cache = rustc_incremental::load_query_result_cache(sess);
+    let query_result_on_disk_cache = rustc_incremental::load_query_result_cache(sess, defs);
 
     let codegen_backend = compiler.codegen_backend();
     let mut local_providers = *DEFAULT_QUERY_PROVIDERS;
@@ -892,6 +816,7 @@ fn analysis(tcx: TyCtxt<'_>, cnum: CrateNum) -> Result<()> {
                     let local_def_id = tcx.hir().local_def_id(module);
                     tcx.ensure().check_mod_loops(local_def_id);
                     tcx.ensure().check_mod_attrs(local_def_id);
+                    tcx.ensure().check_mod_naked_functions(local_def_id);
                     tcx.ensure().check_mod_unstable_api_usage(local_def_id);
                     tcx.ensure().check_mod_const_bodies(local_def_id);
                 });

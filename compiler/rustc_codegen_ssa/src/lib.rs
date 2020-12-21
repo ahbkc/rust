@@ -2,6 +2,7 @@
 #![feature(bool_to_option)]
 #![feature(option_expect_none)]
 #![feature(box_patterns)]
+#![feature(drain_filter)]
 #![feature(try_blocks)]
 #![feature(in_band_lifetimes)]
 #![feature(nll)]
@@ -63,13 +64,15 @@ impl<M> ModuleCodegen<M> {
     pub fn into_compiled_module(
         self,
         emit_obj: bool,
+        emit_dwarf_obj: bool,
         emit_bc: bool,
         outputs: &OutputFilenames,
     ) -> CompiledModule {
         let object = emit_obj.then(|| outputs.temp_path(OutputType::Object, Some(&self.name)));
+        let dwarf_object = emit_dwarf_obj.then(|| outputs.temp_path_dwo(Some(&self.name)));
         let bytecode = emit_bc.then(|| outputs.temp_path(OutputType::Bitcode, Some(&self.name)));
 
-        CompiledModule { name: self.name.clone(), kind: self.kind, object, bytecode }
+        CompiledModule { name: self.name.clone(), kind: self.kind, object, dwarf_object, bytecode }
     }
 }
 
@@ -78,6 +81,7 @@ pub struct CompiledModule {
     pub name: String,
     pub kind: ModuleKind,
     pub object: Option<PathBuf>,
+    pub dwarf_object: Option<PathBuf>,
     pub bytecode: Option<PathBuf>,
 }
 

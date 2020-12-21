@@ -64,6 +64,35 @@ fn main() {
             | 2, ..] => {}
         _ => {}
     }
+    match &[][..] {
+        [true] => {}
+        [true | false, ..] => {}
+        _ => {}
+    }
+    match &[][..] {
+        [false] => {}
+        [true, ..] => {}
+        [true //~ ERROR unreachable
+            | false, ..] => {}
+        _ => {}
+    }
+    match (true, None) {
+        (true, Some(_)) => {}
+        (false, Some(true)) => {}
+        (true | false, None | Some(true //~ ERROR unreachable
+                                   | false)) => {}
+    }
+    macro_rules! t_or_f {
+        () => {
+            (true // FIXME: should be unreachable
+                        | false)
+        };
+    }
+    match (true, None) {
+        (true, Some(_)) => {}
+        (false, Some(true)) => {}
+        (true | false, None | Some(t_or_f!())) => {}
+    }
     match Some(0) {
         Some(0) => {}
         Some(0 //~ ERROR unreachable
@@ -77,10 +106,17 @@ fn main() {
         (false | true, false | true) => {}
     }
     match (true, true) {
-        (true, false) => {}
-        (false, true) => {}
+        (true, true) => {}
+        (false, false) => {}
         (false | true, false | true) => {}
     }
+    // https://github.com/rust-lang/rust/issues/76836
+    match None {
+        Some(false) => {}
+        None | Some(true
+                | false) => {} //~ ERROR unreachable
+    }
+
     // A subpattern that is unreachable in all branches is overall unreachable.
     match (true, true) {
         (false, true) => {}

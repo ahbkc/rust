@@ -5,7 +5,6 @@ use crate::path_names_to_string;
 use crate::{CrateLint, Module, ModuleKind, ModuleOrUniformRoot};
 use crate::{PathResult, PathSource, Segment};
 
-use rustc_ast::util::lev_distance::find_best_match_for_name;
 use rustc_ast::visit::FnKind;
 use rustc_ast::{self as ast, Expr, ExprKind, Item, ItemKind, NodeId, Path, Ty, TyKind};
 use rustc_ast_pretty::pprust::path_segment_to_string;
@@ -16,9 +15,9 @@ use rustc_hir::def::Namespace::{self, *};
 use rustc_hir::def::{self, CtorKind, CtorOf, DefKind};
 use rustc_hir::def_id::{DefId, CRATE_DEF_INDEX, LOCAL_CRATE};
 use rustc_hir::PrimTy;
-use rustc_session::config::nightly_options;
 use rustc_session::parse::feature_err;
 use rustc_span::hygiene::MacroKind;
+use rustc_span::lev_distance::find_best_match_for_name;
 use rustc_span::symbol::{kw, sym, Ident, Symbol};
 use rustc_span::{BytePos, MultiSpan, Span, DUMMY_SP};
 
@@ -30,7 +29,21 @@ type Res = def::Res<ast::NodeId>;
 enum AssocSuggestion {
     Field,
     MethodWithSelf,
-    AssocItem,
+    AssocFn,
+    AssocType,
+    AssocConst,
+}
+
+impl AssocSuggestion {
+    fn action(&self) -> &'static str {
+        match self {
+            AssocSuggestion::Field => "use the available field",
+            AssocSuggestion::MethodWithSelf => "call the method with the fully-qualified path",
+            AssocSuggestion::AssocFn => "call the associated function",
+            AssocSuggestion::AssocConst => "use the associated `const`",
+            AssocSuggestion::AssocType => "use the associated type",
+        }
+    }
 }
 
 crate enum MissingLifetimeSpot<'tcx> {
@@ -386,15 +399,18 @@ impl<'a: 'ast, 'ast> LateResolutionVisitor<'a, '_, 'ast> {
                     AssocSuggestion::MethodWithSelf if self_is_available => {
                         err.span_suggestion(
                             span,
-                            "try",
+                            "you might have meant to call the method",
                             format!("self.{}", path_str),
                             Applicability::MachineApplicable,
                         );
                     }
-                    AssocSuggestion::MethodWithSelf | AssocSuggestion::AssocItem => {
+                    AssocSuggestion::MethodWithSelf
+                    | AssocSuggestion::AssocFn
+                    | AssocSuggestion::AssocConst
+                    | AssocSuggestion::AssocType => {
                         err.span_suggestion(
                             span,
-                            "try",
+                            &format!("you might have meant to {}", candidate.action()),
                             format!("Self::{}", path_str),
                             Applicability::MachineApplicable,
                         );
@@ -526,6 +542,26 @@ impl<'a: 'ast, 'ast> LateResolutionVisitor<'a, '_, 'ast> {
                 err.span_label(base_span, fallback_label);
             }
         }
+        if let Some(err_code) = &err.code {
+            if err_code == &rustc_errors::error_code!(E0425) {
+                for label_rib in &self.label_ribs {
+                    for (label_ident, _) in &label_rib.bindings {
+                        if format!("'{}", ident) == label_ident.to_string() {
+                            let msg = "a label with a similar name exists";
+                            // FIXME: consider only emitting this suggestion if a label would be valid here
+                            // which is pretty much only the case for `break` expressions.
+                            err.span_suggestion(
+                                span,
+                                &msg,
+                                label_ident.name.to_string(),
+                                Applicability::MaybeIncorrect,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
         (err, candidates)
     }
 
@@ -848,7 +884,7 @@ impl<'a: 'ast, 'ast> LateResolutionVisitor<'a, '_, 'ast> {
                     err.span_suggestion(
                         span,
                         &format!("use struct {} syntax instead", descr),
-                        format!("{} {{{pad}{}{pad}}}", path_str, fields, pad = pad),
+                        format!("{path_str} {{{pad}{fields}{pad}}}"),
                         applicability,
                     );
                 }
@@ -873,7 +909,7 @@ impl<'a: 'ast, 'ast> LateResolutionVisitor<'a, '_, 'ast> {
             }
             (Res::Def(DefKind::TyAlias, def_id), PathSource::Trait(_)) => {
                 err.span_label(span, "type aliases cannot be used as traits");
-                if nightly_options::is_nightly_build() {
+                if self.r.session.is_nightly_build() {
                     let msg = "you might have meant to use `#![feature(trait_alias)]` instead of a \
                                `type` alias";
                     if let Some(span) = self.def_span(def_id) {
@@ -1062,9 +1098,19 @@ impl<'a: 'ast, 'ast> LateResolutionVisitor<'a, '_, 'ast> {
             }
         }
 
-        for assoc_type_ident in &self.diagnostic_metadata.current_trait_assoc_types {
-            if *assoc_type_ident == ident {
-                return Some(AssocSuggestion::AssocItem);
+        if let Some(items) = self.diagnostic_metadata.current_trait_assoc_items {
+            for assoc_item in &items[..] {
+                if assoc_item.ident == ident {
+                    return Some(match &assoc_item.kind {
+                        ast::AssocItemKind::Const(..) => AssocSuggestion::AssocConst,
+                        ast::AssocItemKind::Fn(_, sig, ..) if sig.decl.has_self() => {
+                            AssocSuggestion::MethodWithSelf
+                        }
+                        ast::AssocItemKind::Fn(..) => AssocSuggestion::AssocFn,
+                        ast::AssocItemKind::TyAlias(..) => AssocSuggestion::AssocType,
+                        ast::AssocItemKind::MacCall(_) => continue,
+                    });
+                }
             }
         }
 
@@ -1080,11 +1126,20 @@ impl<'a: 'ast, 'ast> LateResolutionVisitor<'a, '_, 'ast> {
             ) {
                 let res = binding.res();
                 if filter_fn(res) {
-                    return Some(if self.r.has_self.contains(&res.def_id()) {
-                        AssocSuggestion::MethodWithSelf
+                    if self.r.has_self.contains(&res.def_id()) {
+                        return Some(AssocSuggestion::MethodWithSelf);
                     } else {
-                        AssocSuggestion::AssocItem
-                    });
+                        match res {
+                            Res::Def(DefKind::AssocFn, _) => return Some(AssocSuggestion::AssocFn),
+                            Res::Def(DefKind::AssocConst, _) => {
+                                return Some(AssocSuggestion::AssocConst);
+                            }
+                            Res::Def(DefKind::AssocTy, _) => {
+                                return Some(AssocSuggestion::AssocType);
+                            }
+                            _ => {}
+                        }
+                    }
                 }
             }
         }
@@ -1171,7 +1226,7 @@ impl<'a: 'ast, 'ast> LateResolutionVisitor<'a, '_, 'ast> {
         names.sort_by_cached_key(|suggestion| suggestion.candidate.as_str());
 
         match find_best_match_for_name(
-            names.iter().map(|suggestion| &suggestion.candidate),
+            &names.iter().map(|suggestion| suggestion.candidate).collect::<Vec<Symbol>>(),
             name,
             None,
         ) {
@@ -1557,9 +1612,10 @@ impl<'a: 'ast, 'ast> LateResolutionVisitor<'a, '_, 'ast> {
             .bindings
             .iter()
             .filter(|(id, _)| id.span.ctxt() == label.span.ctxt())
-            .map(|(id, _)| &id.name);
+            .map(|(id, _)| id.name)
+            .collect::<Vec<Symbol>>();
 
-        find_best_match_for_name(names, label.name, None).map(|symbol| {
+        find_best_match_for_name(&names, label.name, None).map(|symbol| {
             // Upon finding a similar name, get the ident that it was from - the span
             // contained within helps make a useful diagnostic. In addition, determine
             // whether this candidate is within scope.
@@ -1639,7 +1695,7 @@ impl<'tcx> LifetimeContext<'_, 'tcx> {
                 _ => {}
             }
         }
-        if nightly_options::is_nightly_build()
+        if self.tcx.sess.is_nightly_build()
             && !self.tcx.features().in_band_lifetimes
             && suggests_in_band
         {
@@ -1850,9 +1906,8 @@ impl<'tcx> LifetimeContext<'_, 'tcx> {
                         if snippet.starts_with('&') && !snippet.starts_with("&'") {
                             introduce_suggestion
                                 .push((param.span, format!("&'a {}", &snippet[1..])));
-                        } else if snippet.starts_with("&'_ ") {
-                            introduce_suggestion
-                                .push((param.span, format!("&'a {}", &snippet[4..])));
+                        } else if let Some(stripped) = snippet.strip_prefix("&'_ ") {
+                            introduce_suggestion.push((param.span, format!("&'a {}", &stripped)));
                         }
                     }
                 }

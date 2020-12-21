@@ -8,11 +8,12 @@ use if_chain::if_chain;
 use rustc_ast::{FloatTy, IntTy, LitFloatType, LitIntType, LitKind, UintTy};
 use rustc_errors::{Applicability, DiagnosticBuilder};
 use rustc_hir as hir;
+use rustc_hir::def::Res;
 use rustc_hir::intravisit::{walk_body, walk_expr, walk_ty, FnKind, NestedVisitorMap, Visitor};
 use rustc_hir::{
-    BinOpKind, Block, Body, Expr, ExprKind, FnDecl, FnRetTy, FnSig, GenericArg, GenericParamKind, HirId, ImplItem,
-    ImplItemKind, Item, ItemKind, Lifetime, Lit, Local, MatchSource, MutTy, Mutability, Node, QPath, Stmt, StmtKind,
-    TraitFn, TraitItem, TraitItemKind, TyKind, UnOp,
+    BinOpKind, Block, Body, Expr, ExprKind, FnDecl, FnRetTy, FnSig, GenericArg, GenericBounds, GenericParamKind, HirId,
+    ImplItem, ImplItemKind, Item, ItemKind, Lifetime, Lit, Local, MatchSource, MutTy, Mutability, Node, QPath, Stmt,
+    StmtKind, SyntheticTyParamKind, TraitFn, TraitItem, TraitItemKind, TyKind, UnOp,
 };
 use rustc_lint::{LateContext, LateLintPass, LintContext};
 use rustc_middle::hir::map::Map;
@@ -522,7 +523,7 @@ impl Types {
                             );
                             return; // don't recurse into the type
                         }
-                    } else if cx.tcx.is_diagnostic_item(sym!(vec_type), def_id) {
+                    } else if cx.tcx.is_diagnostic_item(sym::vec_type, def_id) {
                         if_chain! {
                             // Get the _ part of Vec<_>
                             if let Some(ref last) = last_path_segment(qpath).args;
@@ -553,13 +554,13 @@ impl Types {
                                     hir_ty.span,
                                     "`Vec<T>` is already on the heap, the boxing is unnecessary.",
                                     "try",
-                                    format!("Vec<{}>", ty_ty),
+                                    format!("Vec<{}>", snippet(cx, boxed_ty.span, "..")),
                                     Applicability::MachineApplicable,
                                 );
                                 return; // don't recurse into the type
                             }
                         }
-                    } else if cx.tcx.is_diagnostic_item(sym!(option_type), def_id) {
+                    } else if cx.tcx.is_diagnostic_item(sym::option_type, def_id) {
                         if match_type_parameter(cx, qpath, &paths::OPTION).is_some() {
                             span_lint(
                                 cx,
@@ -678,17 +679,30 @@ impl Types {
                             // details.
                             return;
                         }
+
+                        // When trait objects or opaque types have lifetime or auto-trait bounds,
+                        // we need to add parentheses to avoid a syntax error due to its ambiguity.
+                        // Originally reported as the issue #3128.
+                        let inner_snippet = snippet(cx, inner.span, "..");
+                        let suggestion = match &inner.kind {
+                            TyKind::TraitObject(bounds, lt_bound) if bounds.len() > 1 || !lt_bound.is_elided() => {
+                                format!("&{}({})", ltopt, &inner_snippet)
+                            },
+                            TyKind::Path(qpath)
+                                if get_bounds_if_impl_trait(cx, qpath, inner.hir_id)
+                                    .map_or(false, |bounds| bounds.len() > 1) =>
+                            {
+                                format!("&{}({})", ltopt, &inner_snippet)
+                            },
+                            _ => format!("&{}{}", ltopt, &inner_snippet),
+                        };
                         span_lint_and_sugg(
                             cx,
                             BORROWED_BOX,
                             hir_ty.span,
                             "you seem to be trying to use `&Box<T>`. Consider using just `&T`",
                             "try",
-                            format!(
-                                "&{}{}",
-                                ltopt,
-                                &snippet(cx, inner.span, "..")
-                            ),
+                            suggestion,
                             // To make this `MachineApplicable`, at least one needs to check if it isn't a trait item
                             // because the trait impls of it will break otherwise;
                             // and there may be other cases that result in invalid code.
@@ -719,6 +733,20 @@ fn is_any_trait(t: &hir::Ty<'_>) -> bool {
     }
 
     false
+}
+
+fn get_bounds_if_impl_trait<'tcx>(cx: &LateContext<'tcx>, qpath: &QPath<'_>, id: HirId) -> Option<GenericBounds<'tcx>> {
+    if_chain! {
+        if let Some(did) = qpath_res(cx, qpath, id).opt_def_id();
+        if let Some(Node::GenericParam(generic_param)) = cx.tcx.hir().get_if_local(did);
+        if let GenericParamKind::Type { synthetic, .. } = generic_param.kind;
+        if synthetic == Some(SyntheticTyParamKind::ImplTrait);
+        then {
+            Some(generic_param.bounds)
+        } else {
+            None
+        }
+    }
 }
 
 declare_clippy_lint! {
@@ -1441,8 +1469,7 @@ fn check_loss_of_sign(cx: &LateContext<'_>, expr: &Expr<'_>, op: &Expr<'_>, cast
     // don't lint for positive constants
     let const_val = constant(cx, &cx.typeck_results(), op);
     if_chain! {
-        if let Some((const_val, _)) = const_val;
-        if let Constant::Int(n) = const_val;
+        if let Some((Constant::Int(n), _)) = const_val;
         if let ty::Int(ity) = *cast_from.kind();
         if sext(cx.tcx, n, ity) >= 0;
         then {
@@ -1582,7 +1609,7 @@ fn is_c_void(cx: &LateContext<'_>, ty: Ty<'_>) -> bool {
         if names.is_empty() {
             return false;
         }
-        if names[0] == sym!(libc) || names[0] == sym::core && *names.last().unwrap() == sym!(c_void) {
+        if names[0] == sym::libc || names[0] == sym::core && *names.last().unwrap() == sym!(c_void) {
             return true;
         }
     }
@@ -1604,7 +1631,14 @@ impl<'tcx> LateLintPass<'tcx> for Casts {
         if expr.span.from_expansion() {
             return;
         }
-        if let ExprKind::Cast(ref ex, _) = expr.kind {
+        if let ExprKind::Cast(ref ex, cast_to) = expr.kind {
+            if let TyKind::Path(QPath::Resolved(_, path)) = cast_to.kind {
+                if let Res::Def(_, def_id) = path.res {
+                    if cx.tcx.has_attr(def_id, sym::cfg) || cx.tcx.has_attr(def_id, sym::cfg_attr) {
+                        return;
+                    }
+                }
+            }
             let (cast_from, cast_to) = (cx.typeck_results().expr_ty(ex), cx.typeck_results().expr_ty(expr));
             lint_fn_to_numeric_cast(cx, expr, ex, cast_from, cast_to);
             if let Some(lit) = get_numeric_literal(ex) {
@@ -1683,7 +1717,7 @@ fn show_unnecessary_cast(cx: &LateContext<'_>, expr: &Expr<'_>, literal_str: &st
         expr.span,
         &format!("casting {} literal to `{}` is unnecessary", literal_kind_name, cast_to),
         "try",
-        format!("{}_{}", literal_str, cast_to),
+        format!("{}_{}", literal_str.trim_end_matches('.'), cast_to),
         Applicability::MachineApplicable,
     );
 }
@@ -2749,7 +2783,7 @@ impl<'a, 'b, 'tcx> Visitor<'tcx> for ImplicitHasherConstructorVisitor<'a, 'b, 't
                 }
 
                 if match_path(ty_path, &paths::HASHMAP) {
-                    if method.ident.name == sym!(new) {
+                    if method.ident.name == sym::new {
                         self.suggestions
                             .insert(e.span, "HashMap::default()".to_string());
                     } else if method.ident.name == sym!(with_capacity) {
@@ -2762,7 +2796,7 @@ impl<'a, 'b, 'tcx> Visitor<'tcx> for ImplicitHasherConstructorVisitor<'a, 'b, 't
                         );
                     }
                 } else if match_path(ty_path, &paths::HASHSET) {
-                    if method.ident.name == sym!(new) {
+                    if method.ident.name == sym::new {
                         self.suggestions
                             .insert(e.span, "HashSet::default()".to_string());
                     } else if method.ident.name == sym!(with_capacity) {

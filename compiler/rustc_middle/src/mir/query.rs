@@ -46,7 +46,7 @@ pub enum UnsafetyViolationDetails {
     UseOfMutableStatic,
     UseOfExternStatic,
     DerefOfRawPointer,
-    AssignToNonCopyUnionField,
+    AssignToDroppingUnionField,
     AccessToUnionField,
     MutationOfLayoutConstrainedField,
     BorrowOfLayoutConstrainedField,
@@ -94,8 +94,8 @@ impl UnsafetyViolationDetails {
                 "raw pointers may be NULL, dangling or unaligned; they can violate aliasing rules \
                  and cause data races: all of these are undefined behavior",
             ),
-            AssignToNonCopyUnionField => (
-                "assignment to non-`Copy` union field",
+            AssignToDroppingUnionField => (
+                "assignment to union field that might need dropping",
                 "the previous content of the field will be dropped, which causes undefined \
                  behavior if the field was not properly initialized",
             ),
@@ -233,14 +233,15 @@ pub struct BorrowCheckResult<'tcx> {
 
 /// The result of the `mir_const_qualif` query.
 ///
-/// Each field corresponds to an implementer of the `Qualif` trait in
-/// `librustc_mir/transform/check_consts/qualifs.rs`. See that file for more information on each
+/// Each field (except `error_occured`) corresponds to an implementer of the `Qualif` trait in
+/// `rustc_mir/src/transform/check_consts/qualifs.rs`. See that file for more information on each
 /// `Qualif`.
 #[derive(Clone, Copy, Debug, Default, TyEncodable, TyDecodable, HashStable)]
 pub struct ConstQualifs {
     pub has_mut_interior: bool,
     pub needs_drop: bool,
     pub custom_eq: bool,
+    pub error_occured: Option<ErrorReported>,
 }
 
 /// After we borrow check a closure, we are left with various

@@ -219,8 +219,7 @@ impl str {
     #[rustc_const_stable(feature = "str_as_bytes", since = "1.32.0")]
     #[inline(always)]
     #[allow(unused_attributes)]
-    #[cfg_attr(not(bootstrap), rustc_allow_const_fn_unstable(const_fn_transmute))]
-    #[cfg_attr(bootstrap, allow_internal_unstable(const_fn_transmute))]
+    #[rustc_allow_const_fn_unstable(const_fn_transmute)]
     pub const fn as_bytes(&self) -> &[u8] {
         // SAFETY: const sound because we transmute two types with the same layout
         unsafe { mem::transmute(self) }
@@ -842,7 +841,9 @@ impl str {
     /// Lines are ended with either a newline (`\n`) or a carriage return with
     /// a line feed (`\r\n`).
     ///
-    /// The final line ending is optional.
+    /// The final line ending is optional. A string that ends with a final line
+    /// ending will return the same lines as an otherwise identical string
+    /// without a final line ending.
     ///
     /// # Examples
     ///
@@ -1128,6 +1129,13 @@ impl str {
     ///
     /// let v: Vec<&str> = "lionXtigerXleopard".split(char::is_uppercase).collect();
     /// assert_eq!(v, ["lion", "tiger", "leopard"]);
+    /// ```
+    ///
+    /// If the pattern is a slice of chars, split on each occurrence of any of the characters:
+    ///
+    /// ```
+    /// let v: Vec<&str> = "2020-11-03 23:59".split(&['-', ' ', ':', '@'][..]).collect();
+    /// assert_eq!(v, ["2020", "11", "03", "23", "59"]);
     /// ```
     ///
     /// A more complex pattern, using a closure:
@@ -1712,6 +1720,7 @@ impl str {
     ///
     /// assert_eq!("Hello\tworld", s.trim());
     /// ```
+    #[inline]
     #[must_use = "this returns the trimmed string as a slice, \
                   without modifying the original"]
     #[stable(feature = "rust1", since = "1.0.0")]
@@ -1749,6 +1758,7 @@ impl str {
     /// let s = "  עברית  ";
     /// assert!(Some('ע') == s.trim_start().chars().next());
     /// ```
+    #[inline]
     #[must_use = "this returns the trimmed string as a new slice, \
                   without modifying the original"]
     #[stable(feature = "trim_direction", since = "1.30.0")]
@@ -1786,6 +1796,7 @@ impl str {
     /// let s = "  עברית  ";
     /// assert!(Some('ת') == s.trim_end().chars().rev().next());
     /// ```
+    #[inline]
     #[must_use = "this returns the trimmed string as a new slice, \
                   without modifying the original"]
     #[stable(feature = "trim_direction", since = "1.30.0")]
@@ -1824,6 +1835,7 @@ impl str {
     /// let s = "  עברית";
     /// assert!(Some('ע') == s.trim_left().chars().next());
     /// ```
+    #[inline]
     #[stable(feature = "rust1", since = "1.0.0")]
     #[rustc_deprecated(
         since = "1.33.0",
@@ -1865,6 +1877,7 @@ impl str {
     /// let s = "עברית  ";
     /// assert!(Some('ת') == s.trim_right().chars().rev().next());
     /// ```
+    #[inline]
     #[stable(feature = "rust1", since = "1.0.0")]
     #[rustc_deprecated(
         since = "1.33.0",
@@ -2246,9 +2259,9 @@ impl str {
     /// but non-ASCII letters are unchanged.
     ///
     /// To return a new uppercased value without modifying the existing one, use
-    /// [`to_ascii_uppercase`].
+    /// [`to_ascii_uppercase()`].
     ///
-    /// [`to_ascii_uppercase`]: #method.to_ascii_uppercase
+    /// [`to_ascii_uppercase()`]: #method.to_ascii_uppercase
     ///
     /// # Examples
     ///
@@ -2260,6 +2273,7 @@ impl str {
     /// assert_eq!("GRüßE, JüRGEN ❤", s);
     /// ```
     #[stable(feature = "ascii_methods_on_intrinsics", since = "1.23.0")]
+    #[inline]
     pub fn make_ascii_uppercase(&mut self) {
         // SAFETY: safe because we transmute two types with the same layout.
         let me = unsafe { self.as_bytes_mut() };
@@ -2272,9 +2286,9 @@ impl str {
     /// but non-ASCII letters are unchanged.
     ///
     /// To return a new lowercased value without modifying the existing one, use
-    /// [`to_ascii_lowercase`].
+    /// [`to_ascii_lowercase()`].
     ///
-    /// [`to_ascii_lowercase`]: #method.to_ascii_lowercase
+    /// [`to_ascii_lowercase()`]: #method.to_ascii_lowercase
     ///
     /// # Examples
     ///
@@ -2286,6 +2300,7 @@ impl str {
     /// assert_eq!("grÜße, jÜrgen ❤", s);
     /// ```
     #[stable(feature = "ascii_methods_on_intrinsics", since = "1.23.0")]
+    #[inline]
     pub fn make_ascii_lowercase(&mut self) {
         // SAFETY: safe because we transmute two types with the same layout.
         let me = unsafe { self.as_bytes_mut() };
@@ -2423,6 +2438,7 @@ impl AsRef<[u8]> for str {
 #[stable(feature = "rust1", since = "1.0.0")]
 impl Default for &str {
     /// Creates an empty str
+    #[inline]
     fn default() -> Self {
         ""
     }
@@ -2431,6 +2447,7 @@ impl Default for &str {
 #[stable(feature = "default_mut_str", since = "1.28.0")]
 impl Default for &mut str {
     /// Creates an empty mutable str
+    #[inline]
     fn default() -> Self {
         // SAFETY: The empty string is valid UTF-8.
         unsafe { from_utf8_unchecked_mut(&mut []) }

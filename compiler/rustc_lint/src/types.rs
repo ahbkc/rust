@@ -6,7 +6,6 @@ use rustc_errors::Applicability;
 use rustc_hir as hir;
 use rustc_hir::{is_range_literal, ExprKind, Node};
 use rustc_index::vec::Idx;
-use rustc_middle::mir::interpret::{sign_extend, truncate};
 use rustc_middle::ty::layout::{IntegerExt, SizeSkeleton};
 use rustc_middle::ty::subst::SubstsRef;
 use rustc_middle::ty::{self, AdtKind, Ty, TyCtxt, TypeFoldable};
@@ -218,11 +217,11 @@ fn report_bin_hex_error(
     cx.struct_span_lint(OVERFLOWING_LITERALS, expr.span, |lint| {
         let (t, actually) = match ty {
             attr::IntType::SignedInt(t) => {
-                let actually = sign_extend(val, size) as i128;
+                let actually = size.sign_extend(val) as i128;
                 (t.name_str(), actually.to_string())
             }
             attr::IntType::UnsignedInt(t) => {
-                let actually = truncate(val, size);
+                let actually = size.truncate(val);
                 (t.name_str(), actually.to_string())
             }
         };
@@ -881,7 +880,7 @@ impl<'a, 'tcx> ImproperCTypesVisitor<'a, 'tcx> {
             return FfiSafe;
         }
 
-        match ty.kind() {
+        match *ty.kind() {
             ty::Adt(def, _) if def.is_box() && matches!(self.mode, CItemKind::Definition) => {
                 FfiSafe
             }
@@ -1045,7 +1044,7 @@ impl<'a, 'tcx> ImproperCTypesVisitor<'a, 'tcx> {
                     };
                 }
 
-                let sig = tcx.erase_late_bound_regions(&sig);
+                let sig = tcx.erase_late_bound_regions(sig);
                 if !sig.output().is_unit() {
                     let r = self.check_type_for_ffi(cache, sig.output());
                     match r {
@@ -1132,16 +1131,14 @@ impl<'a, 'tcx> ImproperCTypesVisitor<'a, 'tcx> {
     fn check_for_opaque_ty(&mut self, sp: Span, ty: Ty<'tcx>) -> bool {
         struct ProhibitOpaqueTypes<'a, 'tcx> {
             cx: &'a LateContext<'tcx>,
-            ty: Option<Ty<'tcx>>,
-        };
+        }
 
         impl<'a, 'tcx> ty::fold::TypeVisitor<'tcx> for ProhibitOpaqueTypes<'a, 'tcx> {
-            fn visit_ty(&mut self, ty: Ty<'tcx>) -> ControlFlow<()> {
+            type BreakTy = Ty<'tcx>;
+
+            fn visit_ty(&mut self, ty: Ty<'tcx>) -> ControlFlow<Self::BreakTy> {
                 match ty.kind() {
-                    ty::Opaque(..) => {
-                        self.ty = Some(ty);
-                        ControlFlow::BREAK
-                    }
+                    ty::Opaque(..) => ControlFlow::Break(ty),
                     // Consider opaque types within projections FFI-safe if they do not normalize
                     // to more opaque types.
                     ty::Projection(..) => {
@@ -1160,9 +1157,7 @@ impl<'a, 'tcx> ImproperCTypesVisitor<'a, 'tcx> {
             }
         }
 
-        let mut visitor = ProhibitOpaqueTypes { cx: self.cx, ty: None };
-        ty.visit_with(&mut visitor);
-        if let Some(ty) = visitor.ty {
+        if let Some(ty) = ty.visit_with(&mut ProhibitOpaqueTypes { cx: self.cx }).break_value() {
             self.emit_ffi_unsafe_type_lint(ty, sp, "opaque types have no C equivalent", None);
             true
         } else {
@@ -1219,7 +1214,7 @@ impl<'a, 'tcx> ImproperCTypesVisitor<'a, 'tcx> {
     fn check_foreign_fn(&mut self, id: hir::HirId, decl: &hir::FnDecl<'_>) {
         let def_id = self.cx.tcx.hir().local_def_id(id);
         let sig = self.cx.tcx.fn_sig(def_id);
-        let sig = self.cx.tcx.erase_late_bound_regions(&sig);
+        let sig = self.cx.tcx.erase_late_bound_regions(sig);
 
         for (input_ty, input_hir) in sig.inputs().iter().zip(decl.inputs) {
             self.check_type_for_ffi_and_report_errors(input_hir.span, input_ty, false, false);
@@ -1296,7 +1291,7 @@ impl<'tcx> LateLintPass<'tcx> for VariantSizeDifferences {
         if let hir::ItemKind::Enum(ref enum_definition, _) = it.kind {
             let item_def_id = cx.tcx.hir().local_def_id(it.hir_id);
             let t = cx.tcx.type_of(item_def_id);
-            let ty = cx.tcx.erase_regions(&t);
+            let ty = cx.tcx.erase_regions(t);
             let layout = match cx.layout_of(ty) {
                 Ok(layout) => layout,
                 Err(

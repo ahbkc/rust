@@ -6,6 +6,7 @@ use crate::interpret::{
     ScalarMaybeUninit, StackPopCleanup,
 };
 
+use rustc_errors::ErrorReported;
 use rustc_hir::def::DefKind;
 use rustc_middle::mir;
 use rustc_middle::mir::interpret::ErrorHandled;
@@ -14,7 +15,7 @@ use rustc_middle::ty::print::with_no_trimmed_paths;
 use rustc_middle::ty::{self, subst::Subst, TyCtxt};
 use rustc_span::source_map::Span;
 use rustc_target::abi::{Abi, LayoutOf};
-use std::convert::{TryFrom, TryInto};
+use std::convert::TryInto;
 
 pub fn note_on_undefined_behavior_error() -> &'static str {
     "The rules on what exactly is undefined behavior aren't clear, \
@@ -30,6 +31,19 @@ fn eval_body_using_ecx<'mir, 'tcx>(
 ) -> InterpResult<'tcx, MPlaceTy<'tcx>> {
     debug!("eval_body_using_ecx: {:?}, {:?}", cid, ecx.param_env);
     let tcx = *ecx.tcx;
+    assert!(
+        cid.promoted.is_some()
+            || matches!(
+                ecx.tcx.def_kind(cid.instance.def_id()),
+                DefKind::Const
+                    | DefKind::Static
+                    | DefKind::ConstParam
+                    | DefKind::AnonConst
+                    | DefKind::AssocConst
+            ),
+        "Unexpected DefKind: {:?}",
+        ecx.tcx.def_kind(cid.instance.def_id())
+    );
     let layout = ecx.layout_of(body.return_ty().subst(tcx, cid.instance.substs))?;
     assert!(!layout.is_unsized());
     let ret = ecx.allocate(layout, MemoryKind::Stack);
@@ -38,15 +52,6 @@ fn eval_body_using_ecx<'mir, 'tcx>(
         with_no_trimmed_paths(|| ty::tls::with(|tcx| tcx.def_path_str(cid.instance.def_id())));
     let prom = cid.promoted.map_or(String::new(), |p| format!("::promoted[{:?}]", p));
     trace!("eval_body_using_ecx: pushing stack frame for global: {}{}", name, prom);
-
-    // Assert all args (if any) are zero-sized types; `eval_body_using_ecx` doesn't
-    // make sense if the body is expecting nontrivial arguments.
-    // (The alternative would be to use `eval_fn_call` with an args slice.)
-    for arg in body.args_iter() {
-        let decl = body.local_decls.get(arg).expect("arg missing from local_decls");
-        let layout = ecx.layout_of(decl.ty.subst(tcx, cid.instance.substs))?;
-        assert!(layout.is_zst())
-    }
 
     ecx.push_stack_frame(
         cid.instance,
@@ -67,7 +72,7 @@ fn eval_body_using_ecx<'mir, 'tcx>(
             None => InternKind::Constant,
         }
     };
-    intern_const_alloc_recursive(ecx, intern_kind, ret);
+    intern_const_alloc_recursive(ecx, intern_kind, ret)?;
 
     debug!("eval_body_using_ecx done: {:?}", *ret);
     Ok(ret)
@@ -137,15 +142,16 @@ pub(super) fn op_to_const<'tcx>(
             let alloc = ecx.tcx.global_alloc(ptr.alloc_id).unwrap_memory();
             ConstValue::ByRef { alloc, offset: ptr.offset }
         }
-        Scalar::Raw { data, .. } => {
+        Scalar::Int(int) => {
             assert!(mplace.layout.is_zst());
             assert_eq!(
-                u64::try_from(data).unwrap() % mplace.layout.align.abi.bytes(),
+                int.assert_bits(ecx.tcx.data_layout.pointer_size)
+                    % u128::from(mplace.layout.align.abi.bytes()),
                 0,
                 "this MPlaceTy must come from a validated constant, thus we can assume the \
                 alignment is correct",
             );
-            ConstValue::Scalar(Scalar::zst())
+            ConstValue::Scalar(Scalar::ZST)
         }
     };
     match immediate {
@@ -161,7 +167,7 @@ pub(super) fn op_to_const<'tcx>(
                     Scalar::Ptr(ptr) => {
                         (ecx.tcx.global_alloc(ptr.alloc_id).unwrap_memory(), ptr.offset.bytes())
                     }
-                    Scalar::Raw { .. } => (
+                    Scalar::Int { .. } => (
                         ecx.tcx
                             .intern_const_alloc(Allocation::from_byte_aligned_bytes(b"" as &[u8])),
                         0,
@@ -272,6 +278,16 @@ pub fn eval_to_allocation_raw_provider<'tcx>(
             if let Some(error_reported) = tcx.typeck_opt_const_arg(def).tainted_by_errors {
                 return Err(ErrorHandled::Reported(error_reported));
             }
+        }
+        if !tcx.is_mir_available(def.did) {
+            tcx.sess.delay_span_bug(
+                tcx.def_span(def.did),
+                &format!("no MIR body is available for {:?}", def.did),
+            );
+            return Err(ErrorHandled::Reported(ErrorReported {}));
+        }
+        if let Some(error_reported) = tcx.mir_const_qualif_opt_const_arg(def).error_occured {
+            return Err(ErrorHandled::Reported(error_reported));
         }
     }
 

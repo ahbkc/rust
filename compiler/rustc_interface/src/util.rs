@@ -1,6 +1,5 @@
 use rustc_ast::mut_visit::{visit_clobber, MutVisitor, *};
 use rustc_ast::ptr::P;
-use rustc_ast::util::lev_distance::find_best_match_for_name;
 use rustc_ast::{self as ast, AttrVec, BlockCheckMode};
 use rustc_codegen_ssa::traits::CodegenBackend;
 use rustc_data_structures::fingerprint::Fingerprint;
@@ -20,12 +19,13 @@ use rustc_session::parse::CrateConfig;
 use rustc_session::CrateDisambiguator;
 use rustc_session::{early_error, filesearch, output, DiagnosticOutput, Session};
 use rustc_span::edition::Edition;
+use rustc_span::lev_distance::find_best_match_for_name;
 use rustc_span::source_map::FileLoader;
 use rustc_span::symbol::{sym, Symbol};
 use smallvec::SmallVec;
 use std::env;
 use std::env::consts::{DLL_PREFIX, DLL_SUFFIX};
-use std::io::{self, Write};
+use std::io;
 use std::lazy::SyncOnceCell;
 use std::mem;
 use std::ops::DerefMut;
@@ -106,21 +106,6 @@ fn get_stack_size() -> Option<usize> {
     env::var_os("RUST_MIN_STACK").is_none().then_some(STACK_SIZE)
 }
 
-struct Sink(Arc<Mutex<Vec<u8>>>);
-impl Write for Sink {
-    fn write(&mut self, data: &[u8]) -> io::Result<usize> {
-        Write::write(&mut *self.0.lock().unwrap(), data)
-    }
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
-impl io::LocalOutput for Sink {
-    fn clone_box(&self) -> Box<dyn io::LocalOutput> {
-        Box::new(Self(self.0.clone()))
-    }
-}
-
 /// Like a `thread::Builder::spawn` followed by a `join()`, but avoids the need
 /// for `'static` bounds.
 #[cfg(not(parallel_compiler))]
@@ -163,9 +148,7 @@ pub fn setup_callbacks_and_run_in_thread_pool_with_globals<F: FnOnce() -> R + Se
 
     let main_handler = move || {
         rustc_span::with_session_globals(edition, || {
-            if let Some(stderr) = stderr {
-                io::set_panic(Some(box Sink(stderr.clone())));
-            }
+            io::set_output_capture(stderr.clone());
             f()
         })
     };
@@ -203,9 +186,7 @@ pub fn setup_callbacks_and_run_in_thread_pool_with_globals<F: FnOnce() -> R + Se
             // on the new threads.
             let main_handler = move |thread: rayon::ThreadBuilder| {
                 rustc_span::SESSION_GLOBALS.set(session_globals, || {
-                    if let Some(stderr) = stderr {
-                        io::set_panic(Some(box Sink(stderr.clone())));
-                    }
+                    io::set_output_capture(stderr.clone());
                     thread.run()
                 })
             };
@@ -246,10 +227,10 @@ pub fn get_codegen_backend(sopts: &config::Options) -> Box<dyn CodegenBackend> {
 
     INIT.call_once(|| {
         #[cfg(feature = "llvm")]
-        const DEFAULT_CODEGEN_BACKEND: &'static str = "llvm";
+        const DEFAULT_CODEGEN_BACKEND: &str = "llvm";
 
         #[cfg(not(feature = "llvm"))]
-        const DEFAULT_CODEGEN_BACKEND: &'static str = "cranelift";
+        const DEFAULT_CODEGEN_BACKEND: &str = "cranelift";
 
         let codegen_name = sopts
             .debugging_opts
@@ -414,11 +395,10 @@ pub fn get_codegen_sysroot(backend_name: &str) -> fn() -> Box<dyn CodegenBackend
             let libdir = filesearch::relative_target_lib_path(&sysroot, &target);
             sysroot.join(libdir).with_file_name("codegen-backends")
         })
-        .filter(|f| {
+        .find(|f| {
             info!("codegen backend candidate: {}", f.display());
             f.exists()
-        })
-        .next();
+        });
     let sysroot = sysroot.unwrap_or_else(|| {
         let candidates = sysroot_candidates
             .iter()
@@ -532,8 +512,11 @@ pub(crate) fn check_attr_crate_type(
 
                 if let ast::MetaItemKind::NameValue(spanned) = a.meta().unwrap().kind {
                     let span = spanned.span;
-                    let lev_candidate =
-                        find_best_match_for_name(CRATE_TYPES.iter().map(|(k, _)| k), n, None);
+                    let lev_candidate = find_best_match_for_name(
+                        &CRATE_TYPES.iter().map(|(k, _)| *k).collect::<Vec<_>>(),
+                        n,
+                        None,
+                    );
                     if let Some(candidate) = lev_candidate {
                         lint_buffer.buffer_lint_with_diagnostic(
                             lint::builtin::UNKNOWN_CRATE_TYPES,
@@ -827,7 +810,6 @@ impl<'a> MutVisitor for ReplaceBodyWithLoop<'a, '_> {
                 id: resolver.next_node_id(),
                 kind: ast::StmtKind::Expr(expr),
                 span: rustc_span::DUMMY_SP,
-                tokens: None,
             }
         }
 
@@ -844,7 +826,6 @@ impl<'a> MutVisitor for ReplaceBodyWithLoop<'a, '_> {
             id: self.resolver.next_node_id(),
             span: rustc_span::DUMMY_SP,
             kind: ast::StmtKind::Expr(loop_expr),
-            tokens: None,
         };
 
         if self.within_static_or_const {
@@ -880,12 +861,6 @@ impl<'a> MutVisitor for ReplaceBodyWithLoop<'a, '_> {
                 }
             })
         }
-    }
-
-    // in general the pretty printer processes unexpanded code, so
-    // we override the default `visit_mac` method which panics.
-    fn visit_mac(&mut self, mac: &mut ast::MacCall) {
-        noop_visit_mac(mac, self)
     }
 }
 

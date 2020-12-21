@@ -75,6 +75,7 @@ fn emit_module(
             name,
             kind,
             object: Some(tmp_file),
+            dwarf_object: None,
             bytecode: None,
         },
         work_product,
@@ -111,6 +112,7 @@ fn reuse_workproduct_for_cgu(
         name: cgu.name().to_string(),
         kind: ModuleKind::Regular,
         object,
+        dwarf_object: None,
         bytecode: None,
     }
 }
@@ -145,7 +147,11 @@ fn module_codegen(tcx: TyCtxt<'_>, cgu_name: rustc_span::Symbol) -> ModuleCodege
     }
 
     let mut cx = crate::CodegenCx::new(tcx, module, tcx.sess.opts.debuginfo != DebugInfo::None);
-    super::codegen_mono_items(&mut cx, mono_items);
+    super::predefine_mono_items(&mut cx, &mono_items);
+    for (mono_item, (linkage, visibility)) in mono_items {
+        let linkage = crate::linkage::get_clif_linkage(mono_item, linkage, visibility);
+        super::codegen_mono_item(&mut cx, mono_item, linkage);
+    }
     let (mut module, global_asm, debug, mut unwind_context) =
         tcx.sess.time("finalize CodegenCx", || cx.finalize());
     crate::main_shim::maybe_create_entry_wrapper(tcx, &mut module, &mut unwind_context, false);
@@ -286,6 +292,7 @@ pub(super) fn run_aot(
             name: metadata_cgu_name,
             kind: ModuleKind::Metadata,
             object: Some(tmp_file),
+            dwarf_object: None,
             bytecode: None,
         })
     } else {
@@ -320,8 +327,8 @@ fn codegen_global_asm(tcx: TyCtxt<'_>, cgu_name: &str, global_asm: &str) {
     }
 
     if cfg!(not(feature = "inline_asm"))
-        || tcx.sess.target.options.is_like_osx
-        || tcx.sess.target.options.is_like_windows
+        || tcx.sess.target.is_like_osx
+        || tcx.sess.target.is_like_windows
     {
         if global_asm.contains("__rust_probestack") {
             return;

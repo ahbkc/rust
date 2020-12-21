@@ -139,7 +139,7 @@ impl ModuleConfig {
 
         let emit_obj = if !should_emit_obj {
             EmitObj::None
-        } else if sess.target.options.obj_is_bitcode
+        } else if sess.target.obj_is_bitcode
             || (sess.opts.cg.linker_plugin_lto.enabled() && !no_builtins)
         {
             // This case is selected if the target uses objects as bitcode, or
@@ -221,11 +221,11 @@ impl ModuleConfig {
                 false
             ),
             emit_obj,
-            bc_cmdline: sess.target.options.bitcode_llvm_cmdline.clone(),
+            bc_cmdline: sess.target.bitcode_llvm_cmdline.clone(),
 
             verify_llvm_ir: sess.verify_llvm_ir(),
             no_prepopulate_passes: sess.opts.cg.no_prepopulate_passes,
-            no_builtins: no_builtins || sess.target.options.no_builtins,
+            no_builtins: no_builtins || sess.target.no_builtins,
 
             // Exclude metadata and allocator modules from time_passes output,
             // since they throw off the "LLVM passes" measurement.
@@ -252,7 +252,7 @@ impl ModuleConfig {
                 .opts
                 .debugging_opts
                 .merge_functions
-                .unwrap_or(sess.target.options.merge_functions)
+                .unwrap_or(sess.target.merge_functions)
             {
                 MergeFunctions::Disabled => false,
                 MergeFunctions::Trampolines | MergeFunctions::Aliases => {
@@ -274,16 +274,19 @@ impl ModuleConfig {
     }
 }
 
-// HACK(eddyb) work around `#[derive]` producing wrong bounds for `Clone`.
-pub struct TargetMachineFactory<B: WriteBackendMethods>(
-    pub Arc<dyn Fn() -> Result<B::TargetMachine, String> + Send + Sync>,
-);
-
-impl<B: WriteBackendMethods> Clone for TargetMachineFactory<B> {
-    fn clone(&self) -> Self {
-        TargetMachineFactory(self.0.clone())
-    }
+/// Configuration passed to the function returned by the `target_machine_factory`.
+pub struct TargetMachineFactoryConfig {
+    /// Split DWARF is enabled in LLVM by checking that `TM.MCOptions.SplitDwarfFile` isn't empty,
+    /// so the path to the dwarf object has to be provided when we create the target machine.
+    /// This can be ignored by backends which do not need it for their Split DWARF support.
+    pub split_dwarf_file: Option<PathBuf>,
 }
+
+pub type TargetMachineFactoryFn<B> = Arc<
+    dyn Fn(TargetMachineFactoryConfig) -> Result<<B as WriteBackendMethods>::TargetMachine, String>
+        + Send
+        + Sync,
+>;
 
 pub type ExportedSymbols = FxHashMap<CrateNum, Arc<Vec<(String, SymbolExportLevel)>>>;
 
@@ -305,11 +308,13 @@ pub struct CodegenContext<B: WriteBackendMethods> {
     pub regular_module_config: Arc<ModuleConfig>,
     pub metadata_module_config: Arc<ModuleConfig>,
     pub allocator_module_config: Arc<ModuleConfig>,
-    pub tm_factory: TargetMachineFactory<B>,
+    pub tm_factory: TargetMachineFactoryFn<B>,
     pub msvc_imps_needed: bool,
+    pub is_pe_coff: bool,
     pub target_pointer_width: u32,
     pub target_arch: String,
     pub debuginfo: config::DebugInfo,
+    pub split_dwarf_kind: config::SplitDwarfKind,
 
     // Number of cgus excluding the allocator/metadata modules
     pub total_cgus: usize,
@@ -388,7 +393,7 @@ fn need_bitcode_in_object(sess: &Session) -> bool {
     let requested_for_rlib = sess.opts.cg.embed_bitcode
         && sess.crate_types().contains(&CrateType::Rlib)
         && sess.opts.output_types.contains_key(&OutputType::Exe);
-    let forced_by_target = sess.target.options.forces_embed_bitcode;
+    let forced_by_target = sess.target.forces_embed_bitcode;
     requested_for_rlib || forced_by_target
 }
 
@@ -626,6 +631,12 @@ fn produce_final_output_artifacts(
                 }
             }
 
+            if let Some(ref path) = module.dwarf_object {
+                if !keep_numbered_objects {
+                    remove(sess, path);
+                }
+            }
+
             if let Some(ref path) = module.bytecode {
                 if !keep_numbered_bitcode {
                     remove(sess, path);
@@ -848,6 +859,7 @@ fn execute_copy_from_cache_work_item<B: ExtraBackendMethods>(
         name: module.name,
         kind: ModuleKind::Regular,
         object,
+        dwarf_object: None,
         bytecode: None,
     }))
 }
@@ -1019,12 +1031,14 @@ fn start_executing_work<B: ExtraBackendMethods>(
         regular_module_config: regular_config,
         metadata_module_config: metadata_config,
         allocator_module_config: allocator_config,
-        tm_factory: TargetMachineFactory(backend.target_machine_factory(tcx.sess, ol)),
+        tm_factory: backend.target_machine_factory(tcx.sess, ol),
         total_cgus,
         msvc_imps_needed: msvc_imps_needed(tcx),
+        is_pe_coff: tcx.sess.target.is_like_windows,
         target_pointer_width: tcx.sess.target.pointer_width,
         target_arch: tcx.sess.target.arch.clone(),
         debuginfo: tcx.sess.opts.debuginfo,
+        split_dwarf_kind: tcx.sess.opts.debugging_opts.split_dwarf,
     };
 
     // This is the "main loop" of parallel work happening for parallel codegen.
@@ -1865,11 +1879,11 @@ fn msvc_imps_needed(tcx: TyCtxt<'_>) -> bool {
     // something is wrong with commandline arg validation.
     assert!(
         !(tcx.sess.opts.cg.linker_plugin_lto.enabled()
-            && tcx.sess.target.options.is_like_windows
+            && tcx.sess.target.is_like_windows
             && tcx.sess.opts.cg.prefer_dynamic)
     );
 
-    tcx.sess.target.options.is_like_windows &&
+    tcx.sess.target.is_like_windows &&
         tcx.sess.crate_types().iter().any(|ct| *ct == CrateType::Rlib) &&
     // ThinLTO can't handle this workaround in all cases, so we don't
     // emit the `__imp_` symbols. Instead we make them unnecessary by disallowing

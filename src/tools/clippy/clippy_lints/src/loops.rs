@@ -2,12 +2,13 @@ use crate::consts::constant;
 use crate::utils::paths;
 use crate::utils::sugg::Sugg;
 use crate::utils::usage::{is_unused, mutated_variables};
+use crate::utils::visitors::LocalUsedVisitor;
 use crate::utils::{
     contains_name, get_enclosing_block, get_parent_expr, get_trait_def_id, has_iter_method, higher, implements_trait,
-    indent_of, is_integer_const, is_no_std_crate, is_refutable, is_type_diagnostic_item, last_path_segment,
-    match_trait_method, match_type, match_var, multispan_sugg, qpath_res, single_segment_path, snippet,
-    snippet_with_applicability, snippet_with_macro_callsite, span_lint, span_lint_and_help, span_lint_and_sugg,
-    span_lint_and_then, sugg, SpanlessEq,
+    indent_of, is_in_panic_handler, is_integer_const, is_no_std_crate, is_refutable, is_type_diagnostic_item,
+    last_path_segment, match_trait_method, match_type, match_var, multispan_sugg, qpath_res, single_segment_path,
+    snippet, snippet_with_applicability, snippet_with_macro_callsite, span_lint, span_lint_and_help,
+    span_lint_and_sugg, span_lint_and_then, sugg, SpanlessEq,
 };
 use if_chain::if_chain;
 use rustc_ast::ast;
@@ -543,17 +544,15 @@ impl<'tcx> LateLintPass<'tcx> for Loops {
         // (also matches an explicit "match" instead of "if let")
         // (even if the "match" or "if let" is used for declaration)
         if let ExprKind::Loop(ref block, _, LoopSource::Loop) = expr.kind {
-            // also check for empty `loop {}` statements
-            // TODO(issue #6161): Enable for no_std crates (outside of #[panic_handler])
-            if block.stmts.is_empty() && block.expr.is_none() && !is_no_std_crate(cx.tcx.hir().krate()) {
-                span_lint_and_help(
-                    cx,
-                    EMPTY_LOOP,
-                    expr.span,
-                    "empty `loop {}` wastes CPU cycles",
-                    None,
-                    "You should either use `panic!()` or add `std::thread::sleep(..);` to the loop body.",
-                );
+            // also check for empty `loop {}` statements, skipping those in #[panic_handler]
+            if block.stmts.is_empty() && block.expr.is_none() && !is_in_panic_handler(cx, expr) {
+                let msg = "empty `loop {}` wastes CPU cycles";
+                let help = if is_no_std_crate(cx.tcx.hir().krate()) {
+                    "you should either use `panic!()` or add a call pausing or sleeping the thread to the loop body"
+                } else {
+                    "you should either use `panic!()` or add `std::thread::sleep(..);` to the loop body"
+                };
+                span_lint_and_help(cx, EMPTY_LOOP, expr.span, msg, None, help);
             }
 
             // extract the expression from the first statement (if any) in a block
@@ -619,9 +618,9 @@ impl<'tcx> LateLintPass<'tcx> for Loops {
                 }
 
                 let lhs_constructor = last_path_segment(qpath);
-                if method_path.ident.name == sym!(next)
+                if method_path.ident.name == sym::next
                     && match_trait_method(cx, match_expr, &paths::ITERATOR)
-                    && lhs_constructor.ident.name == sym!(Some)
+                    && lhs_constructor.ident.name == sym::Some
                     && (pat_args.is_empty()
                         || !is_refutable(cx, &pat_args[0])
                             && !is_used_inside(cx, iter_expr, &arms[0].body)
@@ -769,7 +768,7 @@ fn never_loop_expr(expr: &Expr<'_>, main_loop_id: HirId) -> NeverLoopResult {
         ExprKind::InlineAsm(ref asm) => asm
             .operands
             .iter()
-            .map(|o| match o {
+            .map(|(o, _)| match o {
                 InlineAsmOperand::In { expr, .. }
                 | InlineAsmOperand::InOut { expr, .. }
                 | InlineAsmOperand::Const { expr }
@@ -985,13 +984,13 @@ fn is_slice_like<'tcx>(cx: &LateContext<'tcx>, ty: Ty<'_>) -> bool {
         _ => false,
     };
 
-    is_slice || is_type_diagnostic_item(cx, ty, sym!(vec_type)) || is_type_diagnostic_item(cx, ty, sym!(vecdeque_type))
+    is_slice || is_type_diagnostic_item(cx, ty, sym::vec_type) || is_type_diagnostic_item(cx, ty, sym!(vecdeque_type))
 }
 
 fn fetch_cloned_expr<'tcx>(expr: &'tcx Expr<'tcx>) -> &'tcx Expr<'tcx> {
     if_chain! {
         if let ExprKind::MethodCall(method, _, args, _) = expr.kind;
-        if method.ident.name == sym!(clone);
+        if method.ident.name == sym::clone;
         if args.len() == 1;
         if let Some(arg) = args.get(0);
         then { arg } else { expr }
@@ -1355,7 +1354,7 @@ fn get_vec_push<'tcx>(cx: &LateContext<'tcx>, stmt: &'tcx Stmt<'_>) -> Option<(&
             if let Some(self_expr) = args.get(0);
             if let Some(pushed_item) = args.get(1);
             // Check that the method being called is push() on a Vec
-            if is_type_diagnostic_item(cx, cx.typeck_results().expr_ty(self_expr), sym!(vec_type));
+            if is_type_diagnostic_item(cx, cx.typeck_results().expr_ty(self_expr), sym::vec_type);
             if path.ident.name.as_str() == "push";
             then {
                 return Some((self_expr, pushed_item))
@@ -1736,7 +1735,7 @@ fn check_for_loop_arg(cx: &LateContext<'_>, pat: &Pat<'_>, arg: &Expr<'_>, expr:
 /// Checks for `for` loops over `Option`s and `Result`s.
 fn check_arg_type(cx: &LateContext<'_>, pat: &Pat<'_>, arg: &Expr<'_>) {
     let ty = cx.typeck_results().expr_ty(arg);
-    if is_type_diagnostic_item(cx, ty, sym!(option_type)) {
+    if is_type_diagnostic_item(cx, ty, sym::option_type) {
         span_lint_and_help(
             cx,
             FOR_LOOPS_OVER_FALLIBLES,
@@ -1753,7 +1752,7 @@ fn check_arg_type(cx: &LateContext<'_>, pat: &Pat<'_>, arg: &Expr<'_>) {
                 snippet(cx, arg.span, "_")
             ),
         );
-    } else if is_type_diagnostic_item(cx, ty, sym!(result_type)) {
+    } else if is_type_diagnostic_item(cx, ty, sym::result_type) {
         span_lint_and_help(
             cx,
             FOR_LOOPS_OVER_FALLIBLES,
@@ -1921,8 +1920,7 @@ fn check_for_single_element_loop<'tcx>(
     if_chain! {
         if let ExprKind::AddrOf(BorrowKind::Ref, _, ref arg_expr) = arg.kind;
         if let PatKind::Binding(.., target, _) = pat.kind;
-        if let ExprKind::Array(ref arg_expr_list) = arg_expr.kind;
-        if let [arg_expression] = arg_expr_list;
+        if let ExprKind::Array([arg_expression]) = arg_expr.kind;
         if let ExprKind::Path(ref list_item) = arg_expression.kind;
         if let Some(list_item_name) = single_segment_path(list_item).map(|ps| ps.ident.name);
         if let ExprKind::Block(ref block, _) = body.kind;
@@ -1957,28 +1955,28 @@ struct MutatePairDelegate<'a, 'tcx> {
 }
 
 impl<'tcx> Delegate<'tcx> for MutatePairDelegate<'_, 'tcx> {
-    fn consume(&mut self, _: &PlaceWithHirId<'tcx>, _: ConsumeMode) {}
+    fn consume(&mut self, _: &PlaceWithHirId<'tcx>, _: HirId, _: ConsumeMode) {}
 
-    fn borrow(&mut self, cmt: &PlaceWithHirId<'tcx>, bk: ty::BorrowKind) {
+    fn borrow(&mut self, cmt: &PlaceWithHirId<'tcx>, diag_expr_id: HirId, bk: ty::BorrowKind) {
         if let ty::BorrowKind::MutBorrow = bk {
             if let PlaceBase::Local(id) = cmt.place.base {
                 if Some(id) == self.hir_id_low {
-                    self.span_low = Some(self.cx.tcx.hir().span(cmt.hir_id))
+                    self.span_low = Some(self.cx.tcx.hir().span(diag_expr_id))
                 }
                 if Some(id) == self.hir_id_high {
-                    self.span_high = Some(self.cx.tcx.hir().span(cmt.hir_id))
+                    self.span_high = Some(self.cx.tcx.hir().span(diag_expr_id))
                 }
             }
         }
     }
 
-    fn mutate(&mut self, cmt: &PlaceWithHirId<'tcx>) {
+    fn mutate(&mut self, cmt: &PlaceWithHirId<'tcx>, diag_expr_id: HirId) {
         if let PlaceBase::Local(id) = cmt.place.base {
             if Some(id) == self.hir_id_low {
-                self.span_low = Some(self.cx.tcx.hir().span(cmt.hir_id))
+                self.span_low = Some(self.cx.tcx.hir().span(diag_expr_id))
             }
             if Some(id) == self.hir_id_high {
-                self.span_high = Some(self.cx.tcx.hir().span(cmt.hir_id))
+                self.span_high = Some(self.cx.tcx.hir().span(diag_expr_id))
             }
         }
     }
@@ -2027,8 +2025,7 @@ fn check_for_mutability(cx: &LateContext<'_>, bound: &Expr<'_>) -> Option<HirId>
                 let node_str = cx.tcx.hir().get(hir_id);
                 if_chain! {
                     if let Node::Binding(pat) = node_str;
-                    if let PatKind::Binding(bind_ann, ..) = pat.kind;
-                    if let BindingAnnotation::Mutable = bind_ann;
+                    if let PatKind::Binding(BindingAnnotation::Mutable, ..) = pat.kind;
                     then {
                         return Some(hir_id);
                     }
@@ -2073,28 +2070,6 @@ fn pat_is_wild<'tcx>(pat: &'tcx PatKind<'_>, body: &'tcx Expr<'_>) -> bool {
     }
 }
 
-struct LocalUsedVisitor<'a, 'tcx> {
-    cx: &'a LateContext<'tcx>,
-    local: HirId,
-    used: bool,
-}
-
-impl<'a, 'tcx> Visitor<'tcx> for LocalUsedVisitor<'a, 'tcx> {
-    type Map = Map<'tcx>;
-
-    fn visit_expr(&mut self, expr: &'tcx Expr<'_>) {
-        if same_var(self.cx, expr, self.local) {
-            self.used = true;
-        } else {
-            walk_expr(self, expr);
-        }
-    }
-
-    fn nested_visit_map(&mut self) -> NestedVisitorMap<Self::Map> {
-        NestedVisitorMap::None
-    }
-}
-
 struct VarVisitor<'a, 'tcx> {
     /// context reference
     cx: &'a LateContext<'tcx>,
@@ -2128,11 +2103,7 @@ impl<'a, 'tcx> VarVisitor<'a, 'tcx> {
             then {
                 let index_used_directly = same_var(self.cx, idx, self.var);
                 let indexed_indirectly = {
-                    let mut used_visitor = LocalUsedVisitor {
-                        cx: self.cx,
-                        local: self.var,
-                        used: false,
-                    };
+                    let mut used_visitor = LocalUsedVisitor::new(self.var);
                     walk_expr(&mut used_visitor, idx);
                     used_visitor.used
                 };
@@ -2186,8 +2157,8 @@ impl<'a, 'tcx> Visitor<'tcx> for VarVisitor<'a, 'tcx> {
         if_chain! {
             // a range index op
             if let ExprKind::MethodCall(ref meth, _, ref args, _) = expr.kind;
-            if (meth.ident.name == sym!(index) && match_trait_method(self.cx, expr, &paths::INDEX))
-                || (meth.ident.name == sym!(index_mut) && match_trait_method(self.cx, expr, &paths::INDEX_MUT));
+            if (meth.ident.name == sym::index && match_trait_method(self.cx, expr, &paths::INDEX))
+                || (meth.ident.name == sym::index_mut && match_trait_method(self.cx, expr, &paths::INDEX_MUT));
             if !self.check(&args[1], &args[0], expr);
             then { return }
         }
@@ -2333,7 +2304,7 @@ fn is_ref_iterable_type(cx: &LateContext<'_>, e: &Expr<'_>) -> bool {
     // will allow further borrows afterwards
     let ty = cx.typeck_results().expr_ty(e);
     is_iterable_array(ty, cx) ||
-    is_type_diagnostic_item(cx, ty, sym!(vec_type)) ||
+    is_type_diagnostic_item(cx, ty, sym::vec_type) ||
     match_type(cx, ty, &paths::LINKED_LIST) ||
     is_type_diagnostic_item(cx, ty, sym!(hashmap_type)) ||
     is_type_diagnostic_item(cx, ty, sym!(hashset_type)) ||
@@ -2890,7 +2861,7 @@ fn check_needless_collect_direct_usage<'tcx>(expr: &'tcx Expr<'_>, cx: &LateCont
         if let Some(GenericArg::Type(ref ty)) = generic_args.args.get(0);
         then {
             let ty = cx.typeck_results().node_type(ty.hir_id);
-            if is_type_diagnostic_item(cx, ty, sym!(vec_type)) ||
+            if is_type_diagnostic_item(cx, ty, sym::vec_type) ||
                 is_type_diagnostic_item(cx, ty, sym!(vecdeque_type)) ||
                 match_type(cx, ty, &paths::BTREEMAP) ||
                 is_type_diagnostic_item(cx, ty, sym!(hashmap_type)) {
@@ -2952,7 +2923,7 @@ fn check_needless_collect_indirect_usage<'tcx>(expr: &'tcx Expr<'_>, cx: &LateCo
         for ref stmt in block.stmts {
             if_chain! {
                 if let StmtKind::Local(
-                    Local { pat: Pat { kind: PatKind::Binding(_, _, ident, .. ), .. },
+                    Local { pat: Pat { hir_id: pat_id, kind: PatKind::Binding(_, _, ident, .. ), .. },
                     init: Some(ref init_expr), .. }
                 ) = stmt.kind;
                 if let ExprKind::MethodCall(ref method_name, _, &[ref iter_source], ..) = init_expr.kind;
@@ -2966,6 +2937,16 @@ fn check_needless_collect_indirect_usage<'tcx>(expr: &'tcx Expr<'_>, cx: &LateCo
                 if let Some(iter_calls) = detect_iter_and_into_iters(block, *ident);
                 if iter_calls.len() == 1;
                 then {
+                    let mut used_count_visitor = UsedCountVisitor {
+                        cx,
+                        id: *pat_id,
+                        count: 0,
+                    };
+                    walk_block(&mut used_count_visitor, block);
+                    if used_count_visitor.count > 1 {
+                        return;
+                    }
+
                     // Suggest replacing iter_call with iter_replacement, and removing stmt
                     let iter_call = &iter_calls[0];
                     span_lint_and_then(
@@ -3089,7 +3070,29 @@ impl<'tcx> Visitor<'tcx> for IterFunctionVisitor {
     }
 }
 
-/// Detect the occurences of calls to `iter` or `into_iter` for the
+struct UsedCountVisitor<'a, 'tcx> {
+    cx: &'a LateContext<'tcx>,
+    id: HirId,
+    count: usize,
+}
+
+impl<'a, 'tcx> Visitor<'tcx> for UsedCountVisitor<'a, 'tcx> {
+    type Map = Map<'tcx>;
+
+    fn visit_expr(&mut self, expr: &'tcx Expr<'_>) {
+        if same_var(self.cx, expr, self.id) {
+            self.count += 1;
+        } else {
+            walk_expr(self, expr);
+        }
+    }
+
+    fn nested_visit_map(&mut self) -> NestedVisitorMap<Self::Map> {
+        NestedVisitorMap::OnlyBodies(self.cx.tcx.hir())
+    }
+}
+
+/// Detect the occurrences of calls to `iter` or `into_iter` for the
 /// given identifier
 fn detect_iter_and_into_iters<'tcx>(block: &'tcx Block<'tcx>, identifier: Ident) -> Option<Vec<IterFunction>> {
     let mut visitor = IterFunctionVisitor {

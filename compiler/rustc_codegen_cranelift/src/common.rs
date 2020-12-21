@@ -233,7 +233,7 @@ pub(crate) fn type_min_max_value(
             let min_msb = bcx.ins().iconst(types::I64, (min >> 64) as u64 as i64);
             let min = bcx.ins().iconcat(min_lsb, min_msb);
 
-            let max = i128::MIN as u128;
+            let max = i128::MAX as u128;
             let max_lsb = bcx.ins().iconst(types::I64, max as u64 as i64);
             let max_msb = bcx.ins().iconst(types::I64, (max >> 64) as u64 as i64);
             let max = bcx.ins().iconcat(max_lsb, max_msb);
@@ -357,17 +357,15 @@ impl<'tcx, M: Module> HasTargetSpec for FunctionCx<'_, 'tcx, M> {
 }
 
 impl<'tcx, M: Module> FunctionCx<'_, 'tcx, M> {
-    pub(crate) fn monomorphize<T>(&self, value: &T) -> T
+    pub(crate) fn monomorphize<T>(&self, value: T) -> T
     where
         T: TypeFoldable<'tcx> + Copy,
     {
-        if let Some(substs) = self.instance.substs_for_mir_body() {
-            self.tcx
-                .subst_and_normalize_erasing_regions(substs, ty::ParamEnv::reveal_all(), value)
-        } else {
-            self.tcx
-                .normalize_erasing_regions(ty::ParamEnv::reveal_all(), *value)
-        }
+        self.instance.subst_mir_and_normalize_erasing_regions(
+            self.tcx,
+            ty::ParamEnv::reveal_all(),
+            value,
+        )
     }
 
     pub(crate) fn clif_type(&self, ty: Ty<'tcx>) -> Option<Type> {
@@ -406,7 +404,7 @@ impl<'tcx, M: Module> FunctionCx<'_, 'tcx, M> {
             caller.line as u32,
             caller.col_display as u32 + 1,
         ));
-        crate::constant::trans_const_value(self, const_loc, self.tcx.caller_location_ty())
+        crate::constant::codegen_const_value(self, const_loc, self.tcx.caller_location_ty())
     }
 
     pub(crate) fn triple(&self) -> &target_lexicon::Triple {

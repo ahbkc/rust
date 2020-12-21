@@ -50,7 +50,7 @@ pub(crate) fn maybe_create_entry_wrapper(
         // late-bound regions, since late-bound
         // regions must appear in the argument
         // listing.
-        let main_ret_ty = tcx.erase_regions(&main_ret_ty.no_bound_vars().unwrap());
+        let main_ret_ty = tcx.erase_regions(main_ret_ty.no_bound_vars().unwrap());
 
         let cmain_sig = Signature {
             params: vec![
@@ -76,7 +76,7 @@ pub(crate) fn maybe_create_entry_wrapper(
             .unwrap();
 
         let mut ctx = Context::new();
-        ctx.func = Function::with_name_signature(ExternalName::user(0, 0), cmain_sig.clone());
+        ctx.func = Function::with_name_signature(ExternalName::user(0, 0), cmain_sig);
         {
             let mut func_ctx = FunctionBuilderContext::new();
             let mut bcx = FunctionBuilder::new(&mut ctx.func, &mut func_ctx);

@@ -22,7 +22,6 @@ use crate::type_error_struct;
 
 use crate::errors::{AddressOfTemporaryTaken, ReturnStmtOutsideOfFnBody, StructExprNonExhaustive};
 use rustc_ast as ast;
-use rustc_ast::util::lev_distance::find_best_match_for_name;
 use rustc_data_structures::fx::FxHashMap;
 use rustc_data_structures::stack::ensure_sufficient_stack;
 use rustc_errors::ErrorReported;
@@ -40,6 +39,7 @@ use rustc_middle::ty::Ty;
 use rustc_middle::ty::TypeFoldable;
 use rustc_middle::ty::{AdtKind, Visibility};
 use rustc_span::hygiene::DesugaringKind;
+use rustc_span::lev_distance::find_best_match_for_name;
 use rustc_span::source_map::Span;
 use rustc_span::symbol::{kw, sym, Ident, Symbol};
 use rustc_trait_selection::traits::{self, ObligationCauseCode};
@@ -494,7 +494,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                         .replace_bound_vars_with_fresh_vars(
                             expr.span,
                             infer::LateBoundRegionConversionTime::FnCall,
-                            &fn_sig.input(i),
+                            fn_sig.input(i),
                         )
                         .0;
                     self.require_type_is_sized_deferred(
@@ -514,7 +514,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 .replace_bound_vars_with_fresh_vars(
                     expr.span,
                     infer::LateBoundRegionConversionTime::FnCall,
-                    &fn_sig.output(),
+                    fn_sig.output(),
                 )
                 .0;
             self.require_type_is_sized_deferred(output, expr.span, traits::SizedReturnType);
@@ -718,39 +718,24 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         );
     }
 
-    fn is_destructuring_place_expr(&self, expr: &'tcx hir::Expr<'tcx>) -> bool {
-        match &expr.kind {
-            ExprKind::Array(comps) | ExprKind::Tup(comps) => {
-                comps.iter().all(|e| self.is_destructuring_place_expr(e))
-            }
-            ExprKind::Struct(_path, fields, rest) => {
-                rest.as_ref().map(|e| self.is_destructuring_place_expr(e)).unwrap_or(true)
-                    && fields.iter().all(|f| self.is_destructuring_place_expr(&f.expr))
-            }
-            _ => expr.is_syntactic_place_expr(),
-        }
-    }
-
     pub(crate) fn check_lhs_assignable(
         &self,
         lhs: &'tcx hir::Expr<'tcx>,
         err_code: &'static str,
         expr_span: &Span,
     ) {
-        if !lhs.is_syntactic_place_expr() {
-            // FIXME: Make this use SessionDiagnostic once error codes can be dynamically set.
-            let mut err = self.tcx.sess.struct_span_err_with_code(
-                *expr_span,
-                "invalid left-hand side of assignment",
-                DiagnosticId::Error(err_code.into()),
-            );
-            err.span_label(lhs.span, "cannot assign to this expression");
-            if self.is_destructuring_place_expr(lhs) {
-                err.note("destructuring assignments are not currently supported");
-                err.note("for more information, see https://github.com/rust-lang/rfcs/issues/372");
-            }
-            err.emit();
+        if lhs.is_syntactic_place_expr() {
+            return;
         }
+
+        // FIXME: Make this use SessionDiagnostic once error codes can be dynamically set.
+        let mut err = self.tcx.sess.struct_span_err_with_code(
+            *expr_span,
+            "invalid left-hand side of assignment",
+            DiagnosticId::Error(err_code.into()),
+        );
+        err.span_label(lhs.span, "cannot assign to this expression");
+        err.emit();
     }
 
     /// Type check assignment expression `expr` of form `lhs = rhs`.
@@ -978,9 +963,9 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         // Find the type of `e`. Supply hints based on the type we are casting to,
         // if appropriate.
         let t_cast = self.to_ty_saving_user_provided_ty(t);
-        let t_cast = self.resolve_vars_if_possible(&t_cast);
+        let t_cast = self.resolve_vars_if_possible(t_cast);
         let t_expr = self.check_expr_with_expectation(e, ExpectCastableToType(t_cast));
-        let t_cast = self.resolve_vars_if_possible(&t_cast);
+        let t_cast = self.resolve_vars_if_possible(t_cast);
 
         // Eagerly check for some obvious errors.
         if t_expr.references_error() || t_cast.references_error() {
@@ -1154,7 +1139,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                             .map(|f| {
                                 self.normalize_associated_types_in(
                                     expr.span,
-                                    &f.ty(self.tcx, substs),
+                                    f.ty(self.tcx, substs),
                                 )
                             })
                             .collect();
@@ -1263,7 +1248,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             if no_accessible_remaining_fields {
                 self.report_no_accessible_fields(adt_ty, span);
             } else {
-                self.report_missing_field(adt_ty, span, remaining_fields);
+                self.report_missing_fields(adt_ty, span, remaining_fields);
             }
         }
 
@@ -1294,7 +1279,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
     ///
     /// error: aborting due to previous error
     /// ```
-    fn report_missing_field(
+    fn report_missing_fields(
         &self,
         adt_ty: Ty<'tcx>,
         span: Span,
@@ -1456,18 +1441,22 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         field: Symbol,
         skip: Vec<Symbol>,
     ) -> Option<Symbol> {
-        let names = variant.fields.iter().filter_map(|field| {
-            // ignore already set fields and private fields from non-local crates
-            if skip.iter().any(|&x| x == field.ident.name)
-                || (!variant.def_id.is_local() && field.vis != Visibility::Public)
-            {
-                None
-            } else {
-                Some(&field.ident.name)
-            }
-        });
+        let names = variant
+            .fields
+            .iter()
+            .filter_map(|field| {
+                // ignore already set fields and private fields from non-local crates
+                if skip.iter().any(|&x| x == field.ident.name)
+                    || (!variant.def_id.is_local() && field.vis != Visibility::Public)
+                {
+                    None
+                } else {
+                    Some(field.ident.name)
+                }
+            })
+            .collect::<Vec<Symbol>>();
 
-        find_best_match_for_name(names, field, None)
+        find_best_match_for_name(&names, field, None)
     }
 
     fn available_field_names(&self, variant: &'tcx ty::VariantDef) -> Vec<Symbol> {
@@ -1586,7 +1575,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         ty: Ty<'tcx>,
     ) {
         let output_ty = match self.infcx.get_impl_future_output_ty(ty) {
-            Some(output_ty) => self.resolve_vars_if_possible(&output_ty),
+            Some(output_ty) => self.resolve_vars_if_possible(output_ty),
             _ => return,
         };
         let mut add_label = true;
@@ -1940,7 +1929,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
     }
 
     fn check_expr_asm(&self, asm: &'tcx hir::InlineAsm<'tcx>) -> Ty<'tcx> {
-        for op in asm.operands {
+        for (op, _op_sp) in asm.operands {
             match op {
                 hir::InlineAsmOperand::In { expr, .. } | hir::InlineAsmOperand::Const { expr } => {
                     self.check_expr_asm_operand(expr, true);

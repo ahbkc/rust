@@ -20,7 +20,7 @@ use rustc_data_structures::profiling::print_time_passes_entry;
 use rustc_data_structures::sync::SeqCst;
 use rustc_errors::registry::{InvalidErrorCode, Registry};
 use rustc_errors::{ErrorReported, PResult};
-use rustc_feature::{find_gated_cfg, UnstableFeatures};
+use rustc_feature::find_gated_cfg;
 use rustc_hir::def_id::LOCAL_CRATE;
 use rustc_interface::util::{self, collect_crate_types, get_builtin_codegen_backend};
 use rustc_interface::{interface, Queries};
@@ -223,7 +223,6 @@ fn run_compiler(
             file_loader: None,
             diagnostic_output,
             stderr: None,
-            crate_name: None,
             lint_caps: Default::default(),
             register_lints: None,
             override_queries: None,
@@ -248,11 +247,18 @@ fn run_compiler(
                 interface::run_compiler(config, |compiler| {
                     let sopts = &compiler.session().opts;
                     if sopts.describe_lints {
-                        let lint_store = rustc_lint::new_lint_store(
+                        let mut lint_store = rustc_lint::new_lint_store(
                             sopts.debugging_opts.no_interleave_lints,
                             compiler.session().unstable_options(),
                         );
-                        describe_lints(compiler.session(), &lint_store, false);
+                        let registered_lints =
+                            if let Some(register_lints) = compiler.register_lints() {
+                                register_lints(compiler.session(), &mut lint_store);
+                                true
+                            } else {
+                                false
+                            };
+                        describe_lints(compiler.session(), &lint_store, registered_lints);
                         return;
                     }
                     let should_stop = RustcDefaultCalls::print_crate_info(
@@ -300,7 +306,6 @@ fn run_compiler(
         file_loader,
         diagnostic_output,
         stderr: None,
-        crate_name: None,
         lint_caps: Default::default(),
         register_lints: None,
         override_queries: None,
@@ -746,9 +751,6 @@ impl RustcDefaultCalls {
                     }
                 }
                 Cfg => {
-                    let allow_unstable_cfg =
-                        UnstableFeatures::from_environment().is_nightly_build();
-
                     let mut cfgs = sess
                         .parse_sess
                         .config
@@ -763,7 +765,7 @@ impl RustcDefaultCalls {
                             // it, this is intended to get into Cargo and then go
                             // through to build scripts.
                             if (name != sym::target_feature || value != Some(sym::crt_dash_static))
-                                && !allow_unstable_cfg
+                                && !sess.is_nightly_build()
                                 && find_gated_cfg(|cfg_sym| cfg_sym == name).is_some()
                             {
                                 return None;
@@ -814,14 +816,14 @@ pub fn version(binary: &str, matches: &getopts::Matches) {
     }
 }
 
-fn usage(verbose: bool, include_unstable_options: bool) {
+fn usage(verbose: bool, include_unstable_options: bool, nightly_build: bool) {
     let groups = if verbose { config::rustc_optgroups() } else { config::rustc_short_optgroups() };
     let mut options = getopts::Options::new();
     for option in groups.iter().filter(|x| include_unstable_options || x.is_stable()) {
         (option.apply)(&mut options);
     }
     let message = "Usage: rustc [OPTIONS] INPUT";
-    let nightly_help = if nightly_options::is_nightly_build() {
+    let nightly_help = if nightly_build {
         "\n    -Z help             Print unstable compiler options"
     } else {
         ""
@@ -831,7 +833,7 @@ fn usage(verbose: bool, include_unstable_options: bool) {
     } else {
         "\n    --help -v           Print the full set of options rustc accepts"
     };
-    let at_path = if verbose && nightly_options::is_nightly_build() {
+    let at_path = if verbose && nightly_build {
         "    @path               Read newline separated options from `path`\n"
     } else {
         ""
@@ -957,10 +959,7 @@ Available lint options:
 
     match (loaded_plugins, plugin.len(), plugin_groups.len()) {
         (false, 0, _) | (false, _, 0) => {
-            println!(
-                "Compiler plugins can provide additional lints and lint groups. To see a \
-                      listing of these, re-run `rustc -W help` with a crate filename."
-            );
+            println!("Lint tools like Clippy can provide additional lints and lint groups.");
         }
         (false, ..) => panic!("didn't load lint plugins but got them anyway!"),
         (true, 0, 0) => println!("This crate does not load any lint plugins or lint groups."),
@@ -1034,7 +1033,9 @@ pub fn handle_options(args: &[String]) -> Option<getopts::Matches> {
     if args.is_empty() {
         // user did not write `-v` nor `-Z unstable-options`, so do not
         // include that extra information.
-        usage(false, false);
+        let nightly_build =
+            rustc_feature::UnstableFeatures::from_environment(None).is_nightly_build();
+        usage(false, false, nightly_build);
         return None;
     }
 
@@ -1063,7 +1064,9 @@ pub fn handle_options(args: &[String]) -> Option<getopts::Matches> {
 
     if matches.opt_present("h") || matches.opt_present("help") {
         // Only show unstable options in --help if we accept unstable options.
-        usage(matches.opt_present("verbose"), nightly_options::is_unstable_enabled(&matches));
+        let unstable_enabled = nightly_options::is_unstable_enabled(&matches);
+        let nightly_build = nightly_options::match_is_nightly_build(&matches);
+        usage(matches.opt_present("verbose"), unstable_enabled, nightly_build);
         return None;
     }
 
@@ -1283,17 +1286,37 @@ pub fn init_env_logger(env: &str) {
         Ok(s) if s.is_empty() => return,
         Ok(_) => {}
     }
+    let color_logs = match std::env::var(String::from(env) + "_COLOR") {
+        Ok(value) => match value.as_ref() {
+            "always" => true,
+            "never" => false,
+            "auto" => stdout_isatty(),
+            _ => early_error(
+                ErrorOutputType::default(),
+                &format!(
+                    "invalid log color value '{}': expected one of always, never, or auto",
+                    value
+                ),
+            ),
+        },
+        Err(std::env::VarError::NotPresent) => stdout_isatty(),
+        Err(std::env::VarError::NotUnicode(_value)) => early_error(
+            ErrorOutputType::default(),
+            "non-Unicode log color value: expected one of always, never, or auto",
+        ),
+    };
     let filter = tracing_subscriber::EnvFilter::from_env(env);
     let layer = tracing_tree::HierarchicalLayer::default()
+        .with_writer(io::stderr)
         .with_indent_lines(true)
-        .with_ansi(true)
+        .with_ansi(color_logs)
         .with_targets(true)
-        .with_thread_ids(true)
-        .with_thread_names(true)
         .with_wraparound(10)
         .with_verbose_exit(true)
         .with_verbose_entry(true)
         .with_indent_amount(2);
+    #[cfg(parallel_compiler)]
+    let layer = layer.with_thread_ids(true).with_thread_names(true);
 
     use tracing_subscriber::layer::SubscriberExt;
     let subscriber = tracing_subscriber::Registry::default().with(filter).with(layer);
@@ -1312,7 +1335,7 @@ pub fn main() -> ! {
                 arg.into_string().unwrap_or_else(|arg| {
                     early_error(
                         ErrorOutputType::default(),
-                        &format!("Argument {} is not valid Unicode: {:?}", i, arg),
+                        &format!("argument {} is not valid Unicode: {:?}", i, arg),
                     )
                 })
             })

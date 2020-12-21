@@ -19,7 +19,9 @@ use rustc_middle::mir::{
 };
 use rustc_middle::ty::layout::{HasTyCtxt, LayoutError, TyAndLayout};
 use rustc_middle::ty::subst::{InternalSubsts, Subst};
-use rustc_middle::ty::{self, ConstInt, ConstKind, Instance, ParamEnv, Ty, TyCtxt, TypeFoldable};
+use rustc_middle::ty::{
+    self, ConstInt, ConstKind, Instance, ParamEnv, ScalarInt, Ty, TyCtxt, TypeFoldable,
+};
 use rustc_session::lint;
 use rustc_span::{def_id::DefId, Span};
 use rustc_target::abi::{HasDataLayout, LayoutOf, Size, TargetDataLayout};
@@ -27,10 +29,9 @@ use rustc_trait_selection::traits;
 
 use crate::const_eval::ConstEvalErr;
 use crate::interpret::{
-    self, compile_time_machine, truncate, AllocId, Allocation, ConstValue, CtfeValidationMode,
-    Frame, ImmTy, Immediate, InterpCx, InterpResult, LocalState, LocalValue, MemPlace, Memory,
-    MemoryKind, OpTy, Operand as InterpOperand, PlaceTy, Pointer, Scalar, ScalarMaybeUninit,
-    StackPopCleanup,
+    self, compile_time_machine, AllocId, Allocation, ConstValue, CtfeValidationMode, Frame, ImmTy,
+    Immediate, InterpCx, InterpResult, LocalState, LocalValue, MemPlace, Memory, MemoryKind, OpTy,
+    Operand as InterpOperand, PlaceTy, Pointer, Scalar, ScalarMaybeUninit, StackPopCleanup,
 };
 use crate::transform::MirPass;
 
@@ -178,6 +179,8 @@ impl<'mir, 'tcx> ConstPropMachine<'mir, 'tcx> {
 
 impl<'mir, 'tcx> interpret::Machine<'mir, 'tcx> for ConstPropMachine<'mir, 'tcx> {
     compile_time_machine!(<'mir, 'tcx>);
+
+    type MemoryKind = !;
 
     type MemoryExtra = ();
 
@@ -578,8 +581,7 @@ impl<'mir, 'tcx> ConstPropagator<'mir, 'tcx> {
                             Some(l) => l.to_const_int(),
                             // Invent a dummy value, the diagnostic ignores it anyway
                             None => ConstInt::new(
-                                1,
-                                left_size,
+                                ScalarInt::try_from_uint(1_u8, left_size).unwrap(),
                                 left_ty.is_signed(),
                                 left_ty.is_ptr_sized_integral(),
                             ),
@@ -745,7 +747,7 @@ impl<'mir, 'tcx> ConstPropagator<'mir, 'tcx> {
                             }
                         }
                         BinOp::BitOr => {
-                            if arg_value == truncate(u128::MAX, const_arg.layout.size)
+                            if arg_value == const_arg.layout.size.truncate(u128::MAX)
                                 || (const_arg.layout.ty.is_bool() && arg_value == 1)
                             {
                                 this.ecx.write_immediate(*const_arg, dest)?;
@@ -800,7 +802,7 @@ impl<'mir, 'tcx> ConstPropagator<'mir, 'tcx> {
             }
         }
 
-        trace!("attepting to replace {:?} with {:?}", rval, value);
+        trace!("attempting to replace {:?} with {:?}", rval, value);
         if let Err(e) = self.ecx.const_validate_operand(
             value,
             vec![],
@@ -887,6 +889,10 @@ impl<'mir, 'tcx> ConstPropagator<'mir, 'tcx> {
         let mir_opt_level = self.tcx.sess.opts.debugging_opts.mir_opt_level;
 
         if mir_opt_level == 0 {
+            return false;
+        }
+
+        if !self.tcx.consider_optimizing(|| format!("ConstantPropagation - OpTy: {:?}", op)) {
             return false;
         }
 

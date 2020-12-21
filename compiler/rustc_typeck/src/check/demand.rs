@@ -361,11 +361,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
     }
 
     fn replace_prefix(&self, s: &str, old: &str, new: &str) -> Option<String> {
-        if let Some(stripped) = s.strip_prefix(old) {
-            Some(new.to_string() + stripped)
-        } else {
-            None
-        }
+        s.strip_prefix(old).map(|stripped| new.to_string() + stripped)
     }
 
     /// This function is used to determine potential "simple" improvements or users' errors and
@@ -552,11 +548,11 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 // we may want to suggest removing a `&`.
                 if sm.is_imported(expr.span) {
                     if let Ok(src) = sm.span_to_snippet(sp) {
-                        if let Some(src) = self.replace_prefix(&src, "&", "") {
+                        if let Some(src) = src.strip_prefix('&') {
                             return Some((
                                 sp,
                                 "consider removing the borrow",
-                                src,
+                                src.to_string(),
                                 Applicability::MachineApplicable,
                             ));
                         }
@@ -587,47 +583,23 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                                 hir::Mutability::Mut => {
                                     let new_prefix = "&mut ".to_owned() + derefs;
                                     match mutbl_a {
-                                        hir::Mutability::Mut => {
-                                            if let Some(s) =
-                                                self.replace_prefix(&src, "&mut ", &new_prefix)
-                                            {
-                                                Some((s, Applicability::MachineApplicable))
-                                            } else {
-                                                None
-                                            }
-                                        }
-                                        hir::Mutability::Not => {
-                                            if let Some(s) =
-                                                self.replace_prefix(&src, "&", &new_prefix)
-                                            {
-                                                Some((s, Applicability::Unspecified))
-                                            } else {
-                                                None
-                                            }
-                                        }
+                                        hir::Mutability::Mut => self
+                                            .replace_prefix(&src, "&mut ", &new_prefix)
+                                            .map(|s| (s, Applicability::MachineApplicable)),
+                                        hir::Mutability::Not => self
+                                            .replace_prefix(&src, "&", &new_prefix)
+                                            .map(|s| (s, Applicability::Unspecified)),
                                     }
                                 }
                                 hir::Mutability::Not => {
                                     let new_prefix = "&".to_owned() + derefs;
                                     match mutbl_a {
-                                        hir::Mutability::Mut => {
-                                            if let Some(s) =
-                                                self.replace_prefix(&src, "&mut ", &new_prefix)
-                                            {
-                                                Some((s, Applicability::MachineApplicable))
-                                            } else {
-                                                None
-                                            }
-                                        }
-                                        hir::Mutability::Not => {
-                                            if let Some(s) =
-                                                self.replace_prefix(&src, "&", &new_prefix)
-                                            {
-                                                Some((s, Applicability::MachineApplicable))
-                                            } else {
-                                                None
-                                            }
-                                        }
+                                        hir::Mutability::Mut => self
+                                            .replace_prefix(&src, "&mut ", &new_prefix)
+                                            .map(|s| (s, Applicability::MachineApplicable)),
+                                        hir::Mutability::Not => self
+                                            .replace_prefix(&src, "&", &new_prefix)
+                                            .map(|s| (s, Applicability::MachineApplicable)),
                                     }
                                 }
                             } {
@@ -810,10 +782,12 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 // can be given the suggestion "u32::from(x) > y" rather than
                 // "x > y.try_into().unwrap()".
                 let lhs_expr_and_src = expected_ty_expr.and_then(|expr| {
-                    match self.tcx.sess.source_map().span_to_snippet(expr.span).ok() {
-                        Some(src) => Some((expr, src)),
-                        None => None,
-                    }
+                    self.tcx
+                        .sess
+                        .source_map()
+                        .span_to_snippet(expr.span)
+                        .ok()
+                        .map(|src| (expr, src))
                 });
                 let (span, msg, suggestion) = if let (Some((lhs_expr, lhs_src)), false) =
                     (lhs_expr_and_src, exp_to_found_is_fallible)

@@ -1,5 +1,5 @@
 use super::diagnostics::{dummy_arg, ConsumeClosingDelim, Error};
-use super::ty::{AllowPlus, RecoverQPath};
+use super::ty::{AllowPlus, RecoverQPath, RecoverReturnSign};
 use super::{FollowedByType, Parser, PathStyle};
 
 use crate::maybe_whole;
@@ -7,7 +7,7 @@ use crate::maybe_whole;
 use rustc_ast::ptr::P;
 use rustc_ast::token::{self, TokenKind};
 use rustc_ast::tokenstream::{DelimSpan, TokenStream, TokenTree};
-use rustc_ast::{self as ast, AttrStyle, AttrVec, Attribute, DUMMY_NODE_ID};
+use rustc_ast::{self as ast, AttrVec, Attribute, DUMMY_NODE_ID};
 use rustc_ast::{AssocItem, AssocItemKind, ForeignItemKind, Item, ItemKind, Mod};
 use rustc_ast::{Async, Const, Defaultness, IsAuto, Mutability, Unsafe, UseTree, UseTreeKind};
 use rustc_ast::{BindingMode, Block, FnDecl, FnSig, Param, SelfKind};
@@ -127,34 +127,19 @@ impl<'a> Parser<'a> {
 
         let (mut item, tokens) = if needs_tokens {
             let (item, tokens) = self.collect_tokens(parse_item)?;
-            (item, Some(tokens))
+            (item, tokens)
         } else {
             (parse_item(self)?, None)
         };
-
-        self.unclosed_delims.append(&mut unclosed_delims);
-
-        // Once we've parsed an item and recorded the tokens we got while
-        // parsing we may want to store `tokens` into the item we're about to
-        // return. Note, though, that we specifically didn't capture tokens
-        // related to outer attributes. The `tokens` field here may later be
-        // used with procedural macros to convert this item back into a token
-        // stream, but during expansion we may be removing attributes as we go
-        // along.
-        //
-        // If we've got inner attributes then the `tokens` we've got above holds
-        // these inner attributes. If an inner attribute is expanded we won't
-        // actually remove it from the token stream, so we'll just keep yielding
-        // it (bad!). To work around this case for now we just avoid recording
-        // `tokens` if we detect any inner attributes. This should help keep
-        // expansion correct, but we should fix this bug one day!
-        if let Some(tokens) = tokens {
-            if let Some(item) = &mut item {
-                if !item.attrs.iter().any(|attr| attr.style == AttrStyle::Inner) {
-                    item.tokens = tokens;
-                }
+        if let Some(item) = &mut item {
+            // If we captured tokens during parsing (due to encountering an `NtItem`),
+            // use those instead
+            if item.tokens.is_none() {
+                item.tokens = tokens;
             }
         }
+
+        self.unclosed_delims.append(&mut unclosed_delims);
         Ok(item)
     }
 
@@ -262,9 +247,14 @@ impl<'a> Parser<'a> {
             (ident, ItemKind::Static(ty, m, expr))
         } else if let Const::Yes(const_span) = self.parse_constness() {
             // CONST ITEM
-            self.recover_const_mut(const_span);
-            let (ident, ty, expr) = self.parse_item_global(None)?;
-            (ident, ItemKind::Const(def(), ty, expr))
+            if self.token.is_keyword(kw::Impl) {
+                // recover from `const impl`, suggest `impl const`
+                self.recover_const_impl(const_span, attrs, def())?
+            } else {
+                self.recover_const_mut(const_span);
+                let (ident, ty, expr) = self.parse_item_global(None)?;
+                (ident, ItemKind::Const(def(), ty, expr))
+            }
         } else if self.check_keyword(kw::Trait) || self.check_auto_or_unsafe_trait_item() {
             // TRAIT ITEM
             self.parse_item_trait(attrs, lo)?
@@ -1003,6 +993,36 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Recover on `const impl` with `const` already eaten.
+    fn recover_const_impl(
+        &mut self,
+        const_span: Span,
+        attrs: &mut Vec<Attribute>,
+        defaultness: Defaultness,
+    ) -> PResult<'a, ItemInfo> {
+        let impl_span = self.token.span;
+        let mut err = self.expected_ident_found();
+        let mut impl_info = self.parse_item_impl(attrs, defaultness)?;
+        match impl_info.1 {
+            // only try to recover if this is implementing a trait for a type
+            ItemKind::Impl { of_trait: Some(ref trai), ref mut constness, .. } => {
+                *constness = Const::Yes(const_span);
+
+                let before_trait = trai.path.span.shrink_to_lo();
+                let const_up_to_impl = const_span.with_hi(impl_span.lo());
+                err.multipart_suggestion(
+                    "you might have meant to write a const trait impl",
+                    vec![(const_up_to_impl, "".to_owned()), (before_trait, "const ".to_owned())],
+                    Applicability::MaybeIncorrect,
+                )
+                .emit();
+            }
+            ItemKind::Impl { .. } => return Err(err),
+            _ => unreachable!(),
+        }
+        Ok(impl_info)
+    }
+
     /// Parse `["const" | ("static" "mut"?)] $ident ":" $ty (= $expr)?` with
     /// `["const" | ("static" "mut"?)]` already parsed and stored in `m`.
     ///
@@ -1529,7 +1549,7 @@ impl<'a> Parser<'a> {
         let header = self.parse_fn_front_matter()?; // `const ... fn`
         let ident = self.parse_ident()?; // `foo`
         let mut generics = self.parse_generics()?; // `<'a, T, ...>`
-        let decl = self.parse_fn_decl(req_name, AllowPlus::Yes)?; // `(p: u8, ...)`
+        let decl = self.parse_fn_decl(req_name, AllowPlus::Yes, RecoverReturnSign::Yes)?; // `(p: u8, ...)`
         generics.where_clause = self.parse_where_clause()?; // `where T: Ord`
 
         let mut sig_hi = self.prev_token.span;
@@ -1660,10 +1680,11 @@ impl<'a> Parser<'a> {
         &mut self,
         req_name: ReqName,
         ret_allow_plus: AllowPlus,
+        recover_return_sign: RecoverReturnSign,
     ) -> PResult<'a, P<FnDecl>> {
         Ok(P(FnDecl {
             inputs: self.parse_fn_params(req_name)?,
-            output: self.parse_ret_ty(ret_allow_plus, RecoverQPath::Yes)?,
+            output: self.parse_ret_ty(ret_allow_plus, RecoverQPath::Yes, recover_return_sign)?,
         }))
     }
 

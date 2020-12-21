@@ -206,8 +206,10 @@ impl f32 {
     /// Fused multiply-add. Computes `(self * a) + b` with only one rounding
     /// error, yielding a more accurate result than an unfused multiply-add.
     ///
-    /// Using `mul_add` can be more performant than an unfused multiply-add if
-    /// the target architecture has a dedicated `fma` CPU instruction.
+    /// Using `mul_add` *may* be more performant than an unfused multiply-add if
+    /// the target architecture has a dedicated `fma` CPU instruction. However,
+    /// this is not always true, and will be heavily dependant on designing
+    /// algorithms with specific target hardware in mind.
     ///
     /// # Examples
     ///
@@ -719,12 +721,13 @@ impl f32 {
     /// # Examples
     ///
     /// ```
-    /// let x = 6.0f32;
+    /// let x = 1e-8_f32;
     ///
-    /// // e^(ln(6)) - 1
-    /// let abs_difference = (x.ln().exp_m1() - 5.0).abs();
+    /// // for very small x, e^x is approximately 1 + x + x^2 / 2
+    /// let approx = x + x * x / 2.0;
+    /// let abs_difference = (x.exp_m1() - approx).abs();
     ///
-    /// assert!(abs_difference <= f32::EPSILON);
+    /// assert!(abs_difference < 1e-10);
     /// ```
     #[must_use = "method returns a new number and does not mutate the original value"]
     #[stable(feature = "rust1", since = "1.0.0")]
@@ -739,12 +742,13 @@ impl f32 {
     /// # Examples
     ///
     /// ```
-    /// let x = std::f32::consts::E - 1.0;
+    /// let x = 1e-8_f32;
     ///
-    /// // ln(1 + (e - 1)) == ln(e) == 1
-    /// let abs_difference = (x.ln_1p() - 1.0).abs();
+    /// // for very small x, ln(1 + x) is approximately x - x^2 / 2
+    /// let approx = x - x * x / 2.0;
+    /// let abs_difference = (x.ln_1p() - approx).abs();
     ///
-    /// assert!(abs_difference <= f32::EPSILON);
+    /// assert!(abs_difference < 1e-10);
     /// ```
     #[must_use = "method returns a new number and does not mutate the original value"]
     #[stable(feature = "rust1", since = "1.0.0")]
@@ -874,41 +878,5 @@ impl f32 {
     #[inline]
     pub fn atanh(self) -> f32 {
         0.5 * ((2.0 * self) / (1.0 - self)).ln_1p()
-    }
-
-    /// Restrict a value to a certain interval unless it is NaN.
-    ///
-    /// Returns `max` if `self` is greater than `max`, and `min` if `self` is
-    /// less than `min`. Otherwise this returns `self`.
-    ///
-    /// Note that this function returns NaN if the initial value was NaN as
-    /// well.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `min > max`, `min` is NaN, or `max` is NaN.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// #![feature(clamp)]
-    /// assert!((-3.0f32).clamp(-2.0, 1.0) == -2.0);
-    /// assert!((0.0f32).clamp(-2.0, 1.0) == 0.0);
-    /// assert!((2.0f32).clamp(-2.0, 1.0) == 1.0);
-    /// assert!((f32::NAN).clamp(-2.0, 1.0).is_nan());
-    /// ```
-    #[must_use = "method returns a new number and does not mutate the original value"]
-    #[unstable(feature = "clamp", issue = "44095")]
-    #[inline]
-    pub fn clamp(self, min: f32, max: f32) -> f32 {
-        assert!(min <= max);
-        let mut x = self;
-        if x < min {
-            x = min;
-        }
-        if x > max {
-            x = max;
-        }
-        x
     }
 }

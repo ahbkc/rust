@@ -10,9 +10,8 @@
 
 use std::env;
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 
 use build_helper::{output, t};
 
@@ -524,16 +523,19 @@ impl Step for Rustc {
             // component for now.
             maybe_install_llvm_runtime(builder, host, image);
 
+            let src_dir = builder.sysroot_libdir(compiler, host).parent().unwrap().join("bin");
+            let dst_dir = image.join("lib/rustlib").join(&*host.triple).join("bin");
+            t!(fs::create_dir_all(&dst_dir));
+
             // Copy over lld if it's there
             if builder.config.lld_enabled {
                 let exe = exe("rust-lld", compiler.host);
-                let src =
-                    builder.sysroot_libdir(compiler, host).parent().unwrap().join("bin").join(&exe);
-                // for the rationale about this rename check `compile::copy_lld_to_sysroot`
-                let dst = image.join("lib/rustlib").join(&*host.triple).join("bin").join(&exe);
-                t!(fs::create_dir_all(&dst.parent().unwrap()));
-                builder.copy(&src, &dst);
+                builder.copy(&src_dir.join(&exe), &dst_dir.join(&exe));
             }
+
+            // Copy over llvm-dwp if it's there
+            let exe = exe("rust-llvm-dwp", compiler.host);
+            builder.copy(&src_dir.join(&exe), &dst_dir.join(&exe));
 
             // Man pages
             t!(fs::create_dir_all(image.join("share/man/man1")));
@@ -1162,7 +1164,11 @@ impl Step for PlainSourceTarball {
 // characters and on `C:\` paths, so normalize both of them away.
 pub fn sanitize_sh(path: &Path) -> String {
     let path = path.to_str().unwrap().replace("\\", "/");
-    return change_drive(&path).unwrap_or(path);
+    return change_drive(unc_to_lfs(&path)).unwrap_or(path);
+
+    fn unc_to_lfs(s: &str) -> &str {
+        s.strip_prefix("//?/").unwrap_or(s)
+    }
 
     fn change_drive(s: &str) -> Option<String> {
         let mut ch = s.chars();
@@ -1222,6 +1228,12 @@ impl Step for Cargo {
         builder.create_dir(&image.join("etc/bash_completion.d"));
         let cargo = builder.ensure(tool::Cargo { compiler, target });
         builder.install(&cargo, &image.join("bin"), 0o755);
+        for dirent in fs::read_dir(cargo.parent().unwrap()).expect("read_dir") {
+            let dirent = dirent.expect("read dir entry");
+            if dirent.file_name().to_str().expect("utf8").starts_with("cargo-credential-") {
+                builder.install(&dirent.path(), &image.join("libexec"), 0o755);
+            }
+        }
         for man in t!(etc.join("man").read_dir()) {
             let man = t!(man);
             builder.install(&man.path(), &image.join("share/man/man1"), 0o644);
@@ -2323,61 +2335,6 @@ fn add_env(builder: &Builder<'_>, cmd: &mut Command, target: TargetSelection) {
     }
 }
 
-#[derive(Debug, PartialOrd, Ord, Copy, Clone, Hash, PartialEq, Eq)]
-pub struct HashSign;
-
-impl Step for HashSign {
-    type Output = ();
-    const ONLY_HOSTS: bool = true;
-
-    fn should_run(run: ShouldRun<'_>) -> ShouldRun<'_> {
-        run.path("hash-and-sign")
-    }
-
-    fn make_run(run: RunConfig<'_>) {
-        run.builder.ensure(HashSign);
-    }
-
-    fn run(self, builder: &Builder<'_>) {
-        // This gets called by `promote-release`
-        // (https://github.com/rust-lang/rust-central-station/tree/master/promote-release).
-        let mut cmd = builder.tool_cmd(Tool::BuildManifest);
-        if builder.config.dry_run {
-            return;
-        }
-        let sign = builder.config.dist_sign_folder.as_ref().unwrap_or_else(|| {
-            panic!("\n\nfailed to specify `dist.sign-folder` in `config.toml`\n\n")
-        });
-        let addr = builder.config.dist_upload_addr.as_ref().unwrap_or_else(|| {
-            panic!("\n\nfailed to specify `dist.upload-addr` in `config.toml`\n\n")
-        });
-        let pass = if env::var("BUILD_MANIFEST_DISABLE_SIGNING").is_err() {
-            let file = builder.config.dist_gpg_password_file.as_ref().unwrap_or_else(|| {
-                panic!("\n\nfailed to specify `dist.gpg-password-file` in `config.toml`\n\n")
-            });
-            t!(fs::read_to_string(&file))
-        } else {
-            String::new()
-        };
-
-        let today = output(Command::new("date").arg("+%Y-%m-%d"));
-
-        cmd.arg(sign);
-        cmd.arg(distdir(builder));
-        cmd.arg(today.trim());
-        cmd.arg(addr);
-        cmd.arg(&builder.config.channel);
-        cmd.env("BUILD_MANIFEST_LEGACY", "1");
-
-        builder.create_dir(&distdir(builder));
-
-        let mut child = t!(cmd.stdin(Stdio::piped()).spawn());
-        t!(child.stdin.take().unwrap().write_all(pass.as_bytes()));
-        let status = t!(child.wait());
-        assert!(status.success());
-    }
-}
-
 /// Maybe add libLLVM.so to the given destination lib-dir. It will only have
 /// been built if LLVM tools are linked dynamically.
 ///
@@ -2389,6 +2346,25 @@ fn maybe_install_llvm(builder: &Builder<'_>, target: TargetSelection, dst_libdir
         // dynamically linked; it is already included into librustc_llvm
         // statically.
         return;
+    }
+
+    if let Some(config) = builder.config.target_config.get(&target) {
+        if config.llvm_config.is_some() && !builder.config.llvm_from_ci {
+            // If the LLVM was externally provided, then we don't currently copy
+            // artifacts into the sysroot. This is not necessarily the right
+            // choice (in particular, it will require the LLVM dylib to be in
+            // the linker's load path at runtime), but the common use case for
+            // external LLVMs is distribution provided LLVMs, and in that case
+            // they're usually in the standard search path (e.g., /usr/lib) and
+            // copying them here is going to cause problems as we may end up
+            // with the wrong files and isn't what distributions want.
+            //
+            // This behavior may be revisited in the future though.
+            //
+            // If the LLVM is coming from ourselves (just from CI) though, we
+            // still want to install it, as it otherwise won't be available.
+            return;
+        }
     }
 
     // On macOS, rustc (and LLVM tools) link to an unversioned libLLVM.dylib
@@ -2561,6 +2537,7 @@ impl Step for RustDev {
         install_bin("llvm-profdata");
         install_bin("llvm-bcanalyzer");
         install_bin("llvm-cov");
+        install_bin("llvm-dwp");
         builder.install(&builder.llvm_filecheck(target), &dst_bindir, 0o755);
 
         // Copy the include directory as well; needed mostly to build

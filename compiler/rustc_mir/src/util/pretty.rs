@@ -495,7 +495,7 @@ fn write_scope_tree(
 
         let indented_debug_info = format!(
             "{0:1$}debug {2} => {3:?};",
-            INDENT, indent, var_debug_info.name, var_debug_info.place,
+            INDENT, indent, var_debug_info.name, var_debug_info.value,
         );
 
         writeln!(
@@ -630,7 +630,7 @@ pub fn write_allocations<'tcx>(
             ConstValue::Scalar(interpret::Scalar::Ptr(ptr)) => {
                 Either::Left(Either::Left(std::iter::once(ptr.alloc_id)))
             }
-            ConstValue::Scalar(interpret::Scalar::Raw { .. }) => {
+            ConstValue::Scalar(interpret::Scalar::Int { .. }) => {
                 Either::Left(Either::Right(std::iter::empty()))
             }
             ConstValue::ByRef { alloc, .. } | ConstValue::Slice { data: alloc, .. } => {
@@ -640,7 +640,7 @@ pub fn write_allocations<'tcx>(
     }
     struct CollectAllocIds(BTreeSet<AllocId>);
     impl<'tcx> TypeVisitor<'tcx> for CollectAllocIds {
-        fn visit_const(&mut self, c: &'tcx ty::Const<'tcx>) -> ControlFlow<()> {
+        fn visit_const(&mut self, c: &'tcx ty::Const<'tcx>) -> ControlFlow<Self::BreakTy> {
             if let ty::ConstKind::Value(val) = c.val {
                 self.0.extend(alloc_ids_from_const(val));
             }

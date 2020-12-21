@@ -298,9 +298,7 @@ impl<'a> PathSource<'a> {
                     _,
                 )
                 | Res::SelfCtor(..)),
-            PathSource::TupleStruct(..) => {
-                matches!(res, Res::Def(DefKind::Ctor(_, CtorKind::Fn), _) | Res::SelfCtor(..))
-            }
+            PathSource::TupleStruct(..) => res.expected_in_tuple_struct_pat(),
             PathSource::Struct => matches!(res, Res::Def(
                     DefKind::Struct
                     | DefKind::Union
@@ -339,8 +337,8 @@ impl<'a> PathSource<'a> {
 
 #[derive(Default)]
 struct DiagnosticMetadata<'ast> {
-    /// The current trait's associated types' ident, used for diagnostic suggestions.
-    current_trait_assoc_types: Vec<Ident>,
+    /// The current trait's associated items' ident, used for diagnostic suggestions.
+    current_trait_assoc_items: Option<&'ast [P<AssocItem>]>,
 
     /// The current self type if inside an impl (used for better errors).
     current_self_type: Option<Ty>,
@@ -677,7 +675,7 @@ impl<'a: 'ast, 'b, 'ast> LateResolutionVisitor<'a, 'b, 'ast> {
         // During late resolution we only track the module component of the parent scope,
         // although it may be useful to track other components as well for diagnostics.
         let graph_root = resolver.graph_root;
-        let parent_scope = ParentScope::module(graph_root);
+        let parent_scope = ParentScope::module(graph_root, resolver);
         let start_rib_kind = ModuleRibKind(graph_root);
         LateResolutionVisitor {
             r: resolver,
@@ -1157,26 +1155,18 @@ impl<'a: 'ast, 'b, 'ast> LateResolutionVisitor<'a, 'b, 'ast> {
         result
     }
 
-    /// When evaluating a `trait` use its associated types' idents for suggestionsa in E0412.
+    /// When evaluating a `trait` use its associated types' idents for suggestions in E0412.
     fn with_trait_items<T>(
         &mut self,
-        trait_items: &Vec<P<AssocItem>>,
+        trait_items: &'ast Vec<P<AssocItem>>,
         f: impl FnOnce(&mut Self) -> T,
     ) -> T {
-        let trait_assoc_types = replace(
-            &mut self.diagnostic_metadata.current_trait_assoc_types,
-            trait_items
-                .iter()
-                .filter_map(|item| match &item.kind {
-                    AssocItemKind::TyAlias(_, _, bounds, _) if bounds.is_empty() => {
-                        Some(item.ident)
-                    }
-                    _ => None,
-                })
-                .collect(),
+        let trait_assoc_items = replace(
+            &mut self.diagnostic_metadata.current_trait_assoc_items,
+            Some(&trait_items[..]),
         );
         let result = f(self);
-        self.diagnostic_metadata.current_trait_assoc_types = trait_assoc_types;
+        self.diagnostic_metadata.current_trait_assoc_items = trait_assoc_items;
         result
     }
 

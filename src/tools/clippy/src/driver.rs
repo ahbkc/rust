@@ -8,7 +8,6 @@
 
 // FIXME: switch to something more ergonomic here, once available.
 // (Currently there is no way to opt into sysroot crates without `extern crate`.)
-extern crate rustc_data_structures;
 extern crate rustc_driver;
 extern crate rustc_errors;
 extern crate rustc_interface;
@@ -26,8 +25,6 @@ use std::panic;
 use std::path::{Path, PathBuf};
 use std::process::{exit, Command};
 
-mod lintlist;
-
 /// If a command-line option matches `find_arg`, then apply the predicate `pred` on its value. If
 /// true, then return it. The parameter is assumed to be either `--arg=value` or `--arg value`.
 fn arg_value<'a, T: Deref<Target = str>>(
@@ -44,7 +41,7 @@ fn arg_value<'a, T: Deref<Target = str>>(
 
         match arg.next().or_else(|| args.next()) {
             Some(v) if pred(v) => return Some(v),
-            _ => {},
+            _ => {}
         }
     }
     None
@@ -92,113 +89,6 @@ impl rustc_driver::Callbacks for ClippyCallbacks {
     }
 }
 
-#[allow(clippy::find_map, clippy::filter_map)]
-fn describe_lints() {
-    use lintlist::{Level, Lint, ALL_LINTS, LINT_LEVELS};
-    use rustc_data_structures::fx::FxHashSet;
-
-    println!(
-        "
-Available lint options:
-    -W <foo>           Warn about <foo>
-    -A <foo>           Allow <foo>
-    -D <foo>           Deny <foo>
-    -F <foo>           Forbid <foo> (deny <foo> and all attempts to override)
-
-"
-    );
-
-    let lint_level = |lint: &Lint| {
-        LINT_LEVELS
-            .iter()
-            .find(|level_mapping| level_mapping.0 == lint.group)
-            .map(|(_, level)| match level {
-                Level::Allow => "allow",
-                Level::Warn => "warn",
-                Level::Deny => "deny",
-            })
-            .unwrap()
-    };
-
-    let mut lints: Vec<_> = ALL_LINTS.iter().collect();
-    // The sort doesn't case-fold but it's doubtful we care.
-    lints.sort_by_cached_key(|x: &&Lint| (lint_level(x), x.name));
-
-    let max_lint_name_len = lints
-        .iter()
-        .map(|lint| lint.name.len())
-        .map(|len| len + "clippy::".len())
-        .max()
-        .unwrap_or(0);
-
-    let padded = |x: &str| {
-        let mut s = " ".repeat(max_lint_name_len - x.chars().count());
-        s.push_str(x);
-        s
-    };
-
-    let scoped = |x: &str| format!("clippy::{}", x);
-
-    let lint_groups: FxHashSet<_> = lints.iter().map(|lint| lint.group).collect();
-
-    println!("Lint checks provided by clippy:\n");
-    println!("    {}  {:7.7}  meaning", padded("name"), "default");
-    println!("    {}  {:7.7}  -------", padded("----"), "-------");
-
-    let print_lints = |lints: &[&Lint]| {
-        for lint in lints {
-            let name = lint.name.replace("_", "-");
-            println!(
-                "    {}  {:7.7}  {}",
-                padded(&scoped(&name)),
-                lint_level(lint),
-                lint.desc
-            );
-        }
-        println!("\n");
-    };
-
-    print_lints(&lints);
-
-    let max_group_name_len = std::cmp::max(
-        "clippy::all".len(),
-        lint_groups
-            .iter()
-            .map(|group| group.len())
-            .map(|len| len + "clippy::".len())
-            .max()
-            .unwrap_or(0),
-    );
-
-    let padded_group = |x: &str| {
-        let mut s = " ".repeat(max_group_name_len - x.chars().count());
-        s.push_str(x);
-        s
-    };
-
-    println!("Lint groups provided by clippy:\n");
-    println!("    {}  sub-lints", padded_group("name"));
-    println!("    {}  ---------", padded_group("----"));
-    println!("    {}  the set of all clippy lints", padded_group("clippy::all"));
-
-    let print_lint_groups = || {
-        for group in lint_groups {
-            let name = group.to_lowercase().replace("_", "-");
-            let desc = lints
-                .iter()
-                .filter(|&lint| lint.group == group)
-                .map(|lint| lint.name)
-                .map(|name| name.replace("_", "-"))
-                .collect::<Vec<String>>()
-                .join(", ");
-            println!("    {}  {}", padded_group(&scoped(&name)), desc);
-        }
-        println!("\n");
-    };
-
-    print_lint_groups();
-}
-
 fn display_help() {
     println!(
         "\
@@ -231,11 +121,12 @@ You can use tool lints to allow or deny lints from your code, eg.:
 
 const BUG_REPORT_URL: &str = "https://github.com/rust-lang/rust-clippy/issues/new";
 
-static ICE_HOOK: SyncLazy<Box<dyn Fn(&panic::PanicInfo<'_>) + Sync + Send + 'static>> = SyncLazy::new(|| {
-    let hook = panic::take_hook();
-    panic::set_hook(Box::new(|info| report_clippy_ice(info, BUG_REPORT_URL)));
-    hook
-});
+static ICE_HOOK: SyncLazy<Box<dyn Fn(&panic::PanicInfo<'_>) + Sync + Send + 'static>> =
+    SyncLazy::new(|| {
+        let hook = panic::take_hook();
+        panic::set_hook(Box::new(|info| report_clippy_ice(info, BUG_REPORT_URL)));
+        hook
+    });
 
 fn report_clippy_ice(info: &panic::PanicInfo<'_>, bug_report_url: &str) {
     // Invoke our ICE handler, which prints the actual panic message and optionally a backtrace
@@ -367,26 +258,18 @@ pub fn main() {
 
         // Setting RUSTC_WRAPPER causes Cargo to pass 'rustc' as the first argument.
         // We're invoking the compiler programmatically, so we ignore this/
-        let wrapper_mode = orig_args.get(1).map(Path::new).and_then(Path::file_stem) == Some("rustc".as_ref());
+        let wrapper_mode =
+            orig_args.get(1).map(Path::new).and_then(Path::file_stem) == Some("rustc".as_ref());
 
         if wrapper_mode {
             // we still want to be able to invoke it normally though
             orig_args.remove(1);
         }
 
-        if !wrapper_mode && (orig_args.iter().any(|a| a == "--help" || a == "-h") || orig_args.len() == 1) {
+        if !wrapper_mode
+            && (orig_args.iter().any(|a| a == "--help" || a == "-h") || orig_args.len() == 1)
+        {
             display_help();
-            exit(0);
-        }
-
-        let should_describe_lints = || {
-            let args: Vec<_> = env::args().collect();
-            args.windows(2)
-                .any(|args| args[1] == "help" && matches!(args[0].as_str(), "-W" | "-A" | "-D" | "-F"))
-        };
-
-        if !wrapper_mode && should_describe_lints() {
-            describe_lints();
             exit(0);
         }
 
@@ -406,13 +289,11 @@ pub fn main() {
         if clippy_enabled {
             args.extend(vec!["--cfg".into(), r#"feature="cargo-clippy""#.into()]);
             if let Ok(extra_args) = env::var("CLIPPY_ARGS") {
-                args.extend(extra_args.split("__CLIPPY_HACKERY__").filter_map(|s| {
-                    if s.is_empty() {
-                        None
-                    } else {
-                        Some(s.to_string())
-                    }
-                }));
+                args.extend(
+                    extra_args
+                        .split("__CLIPPY_HACKERY__")
+                        .filter_map(|s| if s.is_empty() { None } else { Some(s.to_string()) }),
+                );
             }
         }
         let mut clippy = ClippyCallbacks;

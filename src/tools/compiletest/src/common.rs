@@ -17,6 +17,7 @@ pub enum Mode {
     DebugInfo,
     Codegen,
     Rustdoc,
+    RustdocJson,
     CodegenUnits,
     Incremental,
     RunMake,
@@ -48,6 +49,7 @@ impl FromStr for Mode {
             "debuginfo" => Ok(DebugInfo),
             "codegen" => Ok(Codegen),
             "rustdoc" => Ok(Rustdoc),
+            "rustdoc-json" => Ok(RustdocJson),
             "codegen-units" => Ok(CodegenUnits),
             "incremental" => Ok(Incremental),
             "run-make" => Ok(RunMake),
@@ -70,6 +72,7 @@ impl fmt::Display for Mode {
             DebugInfo => "debuginfo",
             Codegen => "codegen",
             Rustdoc => "rustdoc",
+            RustdocJson => "rustdoc-json",
             CodegenUnits => "codegen-units",
             Incremental => "incremental",
             RunMake => "run-make",
@@ -124,6 +127,8 @@ pub enum CompareMode {
     Nll,
     Polonius,
     Chalk,
+    SplitDwarf,
+    SplitDwarfSingle,
 }
 
 impl CompareMode {
@@ -132,6 +137,8 @@ impl CompareMode {
             CompareMode::Nll => "nll",
             CompareMode::Polonius => "polonius",
             CompareMode::Chalk => "chalk",
+            CompareMode::SplitDwarf => "split-dwarf",
+            CompareMode::SplitDwarfSingle => "split-dwarf-single",
         }
     }
 
@@ -140,6 +147,8 @@ impl CompareMode {
             "nll" => CompareMode::Nll,
             "polonius" => CompareMode::Polonius,
             "chalk" => CompareMode::Chalk,
+            "split-dwarf" => CompareMode::SplitDwarf,
+            "split-dwarf-single" => CompareMode::SplitDwarfSingle,
             x => panic!("unknown --compare-mode option: {}", x),
         }
     }
@@ -223,6 +232,10 @@ pub struct Config {
 
     /// The test mode, compile-fail, run-fail, ui
     pub mode: Mode,
+
+    /// The test suite (essentially which directory is running, but without the
+    /// directory prefix such as src/test)
+    pub suite: String,
 
     /// The debugger to use in debuginfo mode. Unset otherwise.
     pub debugger: Option<Debugger>,
@@ -319,6 +332,9 @@ pub struct Config {
     /// diagnostics but are missing `run-rustfix` annotations. The generated coverage file is
     /// created in `/<build_base>/rustfix_missing_coverage.txt`
     pub rustfix_coverage: bool,
+
+    /// whether to run `tidy` when a rustdoc test fails
+    pub has_tidy: bool,
 
     // Configuration for various run-make tests frobbing things like C compilers
     // or querying about various LLVM component information.

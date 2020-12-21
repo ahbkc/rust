@@ -64,7 +64,7 @@ pub(crate) fn fn_sig_for_fn_abi<'tcx>(tcx: TyCtxt<'tcx>, instance: Instance<'tcx
         ty::Generator(_, substs, _) => {
             let sig = substs.as_generator().poly_sig();
 
-            let env_region = ty::ReLateBound(ty::INNERMOST, ty::BrEnv);
+            let env_region = ty::ReLateBound(ty::INNERMOST, ty::BoundRegion { kind: ty::BrEnv });
             let env_ty = tcx.mk_mut_ref(tcx.mk_region(env_region), ty);
 
             let pin_did = tcx.require_lang_item(rustc_hir::LangItem::Pin, None);
@@ -214,10 +214,8 @@ pub(crate) fn get_function_name_and_sig<'tcx>(
     support_vararg: bool,
 ) -> (String, Signature) {
     assert!(!inst.substs.needs_infer());
-    let fn_sig = tcx.normalize_erasing_late_bound_regions(
-        ParamEnv::reveal_all(),
-        &fn_sig_for_fn_abi(tcx, inst),
-    );
+    let fn_sig = tcx
+        .normalize_erasing_late_bound_regions(ParamEnv::reveal_all(), fn_sig_for_fn_abi(tcx, inst));
     if fn_sig.c_variadic && !support_vararg {
         tcx.sess.span_fatal(
             tcx.def_span(inst.def_id()),
@@ -300,7 +298,7 @@ impl<'tcx, M: Module> FunctionCx<'_, 'tcx, M> {
         return_ty: Ty<'tcx>,
     ) -> CValue<'tcx> {
         let (input_tys, args): (Vec<_>, Vec<_>) = args
-            .into_iter()
+            .iter()
             .map(|arg| {
                 (
                     self.clif_type(arg.layout().ty).unwrap(),
@@ -372,7 +370,7 @@ pub(crate) fn codegen_fn_prelude<'tcx>(
         .mir
         .args_iter()
         .map(|local| {
-            let arg_ty = fx.monomorphize(&fx.mir.local_decls[local].ty);
+            let arg_ty = fx.monomorphize(fx.mir.local_decls[local].ty);
 
             // Adapted from https://github.com/rust-lang/rust/blob/145155dc96757002c7b2e9de8489416e2fdbbd57/src/librustc_codegen_llvm/mir/mod.rs#L442-L482
             if Some(local) == fx.mir.spread_arg {
@@ -421,34 +419,31 @@ pub(crate) fn codegen_fn_prelude<'tcx>(
 
         // While this is normally an optimization to prevent an unnecessary copy when an argument is
         // not mutated by the current function, this is necessary to support unsized arguments.
-        match arg_kind {
-            ArgKind::Normal(Some(val)) => {
-                if let Some((addr, meta)) = val.try_to_ptr() {
-                    let local_decl = &fx.mir.local_decls[local];
-                    //                       v this ! is important
-                    let internally_mutable = !val.layout().ty.is_freeze(
-                        fx.tcx.at(local_decl.source_info.span),
-                        ParamEnv::reveal_all(),
-                    );
-                    if local_decl.mutability == mir::Mutability::Not && !internally_mutable {
-                        // We wont mutate this argument, so it is fine to borrow the backing storage
-                        // of this argument, to prevent a copy.
+        if let ArgKind::Normal(Some(val)) = arg_kind {
+            if let Some((addr, meta)) = val.try_to_ptr() {
+                let local_decl = &fx.mir.local_decls[local];
+                //                       v this ! is important
+                let internally_mutable = !val.layout().ty.is_freeze(
+                    fx.tcx.at(local_decl.source_info.span),
+                    ParamEnv::reveal_all(),
+                );
+                if local_decl.mutability == mir::Mutability::Not && !internally_mutable {
+                    // We wont mutate this argument, so it is fine to borrow the backing storage
+                    // of this argument, to prevent a copy.
 
-                        let place = if let Some(meta) = meta {
-                            CPlace::for_ptr_with_extra(addr, meta, val.layout())
-                        } else {
-                            CPlace::for_ptr(addr, val.layout())
-                        };
+                    let place = if let Some(meta) = meta {
+                        CPlace::for_ptr_with_extra(addr, meta, val.layout())
+                    } else {
+                        CPlace::for_ptr(addr, val.layout())
+                    };
 
-                        #[cfg(debug_assertions)]
-                        self::comments::add_local_place_comments(fx, place, local);
+                    #[cfg(debug_assertions)]
+                    self::comments::add_local_place_comments(fx, place, local);
 
-                        assert_eq!(fx.local_map.push(place), local);
-                        continue;
-                    }
+                    assert_eq!(fx.local_map.push(place), local);
+                    continue;
                 }
             }
-            _ => {}
         }
 
         let place = make_local_place(fx, local, layout, is_ssa);
@@ -473,7 +468,7 @@ pub(crate) fn codegen_fn_prelude<'tcx>(
     }
 
     for local in fx.mir.vars_and_temps_iter() {
-        let ty = fx.monomorphize(&fx.mir.local_decls[local].ty);
+        let ty = fx.monomorphize(fx.mir.local_decls[local].ty);
         let layout = fx.layout_of(ty);
 
         let is_ssa = ssa_analyzed[local] == crate::analyze::SsaKind::Ssa;
@@ -495,12 +490,12 @@ pub(crate) fn codegen_terminator_call<'tcx>(
     args: &[Operand<'tcx>],
     destination: Option<(Place<'tcx>, BasicBlock)>,
 ) {
-    let fn_ty = fx.monomorphize(&func.ty(fx.mir, fx.tcx));
+    let fn_ty = fx.monomorphize(func.ty(fx.mir, fx.tcx));
     let fn_sig = fx
         .tcx
-        .normalize_erasing_late_bound_regions(ParamEnv::reveal_all(), &fn_ty.fn_sig(fx.tcx));
+        .normalize_erasing_late_bound_regions(ParamEnv::reveal_all(), fn_ty.fn_sig(fx.tcx));
 
-    let destination = destination.map(|(place, bb)| (trans_place(fx, place), bb));
+    let destination = destination.map(|(place, bb)| (codegen_place(fx, place), bb));
 
     // Handle special calls like instrinsics and empty drop glue.
     let instance = if let ty::FnDef(def_id, substs) = *fn_ty.kind() {
@@ -553,8 +548,8 @@ pub(crate) fn codegen_terminator_call<'tcx>(
     // Unpack arguments tuple for closures
     let args = if fn_sig.abi == Abi::RustCall {
         assert_eq!(args.len(), 2, "rust-call abi requires two arguments");
-        let self_arg = trans_operand(fx, &args[0]);
-        let pack_arg = trans_operand(fx, &args[1]);
+        let self_arg = codegen_operand(fx, &args[0]);
+        let pack_arg = codegen_operand(fx, &args[1]);
 
         let tupled_arguments = match pack_arg.layout().ty.kind() {
             ty::Tuple(ref tupled_arguments) => tupled_arguments,
@@ -568,8 +563,8 @@ pub(crate) fn codegen_terminator_call<'tcx>(
         }
         args
     } else {
-        args.into_iter()
-            .map(|arg| trans_operand(fx, arg))
+        args.iter()
+            .map(|arg| codegen_operand(fx, arg))
             .collect::<Vec<_>>()
     };
 
@@ -613,7 +608,7 @@ pub(crate) fn codegen_terminator_call<'tcx>(
                 let nop_inst = fx.bcx.ins().nop();
                 fx.add_comment(nop_inst, "indirect call");
             }
-            let func = trans_operand(fx, func).load_scalar(fx);
+            let func = codegen_operand(fx, func).load_scalar(fx);
             (
                 Some(func),
                 args.get(0)
@@ -714,7 +709,7 @@ pub(crate) fn codegen_drop<'tcx>(
         let drop_fn_ty = drop_fn.ty(fx.tcx, ParamEnv::reveal_all());
         let fn_sig = fx.tcx.normalize_erasing_late_bound_regions(
             ParamEnv::reveal_all(),
-            &drop_fn_ty.fn_sig(fx.tcx),
+            drop_fn_ty.fn_sig(fx.tcx),
         );
         assert_eq!(fn_sig.output(), fx.tcx.mk_unit());
 

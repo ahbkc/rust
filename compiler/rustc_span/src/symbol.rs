@@ -267,6 +267,7 @@ symbols! {
         asm,
         assert,
         assert_inhabited,
+        assert_macro,
         assert_receiver_is_total_eq,
         assert_uninit_valid,
         assert_zero_valid,
@@ -284,6 +285,7 @@ symbols! {
         attr_literals,
         attributes,
         augmented_assignments,
+        auto_traits,
         automatically_derived,
         avx512_target_feature,
         await_macro,
@@ -318,6 +320,7 @@ symbols! {
         call_mut,
         call_once,
         caller_location,
+        capture_disjoint_fields,
         cdylib,
         ceilf32,
         ceilf64,
@@ -326,6 +329,7 @@ symbols! {
         cfg_attr,
         cfg_attr_multi,
         cfg_doctest,
+        cfg_panic,
         cfg_sanitize,
         cfg_target_feature,
         cfg_target_has_atomic,
@@ -352,6 +356,7 @@ symbols! {
         concat_idents,
         conservative_impl_trait,
         console,
+        const_allocate,
         const_compare_raw_pointers,
         const_constructor,
         const_eval_limit,
@@ -391,6 +396,7 @@ symbols! {
         copysignf64,
         core,
         core_intrinsics,
+        core_panic_macro,
         cosf32,
         cosf64,
         crate_id,
@@ -414,6 +420,7 @@ symbols! {
         dead_code,
         dealloc,
         debug,
+        debug_assert_macro,
         debug_assertions,
         debug_struct,
         debug_trait,
@@ -434,6 +441,7 @@ symbols! {
         deref_mut,
         deref_target,
         derive,
+        destructuring_assignment,
         diagnostic,
         direct,
         discriminant_kind,
@@ -452,6 +460,9 @@ symbols! {
         document_private_items,
         dotdot_in_tuple_patterns,
         dotdoteq_in_patterns,
+        dreg,
+        dreg_low16,
+        dreg_low8,
         drop,
         drop_in_place,
         drop_types_in_const,
@@ -488,6 +499,7 @@ symbols! {
         expf64,
         export_name,
         expr,
+        extended_key_value_attributes,
         extern_absolute_paths,
         extern_crate_item_prelude,
         extern_crate_self,
@@ -535,6 +547,7 @@ symbols! {
         format_args_capture,
         format_args_nl,
         freeze,
+        freg,
         frem_fast,
         from,
         from_desugaring,
@@ -618,6 +631,7 @@ symbols! {
         iter,
         keyword,
         kind,
+        kreg,
         label,
         label_break_value,
         lang,
@@ -643,6 +657,7 @@ symbols! {
         lint_reasons,
         literal,
         llvm_asm,
+        local,
         local_inner_macros,
         log10f32,
         log10f64,
@@ -786,6 +801,7 @@ symbols! {
         panic_runtime,
         panic_str,
         panic_unwind,
+        panicking,
         param_attrs,
         parent_trait,
         partial_cmp,
@@ -844,6 +860,9 @@ symbols! {
         pub_restricted,
         pure,
         pushpop_unsafe,
+        qreg,
+        qreg_low4,
+        qreg_low8,
         quad_precision_float,
         question_mark,
         quote,
@@ -865,6 +884,13 @@ symbols! {
         reexport_test_harness_main,
         reference,
         reflect,
+        reg,
+        reg16,
+        reg32,
+        reg64,
+        reg_abcd,
+        reg_byte,
+        reg_thumb,
         register_attr,
         register_tool,
         relaxed_adts,
@@ -907,6 +933,7 @@ symbols! {
         rustc_args_required_const,
         rustc_attrs,
         rustc_builtin_macro,
+        rustc_capture_analysis,
         rustc_clean,
         rustc_const_stable,
         rustc_const_unstable,
@@ -1049,6 +1076,8 @@ symbols! {
         spotlight,
         sqrtf32,
         sqrtf64,
+        sreg,
+        sreg_low16,
         sse4a_target_feature,
         stable,
         staged_api,
@@ -1060,6 +1089,7 @@ symbols! {
         staticlib,
         std,
         std_inject,
+        std_panic_macro,
         stmt,
         stmt_expr_attributes,
         stop_after_dataflow,
@@ -1203,6 +1233,8 @@ symbols! {
         volatile_load,
         volatile_set_memory,
         volatile_store,
+        vreg,
+        vreg_low16,
         warn,
         wasm_import_module,
         wasm_target_feature,
@@ -1214,6 +1246,9 @@ symbols! {
         wrapping_mul,
         wrapping_sub,
         write_bytes,
+        xmm_reg,
+        ymm_reg,
+        zmm_reg,
     }
 }
 
@@ -1352,15 +1387,13 @@ impl fmt::Display for IdentPrinter {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.is_raw {
             f.write_str("r#")?;
-        } else {
-            if self.symbol == kw::DollarCrate {
-                if let Some(span) = self.convert_dollar_crate {
-                    let converted = span.ctxt().dollar_crate_name();
-                    if !converted.is_path_segment_keyword() {
-                        f.write_str("::")?;
-                    }
-                    return fmt::Display::fmt(&converted, f);
+        } else if self.symbol == kw::DollarCrate {
+            if let Some(span) = self.convert_dollar_crate {
+                let converted = span.ctxt().dollar_crate_name();
+                if !converted.is_path_segment_keyword() {
+                    f.write_str("::")?;
                 }
+                return fmt::Display::fmt(&converted, f);
             }
         }
         fmt::Display::fmt(&self.symbol, f)
@@ -1434,6 +1467,10 @@ impl Symbol {
 
     pub fn as_u32(self) -> u32 {
         self.0.as_u32()
+    }
+
+    pub fn is_empty(self) -> bool {
+        self == kw::Invalid
     }
 
     /// This method is supposed to be used in error messages, so it's expected to be
@@ -1540,8 +1577,7 @@ impl Interner {
 /// Given that `kw` is imported, use them like `kw::keyword_name`.
 /// For example `kw::Loop` or `kw::Break`.
 pub mod kw {
-    use super::Symbol;
-    keywords!();
+    pub use super::kw_generated::*;
 }
 
 // This module has a very short name because it's used a lot.
@@ -1549,22 +1585,23 @@ pub mod kw {
 ///
 /// Given that `sym` is imported, use them like `sym::symbol_name`.
 /// For example `sym::rustfmt` or `sym::u8`.
-#[allow(rustc::default_hash_types)]
 pub mod sym {
     use super::Symbol;
     use std::convert::TryInto;
 
-    define_symbols!();
+    pub use super::sym_generated::*;
 
     // Used from a macro in `librustc_feature/accepted.rs`
     pub use super::kw::MacroRules as macro_rules;
 
-    // Get the symbol for an integer. The first few non-negative integers each
-    // have a static symbol and therefore are fast.
+    /// Get the symbol for an integer.
+    ///
+    /// The first few non-negative integers each have a static symbol and therefore
+    /// are fast.
     pub fn integer<N: TryInto<usize> + Copy + ToString>(n: N) -> Symbol {
         if let Result::Ok(idx) = n.try_into() {
-            if let Option::Some(&sym_) = digits_array.get(idx) {
-                return sym_;
+            if idx < 10 {
+                return Symbol::new(super::SYMBOL_DIGITS_BASE + idx as u32);
             }
         }
         Symbol::intern(&n.to_string())
@@ -1578,11 +1615,6 @@ impl Symbol {
 
     fn is_unused_keyword_2018(self) -> bool {
         self == kw::Try
-    }
-
-    /// Used for sanity checking rustdoc keyword sections.
-    pub fn is_doc_keyword(self) -> bool {
-        self <= kw::Union
     }
 
     /// A keyword or reserved identifier that can be used as a path segment.
@@ -1600,7 +1632,7 @@ impl Symbol {
         self == kw::True || self == kw::False
     }
 
-    /// This symbol can be a raw identifier.
+    /// Returns `true` if this symbol can be a raw identifier.
     pub fn can_be_raw(self) -> bool {
         self != kw::Invalid && self != kw::Underscore && !self.is_path_segment_keyword()
     }

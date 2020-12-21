@@ -269,7 +269,7 @@ impl<'a, 'tcx> WfPredicates<'a, 'tcx> {
                 param_env,
                 cause.clone(),
                 self.recursion_depth,
-                &obligation.predicate,
+                obligation.predicate,
                 &mut obligations,
             );
             obligation.predicate = normalized_predicate;
@@ -294,7 +294,7 @@ impl<'a, 'tcx> WfPredicates<'a, 'tcx> {
             let mut cause = cause.clone();
             if let Some(parent_trait_ref) = obligation.predicate.to_opt_poly_trait_ref() {
                 let derived_cause = traits::DerivedObligationCause {
-                    parent_trait_ref,
+                    parent_trait_ref: parent_trait_ref.value,
                     parent_code: Rc::new(obligation.cause.code.clone()),
                 };
                 cause.make_mut().code =
@@ -706,7 +706,7 @@ impl<'a, 'tcx> WfPredicates<'a, 'tcx> {
     fn from_object_ty(
         &mut self,
         ty: Ty<'tcx>,
-        data: ty::Binder<&'tcx ty::List<ty::ExistentialPredicate<'tcx>>>,
+        data: &'tcx ty::List<ty::Binder<ty::ExistentialPredicate<'tcx>>>,
         region: ty::Region<'tcx>,
     ) {
         // Imagine a type like this:
@@ -769,7 +769,7 @@ impl<'a, 'tcx> WfPredicates<'a, 'tcx> {
 /// `infer::required_region_bounds`, see that for more information.
 pub fn object_region_bounds<'tcx>(
     tcx: TyCtxt<'tcx>,
-    existential_predicates: ty::Binder<&'tcx ty::List<ty::ExistentialPredicate<'tcx>>>,
+    existential_predicates: &'tcx ty::List<ty::Binder<ty::ExistentialPredicate<'tcx>>>,
 ) -> Vec<ty::Region<'tcx>> {
     // Since we don't actually *know* the self type for an object,
     // this "open(err)" serves as a kind of dummy standin -- basically

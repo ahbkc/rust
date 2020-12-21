@@ -1,6 +1,6 @@
 #![feature(
     no_core, lang_items, intrinsics, unboxed_closures, type_ascription, extern_types,
-    untagged_unions, decl_macro, rustc_attrs, transparent_unions, optin_builtin_traits,
+    untagged_unions, decl_macro, rustc_attrs, transparent_unions, auto_traits,
     thread_local,
 )]
 #![no_core]
@@ -48,6 +48,7 @@ unsafe impl Copy for u8 {}
 unsafe impl Copy for u16 {}
 unsafe impl Copy for u32 {}
 unsafe impl Copy for u64 {}
+unsafe impl Copy for u128 {}
 unsafe impl Copy for usize {}
 unsafe impl Copy for i8 {}
 unsafe impl Copy for i16 {}
@@ -279,6 +280,15 @@ impl PartialEq for u64 {
         (*self) == (*other)
     }
     fn ne(&self, other: &u64) -> bool {
+        (*self) != (*other)
+    }
+}
+
+impl PartialEq for u128 {
+    fn eq(&self, other: &u128) -> bool {
+        (*self) == (*other)
+    }
+    fn ne(&self, other: &u128) -> bool {
         (*self) != (*other)
     }
 }

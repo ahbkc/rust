@@ -34,6 +34,7 @@ use hygiene::Transparency;
 pub use hygiene::{DesugaringKind, ExpnData, ExpnId, ExpnKind, ForLoopLoc, MacroKind};
 pub mod def_id;
 use def_id::{CrateNum, DefId, LOCAL_CRATE};
+pub mod lev_distance;
 mod span_encoding;
 pub use span_encoding::{Span, DUMMY_SP};
 
@@ -59,6 +60,7 @@ use std::str::FromStr;
 use md5::Md5;
 use sha1::Digest;
 use sha1::Sha1;
+use sha2::Sha256;
 
 use tracing::debug;
 
@@ -1013,10 +1015,7 @@ pub enum ExternalSourceKind {
 
 impl ExternalSource {
     pub fn is_absent(&self) -> bool {
-        match self {
-            ExternalSource::Foreign { kind: ExternalSourceKind::Present(_), .. } => false,
-            _ => true,
-        }
+        !matches!(self, ExternalSource::Foreign { kind: ExternalSourceKind::Present(_), .. })
     }
 
     pub fn get_source(&self) -> Option<&Lrc<String>> {
@@ -1034,6 +1033,7 @@ pub struct OffsetOverflowError;
 pub enum SourceFileHashAlgorithm {
     Md5,
     Sha1,
+    Sha256,
 }
 
 impl FromStr for SourceFileHashAlgorithm {
@@ -1043,6 +1043,7 @@ impl FromStr for SourceFileHashAlgorithm {
         match s {
             "md5" => Ok(SourceFileHashAlgorithm::Md5),
             "sha1" => Ok(SourceFileHashAlgorithm::Sha1),
+            "sha256" => Ok(SourceFileHashAlgorithm::Sha256),
             _ => Err(()),
         }
     }
@@ -1055,7 +1056,7 @@ rustc_data_structures::impl_stable_hash_via_hash!(SourceFileHashAlgorithm);
 #[derive(HashStable_Generic, Encodable, Decodable)]
 pub struct SourceFileHash {
     pub kind: SourceFileHashAlgorithm,
-    value: [u8; 20],
+    value: [u8; 32],
 }
 
 impl SourceFileHash {
@@ -1070,6 +1071,9 @@ impl SourceFileHash {
             }
             SourceFileHashAlgorithm::Sha1 => {
                 value.copy_from_slice(&Sha1::digest(data));
+            }
+            SourceFileHashAlgorithm::Sha256 => {
+                value.copy_from_slice(&Sha256::digest(data));
             }
         }
         hash
@@ -1090,6 +1094,7 @@ impl SourceFileHash {
         match self.kind {
             SourceFileHashAlgorithm::Md5 => 16,
             SourceFileHashAlgorithm::Sha1 => 20,
+            SourceFileHashAlgorithm::Sha256 => 32,
         }
     }
 }
@@ -1567,7 +1572,7 @@ fn normalize_src(src: &mut String, start_pos: BytePos) -> Vec<NormalizedPos> {
 
 /// Removes UTF-8 BOM, if any.
 fn remove_bom(src: &mut String, normalized_pos: &mut Vec<NormalizedPos>) {
-    if src.starts_with("\u{feff}") {
+    if src.starts_with('\u{feff}') {
         src.drain(..3);
         normalized_pos.push(NormalizedPos { pos: BytePos(0), diff: 3 });
     }
@@ -1887,16 +1892,37 @@ where
             return;
         }
 
+        let (_, line_hi, col_hi) = match ctx.byte_pos_to_line_and_col(span.hi) {
+            Some(pos) => pos,
+            None => {
+                Hash::hash(&TAG_INVALID_SPAN, hasher);
+                span.ctxt.hash_stable(ctx, hasher);
+                return;
+            }
+        };
+
         Hash::hash(&TAG_VALID_SPAN, hasher);
         // We truncate the stable ID hash and line and column numbers. The chances
         // of causing a collision this way should be minimal.
         Hash::hash(&(file_lo.name_hash as u64), hasher);
 
-        let col = (col_lo.0 as u64) & 0xFF;
-        let line = ((line_lo as u64) & 0xFF_FF_FF) << 8;
-        let len = ((span.hi - span.lo).0 as u64) << 32;
-        let line_col_len = col | line | len;
-        Hash::hash(&line_col_len, hasher);
+        // Hash both the length and the end location (line/column) of a span. If we
+        // hash only the length, for example, then two otherwise equal spans with
+        // different end locations will have the same hash. This can cause a problem
+        // during incremental compilation wherein a previous result for a query that
+        // depends on the end location of a span will be incorrectly reused when the
+        // end location of the span it depends on has changed (see issue #74890). A
+        // similar analysis applies if some query depends specifically on the length
+        // of the span, but we only hash the end location. So hash both.
+
+        let col_lo_trunc = (col_lo.0 as u64) & 0xFF;
+        let line_lo_trunc = ((line_lo as u64) & 0xFF_FF_FF) << 8;
+        let col_hi_trunc = (col_hi.0 as u64) & 0xFF << 32;
+        let line_hi_trunc = ((line_hi as u64) & 0xFF_FF_FF) << 40;
+        let col_line = col_lo_trunc | line_lo_trunc | col_hi_trunc | line_hi_trunc;
+        let len = (span.hi - span.lo).0;
+        Hash::hash(&col_line, hasher);
+        Hash::hash(&len, hasher);
         span.ctxt.hash_stable(ctx, hasher);
     }
 }

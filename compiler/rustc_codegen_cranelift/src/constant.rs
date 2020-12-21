@@ -38,7 +38,7 @@ impl ConstantCx {
 
 pub(crate) fn check_constants(fx: &mut FunctionCx<'_, '_, impl Module>) {
     for constant in &fx.mir.required_consts {
-        let const_ = fx.monomorphize(&constant.literal);
+        let const_ = fx.monomorphize(constant.literal);
         match const_.val {
             ConstKind::Value(_) => {}
             ConstKind::Unevaluated(def, ref substs, promoted) => {
@@ -106,11 +106,11 @@ fn codegen_static_ref<'tcx>(
     CPlace::for_ptr(crate::pointer::Pointer::new(global_ptr), layout)
 }
 
-pub(crate) fn trans_constant<'tcx>(
+pub(crate) fn codegen_constant<'tcx>(
     fx: &mut FunctionCx<'_, 'tcx, impl Module>,
     constant: &Constant<'tcx>,
 ) -> CValue<'tcx> {
-    let const_ = fx.monomorphize(&constant.literal);
+    let const_ = fx.monomorphize(constant.literal);
     let const_val = match const_.val {
         ConstKind::Value(const_val) => const_val,
         ConstKind::Unevaluated(def, ref substs, promoted) if fx.tcx.is_static(def.did) => {
@@ -151,10 +151,10 @@ pub(crate) fn trans_constant<'tcx>(
         | ConstKind::Error(_) => unreachable!("{:?}", const_),
     };
 
-    trans_const_value(fx, const_val, const_.ty)
+    codegen_const_value(fx, const_val, const_.ty)
 }
 
-pub(crate) fn trans_const_value<'tcx>(
+pub(crate) fn codegen_const_value<'tcx>(
     fx: &mut FunctionCx<'_, 'tcx, impl Module>,
     const_val: ConstValue<'tcx>,
     ty: Ty<'tcx>,
@@ -163,10 +163,7 @@ pub(crate) fn trans_const_value<'tcx>(
     assert!(!layout.is_unsized(), "sized const value");
 
     if layout.is_zst() {
-        return CValue::by_ref(
-            crate::Pointer::const_addr(fx, i64::try_from(layout.align.pref.bytes()).unwrap()),
-            layout,
-        );
+        return CValue::by_ref(crate::Pointer::dangling(layout.align.pref), layout);
     }
 
     match const_val {
@@ -186,10 +183,7 @@ pub(crate) fn trans_const_value<'tcx>(
             }
 
             match x {
-                Scalar::Raw { data, size } => {
-                    assert_eq!(u64::from(size), layout.size.bytes());
-                    return CValue::const_val(fx, layout, data);
-                }
+                Scalar::Int(int) => CValue::const_val(fx, layout, int),
                 Scalar::Ptr(ptr) => {
                     let alloc_kind = fx.tcx.get_global_alloc(ptr.alloc_id);
                     let base_addr = match alloc_kind {
@@ -232,7 +226,7 @@ pub(crate) fn trans_const_value<'tcx>(
                     } else {
                         base_addr
                     };
-                    return CValue::by_val(val, layout);
+                    CValue::by_val(val, layout)
                 }
             }
         }
@@ -276,7 +270,7 @@ fn data_id_for_alloc_id(
 ) -> DataId {
     module
         .declare_data(
-            &format!("__alloc_{:x}", alloc_id.0),
+            &format!(".L__alloc_{:x}", alloc_id.0),
             Linkage::Local,
             mutability == rustc_hir::Mutability::Mut,
             false,
@@ -293,14 +287,12 @@ fn data_id_for_static(
     let rlinkage = tcx.codegen_fn_attrs(def_id).linkage;
     let linkage = if definition {
         crate::linkage::get_static_linkage(tcx, def_id)
+    } else if rlinkage == Some(rustc_middle::mir::mono::Linkage::ExternalWeak)
+        || rlinkage == Some(rustc_middle::mir::mono::Linkage::WeakAny)
+    {
+        Linkage::Preemptible
     } else {
-        if rlinkage == Some(rustc_middle::mir::mono::Linkage::ExternalWeak)
-            || rlinkage == Some(rustc_middle::mir::mono::Linkage::WeakAny)
-        {
-            Linkage::Preemptible
-        } else {
-            Linkage::Import
-        }
+        Linkage::Import
     };
 
     let instance = Instance::mono(tcx, def_id).polymorphize(tcx);
@@ -469,7 +461,7 @@ pub(crate) fn mir_operand_get_const_val<'tcx>(
     match operand {
         Operand::Copy(_) | Operand::Move(_) => None,
         Operand::Constant(const_) => Some(
-            fx.monomorphize(&const_.literal)
+            fx.monomorphize(const_.literal)
                 .eval(fx.tcx, ParamEnv::reveal_all()),
         ),
     }

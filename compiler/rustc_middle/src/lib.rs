@@ -24,6 +24,7 @@
 
 #![doc(html_root_url = "https://doc.rust-lang.org/nightly/nightly-rustc/")]
 #![feature(array_windows)]
+#![feature(assoc_char_funcs)]
 #![feature(backtrace)]
 #![feature(bool_to_option)]
 #![feature(box_patterns)]
@@ -50,6 +51,7 @@
 #![feature(half_open_range_patterns)]
 #![feature(exclusive_range_pattern)]
 #![feature(control_flow_enum)]
+#![feature(associated_type_defaults)]
 #![recursion_limit = "512"]
 
 #[macro_use]

@@ -19,7 +19,7 @@ use crate::compile;
 use crate::config::TargetSelection;
 use crate::dist;
 use crate::doc;
-use crate::flags::Subcommand;
+use crate::flags::{Color, Subcommand};
 use crate::install;
 use crate::native;
 use crate::run;
@@ -264,7 +264,7 @@ impl<'a> ShouldRun<'a> {
     /// `all_krates` should probably be removed at some point.
     pub fn all_krates(mut self, name: &str) -> Self {
         let mut set = BTreeSet::new();
-        for krate in self.builder.in_tree_crates(name) {
+        for krate in self.builder.in_tree_crates(name, None) {
             let path = krate.local_path(self.builder);
             set.insert(path);
         }
@@ -277,7 +277,7 @@ impl<'a> ShouldRun<'a> {
     ///
     /// `make_run` will be called separately for each matching command-line path.
     pub fn krate(mut self, name: &str) -> Self {
-        for krate in self.builder.in_tree_crates(name) {
+        for krate in self.builder.in_tree_crates(name, None) {
             let path = krate.local_path(self.builder);
             self.paths.insert(PathSet::one(path));
         }
@@ -371,7 +371,7 @@ impl<'a> Builder<'a> {
                 tool::CargoMiri,
                 native::Lld
             ),
-            Kind::Check | Kind::Clippy | Kind::Fix | Kind::Format => describe!(
+            Kind::Check | Kind::Clippy { .. } | Kind::Fix | Kind::Format => describe!(
                 check::Std,
                 check::Rustc,
                 check::Rustdoc,
@@ -413,6 +413,7 @@ impl<'a> Builder<'a> {
                 test::TheBook,
                 test::UnstableBook,
                 test::RustcBook,
+                test::LintDocs,
                 test::RustcGuide,
                 test::EmbeddedBook,
                 test::EditionGuide,
@@ -424,6 +425,7 @@ impl<'a> Builder<'a> {
                 test::RustdocJSNotStd,
                 test::RustdocTheme,
                 test::RustdocUi,
+                test::RustdocJson,
                 // Run bootstrap close to the end as it's unlikely to fail
                 test::Bootstrap,
                 // Run run-make last, since these won't pass without make on Windows
@@ -469,7 +471,6 @@ impl<'a> Builder<'a> {
                 dist::RustDev,
                 dist::Extended,
                 dist::BuildManifest,
-                dist::HashSign
             ),
             Kind::Install => describe!(
                 install::Docs,
@@ -540,7 +541,7 @@ impl<'a> Builder<'a> {
         let (kind, paths) = match build.config.cmd {
             Subcommand::Build { ref paths } => (Kind::Build, &paths[..]),
             Subcommand::Check { ref paths, all_targets: _ } => (Kind::Check, &paths[..]),
-            Subcommand::Clippy { ref paths } => (Kind::Clippy, &paths[..]),
+            Subcommand::Clippy { ref paths, .. } => (Kind::Clippy, &paths[..]),
             Subcommand::Fix { ref paths } => (Kind::Fix, &paths[..]),
             Subcommand::Doc { ref paths, .. } => (Kind::Doc, &paths[..]),
             Subcommand::Test { ref paths, .. } => (Kind::Test, &paths[..]),
@@ -735,6 +736,10 @@ impl<'a> Builder<'a> {
         if self.config.deny_warnings {
             cmd.arg("-Dwarnings");
         }
+        // cfg(not(bootstrap)), can be removed on the next beta bump
+        if compiler.stage != 0 {
+            cmd.arg("-Znormalize-docs");
+        }
 
         // Remove make-related flags that can cause jobserver problems.
         cmd.env_remove("MAKEFLAGS");
@@ -812,6 +817,16 @@ impl<'a> Builder<'a> {
             cargo.env("REAL_LIBRARY_PATH", e);
         }
 
+        match self.build.config.color {
+            Color::Always => {
+                cargo.arg("--color=always");
+            }
+            Color::Never => {
+                cargo.arg("--color=never");
+            }
+            Color::Auto => {} // nothing to do
+        }
+
         if cmd != "install" {
             cargo.arg("--target").arg(target.rustc_target_arg());
         } else {
@@ -850,7 +865,41 @@ impl<'a> Builder<'a> {
                 cargo.args(s.split_whitespace());
             }
             rustflags.env("RUSTFLAGS_BOOTSTRAP");
-            rustflags.arg("--cfg=bootstrap");
+            if cmd == "clippy" {
+                // clippy overwrites sysroot if we pass it to cargo.
+                // Pass it directly to clippy instead.
+                // NOTE: this can't be fixed in clippy because we explicitly don't set `RUSTC`,
+                // so it has no way of knowing the sysroot.
+                rustflags.arg("--sysroot");
+                rustflags.arg(
+                    self.sysroot(compiler)
+                        .as_os_str()
+                        .to_str()
+                        .expect("sysroot must be valid UTF-8"),
+                );
+                // Only run clippy on a very limited subset of crates (in particular, not build scripts).
+                cargo.arg("-Zunstable-options");
+                // Explicitly does *not* set `--cfg=bootstrap`, since we're using a nightly clippy.
+                let host_version = Command::new("rustc").arg("--version").output().map_err(|_| ());
+                let output = host_version.and_then(|output| {
+                    if output.status.success() {
+                        Ok(output)
+                    } else {
+                        Err(())
+                    }
+                }).unwrap_or_else(|_| {
+                    eprintln!(
+                        "error: `x.py clippy` requires a host `rustc` toolchain with the `clippy` component"
+                    );
+                    eprintln!("help: try `rustup component add clippy`");
+                    std::process::exit(1);
+                });
+                if !t!(std::str::from_utf8(&output.stdout)).contains("nightly") {
+                    rustflags.arg("--cfg=bootstrap");
+                }
+            } else {
+                rustflags.arg("--cfg=bootstrap");
+            }
         }
 
         if self.config.rust_new_symbol_mangling {
@@ -975,7 +1024,6 @@ impl<'a> Builder<'a> {
         // src/bootstrap/bin/{rustc.rs,rustdoc.rs}
         cargo
             .env("RUSTBUILD_NATIVE_DIR", self.native_dir(target))
-            .env("RUSTC", self.out.join("bootstrap/debug/rustc"))
             .env("RUSTC_REAL", self.rustc(compiler))
             .env("RUSTC_STAGE", stage.to_string())
             .env("RUSTC_SYSROOT", &sysroot)
@@ -991,6 +1039,11 @@ impl<'a> Builder<'a> {
             )
             .env("RUSTC_ERROR_METADATA_DST", self.extended_error_dir())
             .env("RUSTC_BREAK_ON_ICE", "1");
+        // Clippy support is a hack and uses the default `cargo-clippy` in path.
+        // Don't override RUSTC so that the `cargo-clippy` in path will be run.
+        if cmd != "clippy" {
+            cargo.env("RUSTC", self.out.join("bootstrap/debug/rustc"));
+        }
 
         // Dealing with rpath here is a little special, so let's go into some
         // detail. First off, `-rpath` is a linker option on Unix platforms
@@ -1073,6 +1126,19 @@ impl<'a> Builder<'a> {
             },
         );
 
+        // `dsymutil` adds time to builds on Apple platforms for no clear benefit, and also makes
+        // it more difficult for debuggers to find debug info. The compiler currently defaults to
+        // running `dsymutil` to preserve its historical default, but when compiling the compiler
+        // itself, we skip it by default since we know it's safe to do so in that case.
+        // See https://github.com/rust-lang/rust/issues/79361 for more info on this flag.
+        if target.contains("apple") {
+            if self.config.rust_run_dsymutil {
+                rustflags.arg("-Zrun-dsymutil=yes");
+            } else {
+                rustflags.arg("-Zrun-dsymutil=no");
+            }
+        }
+
         if self.config.cmd.bless() {
             // Bless `expect!` tests.
             cargo.env("UPDATE_EXPECT", "1");
@@ -1139,6 +1205,14 @@ impl<'a> Builder<'a> {
                 let llvm_libdir = output(Command::new(&llvm_config).arg("--libdir"));
                 add_link_lib_path(vec![llvm_libdir.trim().into()], &mut cargo);
             }
+        }
+
+        // Compile everything except libraries and proc macros with the more
+        // efficient initial-exec TLS model. This doesn't work with `dlopen`,
+        // so we can't use it by default in general, but we can use it for tools
+        // and our own internal libraries.
+        if !mode.must_support_dlopen() {
+            rustflags.arg("-Ztls-model=initial-exec");
         }
 
         if self.config.incremental {

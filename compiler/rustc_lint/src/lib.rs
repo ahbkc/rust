@@ -55,6 +55,7 @@ mod levels;
 mod methods;
 mod non_ascii_idents;
 mod nonstandard_style;
+mod panic_fmt;
 mod passes;
 mod redundant_semicolon;
 mod traits;
@@ -69,7 +70,7 @@ use rustc_middle::ty::TyCtxt;
 use rustc_session::lint::builtin::{
     BARE_TRAIT_OBJECTS, BROKEN_INTRA_DOC_LINKS, ELIDED_LIFETIMES_IN_PATHS,
     EXPLICIT_OUTLIVES_REQUIREMENTS, INVALID_CODEBLOCK_ATTRIBUTES, INVALID_HTML_TAGS,
-    MISSING_DOC_CODE_EXAMPLES, PRIVATE_DOC_TESTS,
+    MISSING_DOC_CODE_EXAMPLES, NON_AUTOLINKS, PRIVATE_DOC_TESTS,
 };
 use rustc_span::symbol::{Ident, Symbol};
 use rustc_span::Span;
@@ -80,6 +81,7 @@ use internal::*;
 use methods::*;
 use non_ascii_idents::*;
 use nonstandard_style::*;
+use panic_fmt::PanicFmt;
 use redundant_semicolon::*;
 use traits::*;
 use types::*;
@@ -166,6 +168,7 @@ macro_rules! late_lint_passes {
                 ClashingExternDeclarations: ClashingExternDeclarations::new(),
                 DropTraitConstraints: DropTraitConstraints,
                 TemporaryCStringAsPtr: TemporaryCStringAsPtr,
+                PanicFmt: PanicFmt,
             ]
         );
     };
@@ -313,6 +316,7 @@ fn register_builtins(store: &mut LintStore, no_interleave_lints: bool) {
 
     add_lint_group!(
         "rustdoc",
+        NON_AUTOLINKS,
         BROKEN_INTRA_DOC_LINKS,
         PRIVATE_INTRA_DOC_LINKS,
         INVALID_CODEBLOCK_ATTRIBUTES,
@@ -459,6 +463,8 @@ fn register_internals(store: &mut LintStore) {
     store.register_early_pass(|| box DefaultHashTypes::new());
     store.register_lints(&LintPassImpl::get_lints());
     store.register_early_pass(|| box LintPassImpl);
+    store.register_lints(&ExistingDocKeyword::get_lints());
+    store.register_late_pass(|| box ExistingDocKeyword);
     store.register_lints(&TyTyKind::get_lints());
     store.register_late_pass(|| box TyTyKind);
     store.register_group(
@@ -471,6 +477,7 @@ fn register_internals(store: &mut LintStore) {
             LintId::of(LINT_PASS_IMPL_WITHOUT_MACRO),
             LintId::of(TY_PASS_BY_REFERENCE),
             LintId::of(USAGE_OF_QUALIFIED_TY),
+            LintId::of(EXISTING_DOC_KEYWORD),
         ],
     );
 }

@@ -359,8 +359,8 @@ impl AstConv<'tcx> for ItemCtxt<'tcx> {
                 self.tcx().sess,
                 span,
                 E0212,
-                "cannot extract an associated type from a higher-ranked trait bound \
-                 in this context"
+                "cannot use the associated type of a trait \
+                 with uninferred generic parameters"
             );
 
             match self.node() {
@@ -386,7 +386,7 @@ impl AstConv<'tcx> for ItemCtxt<'tcx> {
                                         "{}::{}",
                                         // Replace the existing lifetimes with a new named lifetime.
                                         self.tcx
-                                            .replace_late_bound_regions(&poly_trait_ref, |_| {
+                                            .replace_late_bound_regions(poly_trait_ref, |_| {
                                                 self.tcx.mk_region(ty::ReEarlyBound(
                                                     ty::EarlyBoundRegion {
                                                         def_id: item_def_id,
@@ -424,7 +424,7 @@ impl AstConv<'tcx> for ItemCtxt<'tcx> {
                         format!(
                             "{}::{}",
                             // Erase named lt, we want `<A as B<'_>::C`, not `<A as B<'a>::C`.
-                            self.tcx.anonymize_late_bound_regions(&poly_trait_ref).skip_binder(),
+                            self.tcx.anonymize_late_bound_regions(poly_trait_ref).skip_binder(),
                             item_segment.ident
                         ),
                         Applicability::MaybeIncorrect,
@@ -461,7 +461,7 @@ fn get_new_lifetime_name<'tcx>(
         .collect_referenced_late_bound_regions(&poly_trait_ref)
         .into_iter()
         .filter_map(|lt| {
-            if let ty::BoundRegion::BrNamed(_, name) = lt {
+            if let ty::BoundRegionKind::BrNamed(_, name) = lt {
                 Some(name.as_str().to_string())
             } else {
                 None
@@ -646,8 +646,9 @@ fn convert_item(tcx: TyCtxt<'_>, item_id: hir::HirId) {
         | hir::ItemKind::Use(..)
         | hir::ItemKind::Mod(_)
         | hir::ItemKind::GlobalAsm(_) => {}
-        hir::ItemKind::ForeignMod(ref foreign_mod) => {
-            for item in foreign_mod.items {
+        hir::ItemKind::ForeignMod { items, .. } => {
+            for item in items {
+                let item = tcx.hir().foreign_item(item.id);
                 let def_id = tcx.hir().local_def_id(item.hir_id);
                 tcx.ensure().generics_of(def_id);
                 tcx.ensure().type_of(def_id);
@@ -1918,10 +1919,11 @@ fn gather_explicit_predicates_of(tcx: TyCtxt<'_>, def_id: DefId) -> ty::GenericP
                     } else {
                         let span = bound_pred.bounded_ty.span;
                         let re_root_empty = tcx.lifetimes.re_root_empty;
-                        let predicate = ty::OutlivesPredicate(ty, re_root_empty);
+                        let predicate = ty::Binder::bind(ty::PredicateAtom::TypeOutlives(
+                            ty::OutlivesPredicate(ty, re_root_empty),
+                        ));
                         predicates.insert((
-                            ty::PredicateAtom::TypeOutlives(predicate)
-                                .potentially_quantified(tcx, ty::PredicateKind::ForAll),
+                            predicate.potentially_quantified(tcx, ty::PredicateKind::ForAll),
                             span,
                         ));
                     }
@@ -1964,8 +1966,10 @@ fn gather_explicit_predicates_of(tcx: TyCtxt<'_>, def_id: DefId) -> ty::GenericP
                         &hir::GenericBound::Outlives(ref lifetime) => {
                             let region = AstConv::ast_region_to_region(&icx, lifetime, None);
                             predicates.insert((
-                                ty::PredicateAtom::TypeOutlives(ty::OutlivesPredicate(ty, region))
-                                    .potentially_quantified(tcx, ty::PredicateKind::ForAll),
+                                ty::Binder::bind(ty::PredicateAtom::TypeOutlives(
+                                    ty::OutlivesPredicate(ty, region),
+                                ))
+                                .potentially_quantified(tcx, ty::PredicateKind::ForAll),
                                 lifetime.span,
                             ));
                         }
@@ -1982,9 +1986,10 @@ fn gather_explicit_predicates_of(tcx: TyCtxt<'_>, def_id: DefId) -> ty::GenericP
                         }
                         _ => bug!(),
                     };
-                    let pred = ty::PredicateAtom::RegionOutlives(ty::OutlivesPredicate(r1, r2));
+                    let pred = ty::PredicateAtom::RegionOutlives(ty::OutlivesPredicate(r1, r2))
+                        .to_predicate(icx.tcx);
 
-                    (pred.potentially_quantified(icx.tcx, ty::PredicateKind::ForAll), span)
+                    (pred, span)
                 }))
             }
 
@@ -2062,7 +2067,7 @@ fn const_evaluatable_predicates_of<'tcx>(
             }
 
             impl<'a, 'tcx> TypeVisitor<'tcx> for TyAliasVisitor<'a, 'tcx> {
-                fn visit_const(&mut self, ct: &'tcx Const<'tcx>) -> ControlFlow<()> {
+                fn visit_const(&mut self, ct: &'tcx Const<'tcx>) -> ControlFlow<Self::BreakTy> {
                     if let ty::ConstKind::Unevaluated(def, substs, None) = ct.val {
                         self.preds.insert((
                             ty::PredicateAtom::ConstEvaluatable(def, substs).to_predicate(self.tcx),
@@ -2140,13 +2145,8 @@ fn explicit_predicates_of(tcx: TyCtxt<'_>, def_id: DefId) -> ty::GenericPredicat
             // * It must be an associated type for this trait (*not* a
             //   supertrait).
             if let ty::Projection(projection) = ty.kind() {
-                if projection.substs == trait_identity_substs
+                projection.substs == trait_identity_substs
                     && tcx.associated_item(projection.item_def_id).container.id() == def_id
-                {
-                    true
-                } else {
-                    false
-                }
             } else {
                 false
             }
@@ -2238,7 +2238,7 @@ fn predicates_from_bound<'tcx>(
         hir::GenericBound::Outlives(ref lifetime) => {
             let region = astconv.ast_region_to_region(lifetime, None);
             let pred = ty::PredicateAtom::TypeOutlives(ty::OutlivesPredicate(param_ty, region))
-                .potentially_quantified(astconv.tcx(), ty::PredicateKind::ForAll);
+                .to_predicate(astconv.tcx());
             vec![(pred, lifetime.span)]
         }
     }
@@ -2653,7 +2653,7 @@ fn codegen_fn_attrs(tcx: TyCtxt<'_>, id: DefId) -> CodegenFnAttrs {
                             set.path.segments.iter().map(|x| x.ident.name).collect::<Vec<_>>();
                         match segments.as_slice() {
                             [sym::arm, sym::a32] | [sym::arm, sym::t32] => {
-                                if !tcx.sess.target.options.has_thumb_interworking {
+                                if !tcx.sess.target.has_thumb_interworking {
                                     struct_span_err!(
                                         tcx.sess.diagnostic(),
                                         attr.span,

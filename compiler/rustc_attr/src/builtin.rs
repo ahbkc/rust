@@ -67,7 +67,7 @@ fn handle_errors(sess: &ParseSess, span: Span, error: AttrError) {
     }
 }
 
-#[derive(Clone, PartialEq, Encodable, Decodable)]
+#[derive(Copy, Clone, PartialEq, Encodable, Decodable)]
 pub enum InlineAttr {
     None,
     Hint,
@@ -294,7 +294,7 @@ where
                                                     or \"none\"",
                                                 )
                                                 .span_label(
-                                                    mi.name_value_literal().unwrap().span,
+                                                    mi.name_value_literal_span().unwrap(),
                                                     msg,
                                                 )
                                                 .emit();
@@ -621,7 +621,7 @@ pub fn eval_condition(
     }
 }
 
-#[derive(Encodable, Decodable, Clone, HashStable_Generic)]
+#[derive(Debug, Encodable, Decodable, Clone, HashStable_Generic)]
 pub struct Deprecation {
     pub since: Option<Symbol>,
     /// The note to issue a reason.
@@ -637,19 +637,15 @@ pub struct Deprecation {
 }
 
 /// Finds the deprecation attribute. `None` if none exists.
-pub fn find_deprecation(sess: &Session, attrs: &[Attribute], item_sp: Span) -> Option<Deprecation> {
-    find_deprecation_generic(sess, attrs.iter(), item_sp)
+pub fn find_deprecation(sess: &Session, attrs: &[Attribute]) -> Option<(Deprecation, Span)> {
+    find_deprecation_generic(sess, attrs.iter())
 }
 
-fn find_deprecation_generic<'a, I>(
-    sess: &Session,
-    attrs_iter: I,
-    item_sp: Span,
-) -> Option<Deprecation>
+fn find_deprecation_generic<'a, I>(sess: &Session, attrs_iter: I) -> Option<(Deprecation, Span)>
 where
     I: Iterator<Item = &'a Attribute>,
 {
-    let mut depr: Option<Deprecation> = None;
+    let mut depr: Option<(Deprecation, Span)> = None;
     let diagnostic = &sess.parse_sess.span_diagnostic;
 
     'outer: for attr in attrs_iter {
@@ -658,8 +654,11 @@ where
             continue;
         }
 
-        if depr.is_some() {
-            struct_span_err!(diagnostic, item_sp, E0550, "multiple deprecated attributes").emit();
+        if let Some((_, span)) = &depr {
+            struct_span_err!(diagnostic, attr.span, E0550, "multiple deprecated attributes")
+                .span_label(attr.span, "repeated deprecation attribute")
+                .span_label(*span, "first deprecation attribute")
+                .emit();
             break;
         }
 
@@ -780,7 +779,7 @@ where
         sess.mark_attr_used(&attr);
 
         let is_since_rustc_version = sess.check_name(attr, sym::rustc_deprecated);
-        depr = Some(Deprecation { since, note, suggestion, is_since_rustc_version });
+        depr = Some((Deprecation { since, note, suggestion, is_since_rustc_version }, attr.span));
     }
 
     depr

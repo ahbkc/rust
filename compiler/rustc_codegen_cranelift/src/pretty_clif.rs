@@ -80,7 +80,7 @@ impl CommentWriter {
                     "sig {:?}",
                     tcx.normalize_erasing_late_bound_regions(
                         ParamEnv::reveal_all(),
-                        &crate::abi::fn_sig_for_fn_abi(tcx, instance)
+                        crate::abi::fn_sig_for_fn_abi(tcx, instance)
                     )
                 ),
                 String::new(),
@@ -131,11 +131,11 @@ impl FuncWriter for &'_ CommentWriter {
             if !comment.is_empty() {
                 writeln!(w, "; {}", comment)?;
             } else {
-                writeln!(w, "")?;
+                writeln!(w)?;
             }
         }
         if !self.global_comments.is_empty() {
-            writeln!(w, "")?;
+            writeln!(w)?;
         }
 
         self.super_preamble(w, func, reg_info)
@@ -153,7 +153,7 @@ impl FuncWriter for &'_ CommentWriter {
         if let Some(comment) = self.entity_comments.get(&entity) {
             writeln!(w, " ; {}", comment.replace('\n', "\n; "))
         } else {
-            writeln!(w, "")
+            writeln!(w)
         }
     }
 
@@ -261,7 +261,7 @@ pub(crate) fn write_clif_file<'tcx>(
         writeln!(file, "set is_pic")?;
         writeln!(file, "set enable_simd")?;
         writeln!(file, "target {} haswell", target_triple)?;
-        writeln!(file, "")?;
+        writeln!(file)?;
         file.write_all(clif.as_bytes())?;
     };
     if let Err(err) = res {

@@ -4,7 +4,6 @@ use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_hir as hir;
 use rustc_hir::def_id::{CrateNum, DefId};
 use rustc_hir::definitions::{DefPathData, DisambiguatedDefPathData};
-use rustc_middle::mir::interpret::sign_extend;
 use rustc_middle::ty::print::{Print, Printer};
 use rustc_middle::ty::subst::{GenericArg, GenericArgKind, Subst};
 use rustc_middle::ty::{self, Instance, Ty, TyCtxt, TypeFoldable};
@@ -320,7 +319,7 @@ impl Printer<'tcx> for SymbolMangler<'tcx> {
 
             // Late-bound lifetimes use indices starting at 1,
             // see `BinderLevel` for more details.
-            ty::ReLateBound(debruijn, ty::BrAnon(i)) => {
+            ty::ReLateBound(debruijn, ty::BoundRegion { kind: ty::BrAnon(i) }) => {
                 let binder = &self.binders[self.binders.len() - 1 - debruijn.index()];
                 let depth = binder.lifetime_depths.start + i;
 
@@ -466,9 +465,7 @@ impl Printer<'tcx> for SymbolMangler<'tcx> {
 
             ty::Dynamic(predicates, r) => {
                 self.push("D");
-                self = self.in_binder(&predicates, |cx, predicates| {
-                    cx.print_dyn_existential(predicates)
-                })?;
+                self = self.print_dyn_existential(predicates)?;
                 self = r.print(self)?;
             }
 
@@ -487,26 +484,29 @@ impl Printer<'tcx> for SymbolMangler<'tcx> {
 
     fn print_dyn_existential(
         mut self,
-        predicates: &'tcx ty::List<ty::ExistentialPredicate<'tcx>>,
+        predicates: &'tcx ty::List<ty::Binder<ty::ExistentialPredicate<'tcx>>>,
     ) -> Result<Self::DynExistential, Self::Error> {
         for predicate in predicates {
-            match predicate {
-                ty::ExistentialPredicate::Trait(trait_ref) => {
-                    // Use a type that can't appear in defaults of type parameters.
-                    let dummy_self = self.tcx.mk_ty_infer(ty::FreshTy(0));
-                    let trait_ref = trait_ref.with_self_ty(self.tcx, dummy_self);
-                    self = self.print_def_path(trait_ref.def_id, trait_ref.substs)?;
+            self = self.in_binder(&predicate, |mut cx, predicate| {
+                match predicate {
+                    ty::ExistentialPredicate::Trait(trait_ref) => {
+                        // Use a type that can't appear in defaults of type parameters.
+                        let dummy_self = cx.tcx.mk_ty_infer(ty::FreshTy(0));
+                        let trait_ref = trait_ref.with_self_ty(cx.tcx, dummy_self);
+                        cx = cx.print_def_path(trait_ref.def_id, trait_ref.substs)?;
+                    }
+                    ty::ExistentialPredicate::Projection(projection) => {
+                        let name = cx.tcx.associated_item(projection.item_def_id).ident;
+                        cx.push("p");
+                        cx.push_ident(&name.as_str());
+                        cx = projection.ty.print(cx)?;
+                    }
+                    ty::ExistentialPredicate::AutoTrait(def_id) => {
+                        cx = cx.print_def_path(*def_id, &[])?;
+                    }
                 }
-                ty::ExistentialPredicate::Projection(projection) => {
-                    let name = self.tcx.associated_item(projection.item_def_id).ident;
-                    self.push("p");
-                    self.push_ident(&name.as_str());
-                    self = projection.ty.print(self)?;
-                }
-                ty::ExistentialPredicate::AutoTrait(def_id) => {
-                    self = self.print_def_path(def_id, &[])?;
-                }
-            }
+                Ok(cx)
+            })?;
         }
         self.push("E");
         Ok(self)
@@ -527,7 +527,7 @@ impl Printer<'tcx> for SymbolMangler<'tcx> {
                 let param_env = ty::ParamEnv::reveal_all();
                 ct.try_eval_bits(self.tcx, param_env, ct.ty).and_then(|b| {
                     let sz = self.tcx.layout_of(param_env.and(ct.ty)).ok()?.size;
-                    let val = sign_extend(b, sz) as i128;
+                    let val = sz.sign_extend(b) as i128;
                     if val < 0 {
                         neg = true;
                     }

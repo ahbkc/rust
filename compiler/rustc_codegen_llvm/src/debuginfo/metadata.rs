@@ -29,7 +29,6 @@ use rustc_hir::def::CtorKind;
 use rustc_hir::def_id::{DefId, LOCAL_CRATE};
 use rustc_index::vec::{Idx, IndexVec};
 use rustc_middle::ich::NodeIdHashingMode;
-use rustc_middle::mir::interpret::truncate;
 use rustc_middle::mir::{self, Field, GeneratorLayout};
 use rustc_middle::ty::layout::{self, IntegerExt, PrimitiveExt, TyAndLayout};
 use rustc_middle::ty::subst::GenericArgKind;
@@ -190,7 +189,7 @@ impl TypeMap<'ll, 'tcx> {
         // something that provides more than the 64 bits of the DefaultHasher.
         let mut hasher = StableHasher::new();
         let mut hcx = cx.tcx.create_stable_hashing_context();
-        let type_ = cx.tcx.erase_regions(&type_);
+        let type_ = cx.tcx.erase_regions(type_);
         hcx.while_hashing_spans(false, |hcx| {
             hcx.with_node_id_hashing_mode(NodeIdHashingMode::HashDefPath, |hcx| {
                 type_.hash_stable(hcx, &mut hasher);
@@ -428,7 +427,7 @@ fn subroutine_type_metadata(
     span: Span,
 ) -> MetadataCreationResult<'ll> {
     let signature =
-        cx.tcx.normalize_erasing_late_bound_regions(ty::ParamEnv::reveal_all(), &signature);
+        cx.tcx.normalize_erasing_late_bound_regions(ty::ParamEnv::reveal_all(), signature);
 
     let signature_metadata: Vec<_> = iter::once(
         // return type
@@ -801,6 +800,7 @@ fn file_metadata_raw(
                     let kind = match hash.kind {
                         rustc_span::SourceFileHashAlgorithm::Md5 => llvm::ChecksumKind::MD5,
                         rustc_span::SourceFileHashAlgorithm::Sha1 => llvm::ChecksumKind::SHA1,
+                        rustc_span::SourceFileHashAlgorithm::Sha256 => llvm::ChecksumKind::SHA256,
                     };
                     (kind, hex_encode(hash.hash_bytes()))
                 }
@@ -870,7 +870,7 @@ fn basic_type_metadata(cx: &CodegenCx<'ll, 'tcx>, t: Ty<'tcx>) -> &'ll DIType {
 
     // When targeting MSVC, emit MSVC style type names for compatibility with
     // .natvis visualizers (and perhaps other existing native debuggers?)
-    let msvc_like_names = cx.tcx.sess.target.options.is_like_msvc;
+    let msvc_like_names = cx.tcx.sess.target.is_like_msvc;
 
     let (name, encoding) = match t.kind() {
         ty::Never => ("!", DW_ATE_unsigned),
@@ -981,7 +981,7 @@ pub fn compile_unit_metadata(
     // if multiple object files with the same `DW_AT_name` are linked together.
     // As a workaround we generate unique names for each object file. Those do
     // not correspond to an actual source file but that should be harmless.
-    if tcx.sess.target.options.is_like_osx {
+    if tcx.sess.target.is_like_osx {
         name_in_debuginfo.push("@");
         name_in_debuginfo.push(codegen_unit_name);
     }
@@ -993,9 +993,15 @@ pub fn compile_unit_metadata(
     let producer = format!("clang LLVM ({})", rustc_producer);
 
     let name_in_debuginfo = name_in_debuginfo.to_string_lossy();
-    let work_dir = tcx.sess.working_dir.0.to_string_lossy();
     let flags = "\0";
-    let split_name = "";
+
+    let out_dir = &tcx.output_filenames(LOCAL_CRATE).out_directory;
+    let split_name = tcx
+        .output_filenames(LOCAL_CRATE)
+        .split_dwarf_filename(tcx.sess.opts.debugging_opts.split_dwarf, Some(codegen_unit_name))
+        .unwrap_or_default();
+    let out_dir = out_dir.to_str().unwrap();
+    let split_name = split_name.to_str().unwrap();
 
     // FIXME(#60020):
     //
@@ -1020,8 +1026,8 @@ pub fn compile_unit_metadata(
             debug_context.builder,
             name_in_debuginfo.as_ptr().cast(),
             name_in_debuginfo.len(),
-            work_dir.as_ptr().cast(),
-            work_dir.len(),
+            out_dir.as_ptr().cast(),
+            out_dir.len(),
             llvm::ChecksumKind::None,
             ptr::null(),
             0,
@@ -1039,6 +1045,8 @@ pub fn compile_unit_metadata(
             split_name.as_ptr().cast(),
             split_name.len(),
             kind,
+            0,
+            tcx.sess.opts.debugging_opts.split_dwarf_inlining,
         );
 
         if tcx.sess.opts.debugging_opts.profile {
@@ -1152,10 +1160,7 @@ impl<'ll> MemberDescription<'ll> {
                 self.size.bits(),
                 self.align.bits() as u32,
                 self.offset.bits(),
-                match self.discriminant {
-                    None => None,
-                    Some(value) => Some(cx.const_u64(value)),
-                },
+                self.discriminant.map(|v| cx.const_u64(v)),
                 self.flags,
                 self.type_metadata,
             )
@@ -1397,7 +1402,7 @@ fn prepare_union_metadata(
 /// on MSVC we have to use the fallback mode, because LLVM doesn't
 /// lower variant parts to PDB.
 fn use_enum_fallback(cx: &CodegenCx<'_, '_>) -> bool {
-    cx.sess().target.options.is_like_msvc
+    cx.sess().target.is_like_msvc
 }
 
 // FIXME(eddyb) maybe precompute this? Right now it's computed once
@@ -1412,10 +1417,11 @@ fn generator_layout_and_saved_local_names(
 
     let state_arg = mir::Local::new(1);
     for var in &body.var_debug_info {
-        if var.place.local != state_arg {
+        let place = if let mir::VarDebugInfoContents::Place(p) = var.value { p } else { continue };
+        if place.local != state_arg {
             continue;
         }
-        match var.place.projection[..] {
+        match place.projection[..] {
             [
                 // Deref of the `Pin<&mut Self>` state argument.
                 mir::ProjectionElem::Field(..),
@@ -1692,7 +1698,7 @@ impl EnumMemberDescriptionFactory<'ll, 'tcx> {
                                 let value = (i.as_u32() as u128)
                                     .wrapping_sub(niche_variants.start().as_u32() as u128)
                                     .wrapping_add(niche_start);
-                                let value = truncate(value, tag.value.size(cx));
+                                let value = tag.value.size(cx).truncate(value);
                                 // NOTE(eddyb) do *NOT* remove this assert, until
                                 // we pass the full 128-bit value to LLVM, otherwise
                                 // truncation will be silent and remain undetected.

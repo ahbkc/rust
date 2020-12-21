@@ -149,9 +149,6 @@ declare_features! (
     /// Allows using the `#[linkage = ".."]` attribute.
     (active, linkage, "1.0.0", Some(29603), None),
 
-    /// Allows features specific to OIBIT (auto traits).
-    (active, optin_builtin_traits, "1.0.0", Some(13231), None),
-
     /// Allows using `box` in patterns (RFC 469).
     (active, box_patterns, "1.0.0", Some(29641), None),
 
@@ -214,6 +211,10 @@ declare_features! (
     /// This is an attribute on `const fn` for the same
     /// purpose as `#[allow_internal_unstable]`.
     (active, rustc_allow_const_fn_unstable, "1.49.0", Some(69399), None),
+
+    /// Allows features specific to auto traits.
+    /// Renamed from `optin_builtin_traits`.
+    (active, auto_traits, "1.50.0", Some(13231), None),
 
     // no-tracking-issue-end
 
@@ -610,6 +611,18 @@ declare_features! (
     /// Allows unsized fn parameters.
     (active, unsized_fn_params, "1.49.0", Some(48055), None),
 
+    /// Allows the use of destructuring assignments.
+    (active, destructuring_assignment, "1.49.0", Some(71126), None),
+
+    /// Enables `#[cfg(panic = "...")]` config key.
+    (active, cfg_panic, "1.49.0", Some(77443), None),
+
+    /// Allows capturing disjoint fields in a closure/generator (RFC 2229).
+    (active, capture_disjoint_fields, "1.49.0", Some(53488), None),
+
+    /// Allows arbitrary expressions in key-value attributes at parse time.
+    (active, extended_key_value_attributes, "1.50.0", Some(78835), None),
+
     // -------------------------------------------------------------------------
     // feature-group-end: actual feature gates
     // -------------------------------------------------------------------------
@@ -633,6 +646,7 @@ pub const INCOMPLETE_FEATURES: &[Symbol] = &[
     sym::inline_const,
     sym::repr128,
     sym::unsized_locals,
+    sym::capture_disjoint_fields,
 ];
 
 /// Some features are not allowed to be used together at the same time, if

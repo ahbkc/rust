@@ -28,13 +28,13 @@ use crate::traits::query::{
 };
 use crate::traits::specialization_graph;
 use crate::traits::{self, ImplSource};
-use crate::ty::steal::Steal;
 use crate::ty::subst::{GenericArg, SubstsRef};
 use crate::ty::util::AlwaysRequiresDrop;
 use crate::ty::{self, AdtSizedConstraint, CrateInherentImpls, ParamEnvAnd, Ty, TyCtxt};
 use rustc_data_structures::fingerprint::Fingerprint;
 use rustc_data_structures::fx::{FxHashMap, FxHashSet, FxIndexMap};
 use rustc_data_structures::stable_hasher::StableVec;
+use rustc_data_structures::steal::Steal;
 use rustc_data_structures::svh::Svh;
 use rustc_data_structures::sync::Lrc;
 use rustc_errors::ErrorReported;
@@ -220,7 +220,7 @@ pub(crate) fn try_load_from_on_disk_cache<'tcx>(tcx: TyCtxt<'tcx>, dep_node: &De
                                          .map(|c| c.is_green())
                                          .unwrap_or(false));
 
-                        let key = <query_keys::$name<'tcx> as DepNodeParams<TyCtxt<'_>>>::recover(tcx, dep_node).unwrap();
+                        let key = <query_keys::$name<'tcx> as DepNodeParams<TyCtxt<'_>>>::recover(tcx, dep_node).unwrap_or_else(|| panic!("Failed to recover key for {:?} with hash {}", dep_node, dep_node.hash));
                         if queries::$name::cache_on_disk(tcx, &key, None) {
                             let _ = tcx.$name(key);
                         }

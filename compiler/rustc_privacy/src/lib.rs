@@ -4,6 +4,7 @@
 #![feature(or_patterns)]
 #![feature(control_flow_enum)]
 #![feature(try_blocks)]
+#![feature(associated_type_defaults)]
 #![recursion_limit = "256"]
 
 use rustc_attr as attr;
@@ -38,12 +39,14 @@ use std::{cmp, fmt, mem};
 /// Implemented to visit all `DefId`s in a type.
 /// Visiting `DefId`s is useful because visibilities and reachabilities are attached to them.
 /// The idea is to visit "all components of a type", as documented in
-/// https://github.com/rust-lang/rfcs/blob/master/text/2145-type-privacy.md#how-to-determine-visibility-of-a-type.
+/// <https://github.com/rust-lang/rfcs/blob/master/text/2145-type-privacy.md#how-to-determine-visibility-of-a-type>.
 /// The default type visitor (`TypeVisitor`) does most of the job, but it has some shortcomings.
 /// First, it doesn't have overridable `fn visit_trait_ref`, so we have to catch trait `DefId`s
 /// manually. Second, it doesn't visit some type components like signatures of fn types, or traits
 /// in `impl Trait`, see individual comments in `DefIdVisitorSkeleton::visit_ty`.
 trait DefIdVisitor<'tcx> {
+    type BreakTy = ();
+
     fn tcx(&self) -> TyCtxt<'tcx>;
     fn shallow(&self) -> bool {
         false
@@ -56,7 +59,7 @@ trait DefIdVisitor<'tcx> {
         def_id: DefId,
         kind: &str,
         descr: &dyn fmt::Display,
-    ) -> ControlFlow<()>;
+    ) -> ControlFlow<Self::BreakTy>;
 
     /// Not overridden, but used to actually visit types and traits.
     fn skeleton(&mut self) -> DefIdVisitorSkeleton<'_, 'tcx, Self> {
@@ -66,13 +69,16 @@ trait DefIdVisitor<'tcx> {
             dummy: Default::default(),
         }
     }
-    fn visit(&mut self, ty_fragment: impl TypeFoldable<'tcx>) -> ControlFlow<()> {
+    fn visit(&mut self, ty_fragment: impl TypeFoldable<'tcx>) -> ControlFlow<Self::BreakTy> {
         ty_fragment.visit_with(&mut self.skeleton())
     }
-    fn visit_trait(&mut self, trait_ref: TraitRef<'tcx>) -> ControlFlow<()> {
+    fn visit_trait(&mut self, trait_ref: TraitRef<'tcx>) -> ControlFlow<Self::BreakTy> {
         self.skeleton().visit_trait(trait_ref)
     }
-    fn visit_predicates(&mut self, predicates: ty::GenericPredicates<'tcx>) -> ControlFlow<()> {
+    fn visit_predicates(
+        &mut self,
+        predicates: ty::GenericPredicates<'tcx>,
+    ) -> ControlFlow<Self::BreakTy> {
         self.skeleton().visit_predicates(predicates)
     }
 }
@@ -87,13 +93,13 @@ impl<'tcx, V> DefIdVisitorSkeleton<'_, 'tcx, V>
 where
     V: DefIdVisitor<'tcx> + ?Sized,
 {
-    fn visit_trait(&mut self, trait_ref: TraitRef<'tcx>) -> ControlFlow<()> {
+    fn visit_trait(&mut self, trait_ref: TraitRef<'tcx>) -> ControlFlow<V::BreakTy> {
         let TraitRef { def_id, substs } = trait_ref;
         self.def_id_visitor.visit_def_id(def_id, "trait", &trait_ref.print_only_trait_path())?;
         if self.def_id_visitor.shallow() { ControlFlow::CONTINUE } else { substs.visit_with(self) }
     }
 
-    fn visit_predicate(&mut self, predicate: ty::Predicate<'tcx>) -> ControlFlow<()> {
+    fn visit_predicate(&mut self, predicate: ty::Predicate<'tcx>) -> ControlFlow<V::BreakTy> {
         match predicate.skip_binders() {
             ty::PredicateAtom::Trait(ty::TraitPredicate { trait_ref }, _) => {
                 self.visit_trait(trait_ref)
@@ -119,7 +125,10 @@ where
         }
     }
 
-    fn visit_predicates(&mut self, predicates: ty::GenericPredicates<'tcx>) -> ControlFlow<()> {
+    fn visit_predicates(
+        &mut self,
+        predicates: ty::GenericPredicates<'tcx>,
+    ) -> ControlFlow<V::BreakTy> {
         let ty::GenericPredicates { parent: _, predicates } = predicates;
         predicates.iter().try_for_each(|&(predicate, _span)| self.visit_predicate(predicate))
     }
@@ -129,7 +138,9 @@ impl<'tcx, V> TypeVisitor<'tcx> for DefIdVisitorSkeleton<'_, 'tcx, V>
 where
     V: DefIdVisitor<'tcx> + ?Sized,
 {
-    fn visit_ty(&mut self, ty: Ty<'tcx>) -> ControlFlow<()> {
+    type BreakTy = V::BreakTy;
+
+    fn visit_ty(&mut self, ty: Ty<'tcx>) -> ControlFlow<V::BreakTy> {
         let tcx = self.def_id_visitor.tcx();
         // InternalSubsts are not visited here because they are visited below in `super_visit_with`.
         match *ty.kind() {
@@ -173,8 +184,8 @@ where
             ty::Dynamic(predicates, ..) => {
                 // All traits in the list are considered the "primary" part of the type
                 // and are visited by shallow visitors.
-                for predicate in predicates.skip_binder() {
-                    let trait_ref = match predicate {
+                for predicate in predicates {
+                    let trait_ref = match predicate.skip_binder() {
                         ty::ExistentialPredicate::Trait(trait_ref) => trait_ref,
                         ty::ExistentialPredicate::Projection(proj) => proj.trait_ref(tcx),
                         ty::ExistentialPredicate::AutoTrait(def_id) => {
@@ -283,7 +294,7 @@ impl<'a, 'tcx, VL: VisibilityLike> DefIdVisitor<'tcx> for FindMin<'a, 'tcx, VL> 
         def_id: DefId,
         _kind: &str,
         _descr: &dyn fmt::Display,
-    ) -> ControlFlow<()> {
+    ) -> ControlFlow<Self::BreakTy> {
         self.min = VL::new_min(self, def_id);
         ControlFlow::CONTINUE
     }
@@ -581,7 +592,7 @@ impl Visitor<'tcx> for EmbargoVisitor<'tcx> {
                 Option::<AccessLevel>::of_impl(item.hir_id, self.tcx, &self.access_levels)
             }
             // Foreign modules inherit level from parents.
-            hir::ItemKind::ForeignMod(..) => self.prev_level,
+            hir::ItemKind::ForeignMod { .. } => self.prev_level,
             // Other `pub` items inherit levels from parents.
             hir::ItemKind::Const(..)
             | hir::ItemKind::Enum(..)
@@ -643,10 +654,10 @@ impl Visitor<'tcx> for EmbargoVisitor<'tcx> {
                     }
                 }
             }
-            hir::ItemKind::ForeignMod(ref foreign_mod) => {
-                for foreign_item in foreign_mod.items {
+            hir::ItemKind::ForeignMod { items, .. } => {
+                for foreign_item in items {
                     if foreign_item.vis.node.is_pub() {
-                        self.update(foreign_item.hir_id, item_level);
+                        self.update(foreign_item.id.hir_id, item_level);
                     }
                 }
             }
@@ -680,7 +691,7 @@ impl Visitor<'tcx> for EmbargoVisitor<'tcx> {
             hir::ItemKind::GlobalAsm(..) => {}
             hir::ItemKind::OpaqueTy(..) => {
                 // HACK(jynelson): trying to infer the type of `impl trait` breaks `async-std` (and `pub async fn` in general)
-                // Since rustdoc never need to do codegen and doesn't care about link-time reachability,
+                // Since rustdoc never needs to do codegen and doesn't care about link-time reachability,
                 // mark this as unreachable.
                 // See https://github.com/rust-lang/rust/issues/75100
                 if !self.tcx.sess.opts.actually_rustdoc {
@@ -759,11 +770,11 @@ impl Visitor<'tcx> for EmbargoVisitor<'tcx> {
                 }
             }
             // Visit everything, but foreign items have their own levels.
-            hir::ItemKind::ForeignMod(ref foreign_mod) => {
-                for foreign_item in foreign_mod.items {
-                    let foreign_item_level = self.get(foreign_item.hir_id);
+            hir::ItemKind::ForeignMod { items, .. } => {
+                for foreign_item in items {
+                    let foreign_item_level = self.get(foreign_item.id.hir_id);
                     if foreign_item_level.is_some() {
-                        self.reach(foreign_item.hir_id, foreign_item_level)
+                        self.reach(foreign_item.id.hir_id, foreign_item_level)
                             .generics()
                             .predicates()
                             .ty();
@@ -902,7 +913,7 @@ impl DefIdVisitor<'tcx> for ReachEverythingInTheInterfaceVisitor<'_, 'tcx> {
         def_id: DefId,
         _kind: &str,
         _descr: &dyn fmt::Display,
-    ) -> ControlFlow<()> {
+    ) -> ControlFlow<Self::BreakTy> {
         if let Some(def_id) = def_id.as_local() {
             if let (ty::Visibility::Public, _) | (_, Some(AccessLevel::ReachableFromImplTrait)) =
                 (self.tcx().visibility(def_id.to_def_id()), self.access_level)
@@ -1299,7 +1310,7 @@ impl DefIdVisitor<'tcx> for TypePrivacyVisitor<'tcx> {
         def_id: DefId,
         kind: &str,
         descr: &dyn fmt::Display,
-    ) -> ControlFlow<()> {
+    ) -> ControlFlow<Self::BreakTy> {
         if self.check_def_id(def_id, kind, descr) {
             ControlFlow::BREAK
         } else {
@@ -1419,7 +1430,7 @@ impl<'a, 'tcx> Visitor<'tcx> for ObsoleteVisiblePrivateTypesVisitor<'a, 'tcx> {
 
             // An `extern {}` doesn't introduce a new privacy
             // namespace (the contents have their own privacies).
-            hir::ItemKind::ForeignMod(_) => {}
+            hir::ItemKind::ForeignMod { .. } => {}
 
             hir::ItemKind::Trait(.., ref bounds, _) => {
                 if !self.trait_is_public(item.hir_id) {
@@ -1799,7 +1810,7 @@ impl DefIdVisitor<'tcx> for SearchInterfaceForPrivateItemsVisitor<'tcx> {
         def_id: DefId,
         kind: &str,
         descr: &dyn fmt::Display,
-    ) -> ControlFlow<()> {
+    ) -> ControlFlow<Self::BreakTy> {
         if self.check_def_id(def_id, kind, descr) {
             ControlFlow::BREAK
         } else {
@@ -1937,10 +1948,10 @@ impl<'a, 'tcx> Visitor<'tcx> for PrivateItemsInPublicInterfacesVisitor<'a, 'tcx>
                 }
             }
             // Subitems of foreign modules have their own publicity.
-            hir::ItemKind::ForeignMod(ref foreign_mod) => {
-                for foreign_item in foreign_mod.items {
-                    let vis = tcx.visibility(tcx.hir().local_def_id(foreign_item.hir_id));
-                    self.check(foreign_item.hir_id, vis).generics().predicates().ty();
+            hir::ItemKind::ForeignMod { items, .. } => {
+                for foreign_item in items {
+                    let vis = tcx.visibility(tcx.hir().local_def_id(foreign_item.id.hir_id));
+                    self.check(foreign_item.id.hir_id, vis).generics().predicates().ty();
                 }
             }
             // Subitems of structs and unions have their own publicity.
