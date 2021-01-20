@@ -1317,7 +1317,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
         T: TypeFoldable<'tcx>,
     {
         if !value.needs_infer() {
-            return value.clone(); // Avoid duplicated subst-folding.
+            return value; // Avoid duplicated subst-folding.
         }
         let mut r = resolve::OpportunisticVarResolver::new(self);
         value.fold_with(&mut r)
@@ -1533,7 +1533,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
                 // Note: if these two lines are combined into one we get
                 // dynamic borrow errors on `self.inner`.
                 let known = self.inner.borrow_mut().type_variables().probe(v).known();
-                known.map(|t| self.shallow_resolve_ty(t)).unwrap_or(typ)
+                known.map_or(typ, |t| self.shallow_resolve_ty(t))
             }
 
             ty::Infer(ty::IntVar(v)) => self

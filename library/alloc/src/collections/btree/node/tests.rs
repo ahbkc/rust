@@ -30,11 +30,15 @@ impl<'a, K: 'a, V: 'a> NodeRef<marker::Immut<'a>, K, V, marker::LeafOrInternal> 
                 let depth = self.height();
                 let indent = "  ".repeat(depth);
                 result += &format!("\n{}", indent);
-                for idx in 0..leaf.len() {
-                    if idx > 0 {
-                        result += ", ";
+                if leaf.len() == 0 {
+                    result += "(empty node)";
+                } else {
+                    for idx in 0..leaf.len() {
+                        if idx > 0 {
+                            result += ", ";
+                        }
+                        result += &format!("{:?}", unsafe { leaf.key_at(idx) });
                     }
-                    result += &format!("{:?}", unsafe { leaf.key_at(idx) });
                 }
             }
             navigate::Position::Internal(_) => {}
@@ -75,10 +79,8 @@ fn test_splitpoint() {
 #[test]
 fn test_partial_cmp_eq() {
     let mut root1 = NodeRef::new_leaf();
-    let mut leaf1 = root1.borrow_mut();
-    leaf1.push(1, ());
-    let mut root1 = root1.forget_type();
-    root1.push_internal_level();
+    root1.borrow_mut().push(1, ());
+    let mut root1 = NodeRef::new_internal(root1.forget_type()).forget_type();
     let root2 = Root::new();
     root1.reborrow().assert_back_pointers();
     root2.reborrow().assert_back_pointers();

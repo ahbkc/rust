@@ -254,27 +254,21 @@ fn suggest_restriction(
         let pred = trait_ref.without_const().to_predicate(tcx).to_string();
         let pred = pred.replace(&impl_trait_str, &type_param_name);
         let mut sugg = vec![
+            // Find the last of the generic parameters contained within the span of
+            // the generics
             match generics
                 .params
                 .iter()
-                .filter(|p| match p.kind {
-                    hir::GenericParamKind::Type {
-                        synthetic: Some(hir::SyntheticTyParamKind::ImplTrait),
-                        ..
-                    } => false,
-                    _ => true,
-                })
-                .last()
+                .map(|p| p.bounds_span().unwrap_or(p.span))
+                .filter(|&span| generics.span.contains(span) && span.desugaring_kind().is_none())
+                .max_by_key(|span| span.hi())
             {
                 // `fn foo(t: impl Trait)`
                 //        ^ suggest `<T: Trait>` here
                 None => (generics.span, format!("<{}>", type_param)),
                 // `fn foo<A>(t: impl Trait)`
                 //        ^^^ suggest `<A, T: Trait>` here
-                Some(param) => (
-                    param.bounds_span().unwrap_or(param.span).shrink_to_hi(),
-                    format!(", {}", type_param),
-                ),
+                Some(span) => (span.shrink_to_hi(), format!(", {}", type_param)),
             },
             // `fn foo(t: impl Trait)`
             //                       ^ suggest `where <T as Trait>::A: Bound`
@@ -399,7 +393,7 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                 hir::Node::Item(hir::Item {
                     kind:
                         hir::ItemKind::Trait(_, _, generics, _, _)
-                        | hir::ItemKind::Impl { generics, .. },
+                        | hir::ItemKind::Impl(hir::Impl { generics, .. }),
                     ..
                 }) if projection.is_some() => {
                     // Missing restriction on associated type of type parameter (unmet projection).
@@ -422,7 +416,7 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                         | hir::ItemKind::Enum(_, generics)
                         | hir::ItemKind::Union(_, generics)
                         | hir::ItemKind::Trait(_, _, generics, ..)
-                        | hir::ItemKind::Impl { generics, .. }
+                        | hir::ItemKind::Impl(hir::Impl { generics, .. })
                         | hir::ItemKind::Fn(_, generics, _)
                         | hir::ItemKind::TyAlias(_, generics)
                         | hir::ItemKind::TraitAlias(generics, _)
@@ -1298,8 +1292,8 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
         // the type. The last generator (`outer_generator` below) has information about where the
         // bound was introduced. At least one generator should be present for this diagnostic to be
         // modified.
-        let (mut trait_ref, mut target_ty) = match obligation.predicate.skip_binders() {
-            ty::PredicateAtom::Trait(p, _) => (Some(p.trait_ref), Some(p.self_ty())),
+        let (mut trait_ref, mut target_ty) = match obligation.predicate.kind().skip_binder() {
+            ty::PredicateKind::Trait(p, _) => (Some(p.trait_ref), Some(p.self_ty())),
             _ => (None, None),
         };
         let mut generator = None;
@@ -2282,6 +2276,12 @@ impl<'v> Visitor<'v> for ReturnsVisitor<'v> {
                 self.in_block_tail = true;
                 if let Some(expr) = block.expr {
                     self.visit_expr(expr);
+                }
+            }
+            hir::ExprKind::If(_, then, else_opt) if self.in_block_tail => {
+                self.visit_expr(then);
+                if let Some(el) = else_opt {
+                    self.visit_expr(el);
                 }
             }
             hir::ExprKind::Match(_, arms, _) if self.in_block_tail => {

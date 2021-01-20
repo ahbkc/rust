@@ -1,5 +1,5 @@
 #[macro_use]
-pub mod sym;
+pub mod sym_helper;
 
 #[allow(clippy::module_name_repetitions)]
 pub mod ast_utils;
@@ -41,7 +41,7 @@ use rustc_errors::Applicability;
 use rustc_hir as hir;
 use rustc_hir::def::{DefKind, Res};
 use rustc_hir::def_id::{DefId, CRATE_DEF_INDEX, LOCAL_CRATE};
-use rustc_hir::intravisit::{NestedVisitorMap, Visitor};
+use rustc_hir::intravisit::{self, NestedVisitorMap, Visitor};
 use rustc_hir::Node;
 use rustc_hir::{
     def, Arm, Block, Body, Constness, Crate, Expr, ExprKind, FnDecl, HirId, ImplItem, ImplItemKind, Item, ItemKind,
@@ -56,8 +56,8 @@ use rustc_semver::RustcVersion;
 use rustc_session::Session;
 use rustc_span::hygiene::{ExpnKind, MacroKind};
 use rustc_span::source_map::original_sp;
-use rustc_span::sym as rustc_sym;
-use rustc_span::symbol::{self, kw, Symbol};
+use rustc_span::sym;
+use rustc_span::symbol::{kw, Symbol};
 use rustc_span::{BytePos, Pos, Span, DUMMY_SP};
 use rustc_target::abi::Integer;
 use rustc_trait_selection::traits::query::normalize::AtExt;
@@ -439,8 +439,8 @@ pub fn trait_ref_of_method<'tcx>(cx: &LateContext<'tcx>, hir_id: HirId) -> Optio
     if_chain! {
         if parent_impl != hir::CRATE_HIR_ID;
         if let hir::Node::Item(item) = cx.tcx.hir().get(parent_impl);
-        if let hir::ItemKind::Impl{ of_trait: trait_ref, .. } = &item.kind;
-        then { return trait_ref.as_ref(); }
+        if let hir::ItemKind::Impl(impl_) = &item.kind;
+        then { return impl_.of_trait.as_ref(); }
     }
     None
 }
@@ -603,6 +603,37 @@ pub fn contains_return(expr: &hir::Expr<'_>) -> bool {
     visitor.found
 }
 
+struct FindMacroCalls<'a, 'b> {
+    names: &'a [&'b str],
+    result: Vec<Span>,
+}
+
+impl<'a, 'b, 'tcx> Visitor<'tcx> for FindMacroCalls<'a, 'b> {
+    type Map = Map<'tcx>;
+
+    fn visit_expr(&mut self, expr: &'tcx Expr<'_>) {
+        if self.names.iter().any(|fun| is_expn_of(expr.span, fun).is_some()) {
+            self.result.push(expr.span);
+        }
+        // and check sub-expressions
+        intravisit::walk_expr(self, expr);
+    }
+
+    fn nested_visit_map(&mut self) -> NestedVisitorMap<Self::Map> {
+        NestedVisitorMap::None
+    }
+}
+
+/// Finds calls of the specified macros in a function body.
+pub fn find_macro_calls(names: &[&str], body: &Body<'_>) -> Vec<Span> {
+    let mut fmc = FindMacroCalls {
+        names,
+        result: Vec::new(),
+    };
+    fmc.visit_expr(&body.value);
+    fmc.result
+}
+
 /// Converts a span to a code snippet if available, otherwise use default.
 ///
 /// This is useful if you want to provide suggestions for your lint or more generally, if you want
@@ -757,8 +788,7 @@ pub fn indent_of<T: LintContext>(cx: &T, span: Span) -> Option<usize> {
 /// fn into3(self)   -> () {}
 ///               ^
 /// ```
-#[allow(clippy::needless_pass_by_value)]
-pub fn position_before_rarrow(s: String) -> Option<usize> {
+pub fn position_before_rarrow(s: &str) -> Option<usize> {
     s.rfind("->").map(|rpos| {
         let mut rpos = rpos;
         let chars: Vec<char> = s.chars().collect();
@@ -1091,7 +1121,7 @@ pub fn is_refutable(cx: &LateContext<'_>, pat: &Pat<'_>) -> bool {
 /// Checks for the `#[automatically_derived]` attribute all `#[derive]`d
 /// implementations have.
 pub fn is_automatically_derived(attrs: &[ast::Attribute]) -> bool {
-    attrs.iter().any(|attr| attr.has_name(rustc_sym::automatically_derived))
+    attrs.iter().any(|attr| attr.has_name(sym::automatically_derived))
 }
 
 /// Remove blocks around an expression.
@@ -1375,7 +1405,7 @@ pub fn if_sequence<'tcx>(
     let mut conds = SmallVec::new();
     let mut blocks: SmallVec<[&Block<'_>; 1]> = SmallVec::new();
 
-    while let Some((ref cond, ref then_expr, ref else_expr)) = higher::if_block(&expr) {
+    while let ExprKind::If(ref cond, ref then_expr, ref else_expr) = expr.kind {
         conds.push(&**cond);
         if let ExprKind::Block(ref block, _) = then_expr.kind {
             blocks.push(block);
@@ -1404,12 +1434,13 @@ pub fn parent_node_is_if_expr(expr: &Expr<'_>, cx: &LateContext<'_>) -> bool {
     let map = cx.tcx.hir();
     let parent_id = map.get_parent_node(expr.hir_id);
     let parent_node = map.get(parent_id);
-
-    match parent_node {
-        Node::Expr(e) => higher::if_block(&e).is_some(),
-        Node::Arm(e) => higher::if_block(&e.body).is_some(),
-        _ => false,
-    }
+    matches!(
+        parent_node,
+        Node::Expr(Expr {
+            kind: ExprKind::If(_, _, _),
+            ..
+        })
+    )
 }
 
 // Finds the attribute with the given name, if any
@@ -1440,7 +1471,7 @@ pub fn is_must_use_ty<'tcx>(cx: &LateContext<'tcx>, ty: Ty<'tcx>) -> bool {
         ty::Tuple(ref substs) => substs.types().any(|ty| is_must_use_ty(cx, ty)),
         ty::Opaque(ref def_id, _) => {
             for (predicate, _) in cx.tcx.explicit_item_bounds(*def_id) {
-                if let ty::PredicateAtom::Trait(trait_predicate, _) = predicate.skip_binders() {
+                if let ty::PredicateKind::Trait(trait_predicate, _) = predicate.kind().skip_binder() {
                     if must_use_attr(&cx.tcx.get_attrs(trait_predicate.trait_ref.def_id)).is_some() {
                         return true;
                     }
@@ -1484,7 +1515,7 @@ pub fn is_must_use_func_call(cx: &LateContext<'_>, expr: &Expr<'_>) -> bool {
 pub fn is_no_std_crate(krate: &Crate<'_>) -> bool {
     krate.item.attrs.iter().any(|attr| {
         if let ast::AttrKind::Normal(ref attr, _) = attr.kind {
-            attr.path == symbol::sym::no_std
+            attr.path == sym::no_std
         } else {
             false
         }
@@ -1500,7 +1531,7 @@ pub fn is_no_std_crate(krate: &Crate<'_>) -> bool {
 /// ```
 pub fn is_trait_impl_item(cx: &LateContext<'_>, hir_id: HirId) -> bool {
     if let Some(Node::Item(item)) = cx.tcx.hir().find(cx.tcx.hir().get_parent_node(hir_id)) {
-        matches!(item.kind, ItemKind::Impl{ of_trait: Some(_), .. })
+        matches!(item.kind, ItemKind::Impl(hir::Impl { of_trait: Some(_), .. }))
     } else {
         false
     }
@@ -1654,6 +1685,18 @@ macro_rules! unwrap_cargo_metadata {
             },
         }
     }};
+}
+
+pub fn is_hir_ty_cfg_dependant(cx: &LateContext<'_>, ty: &hir::Ty<'_>) -> bool {
+    if_chain! {
+        if let TyKind::Path(QPath::Resolved(_, path)) = ty.kind;
+        if let Res::Def(_, def_id) = path.res;
+        then {
+            cx.tcx.has_attr(def_id, sym::cfg) || cx.tcx.has_attr(def_id, sym::cfg_attr)
+        } else {
+            false
+        }
+    }
 }
 
 #[cfg(test)]

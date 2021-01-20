@@ -55,6 +55,21 @@ impl InheritDeprecation {
     }
 }
 
+/// Whether to inherit const stability flags for nested items. In most cases, we do not want to
+/// inherit const stability: just because an enclosing `fn` is const-stable does not mean
+/// all `extern` imports declared in it should be const-stable! However, trait methods
+/// inherit const stability attributes from their parent and do not have their own.
+enum InheritConstStability {
+    Yes,
+    No,
+}
+
+impl InheritConstStability {
+    fn yes(&self) -> bool {
+        matches!(self, InheritConstStability::Yes)
+    }
+}
+
 // A private tree-walker for producing an Index.
 struct Annotator<'a, 'tcx> {
     tcx: TyCtxt<'tcx>,
@@ -75,6 +90,7 @@ impl<'a, 'tcx> Annotator<'a, 'tcx> {
         item_sp: Span,
         kind: AnnotationKind,
         inherit_deprecation: InheritDeprecation,
+        inherit_const_stability: InheritConstStability,
         visit_children: F,
     ) where
         F: FnOnce(&mut Self),
@@ -140,6 +156,8 @@ impl<'a, 'tcx> Annotator<'a, 'tcx> {
             const_stab
         });
 
+        // `impl const Trait for Type` items forward their const stability to their
+        // immediate children.
         if const_stab.is_none() {
             debug!("annotate: const_stab not found, parent = {:?}", self.parent_const_stab);
             if let Some(parent) = self.parent_const_stab {
@@ -228,7 +246,7 @@ impl<'a, 'tcx> Annotator<'a, 'tcx> {
         self.recurse_with_stability_attrs(
             depr.map(|(d, _)| DeprecationEntry::local(d, hir_id)),
             stab,
-            const_stab,
+            if inherit_const_stability.yes() { const_stab } else { None },
             visit_children,
         );
     }
@@ -325,18 +343,21 @@ impl<'a, 'tcx> Visitor<'tcx> for Annotator<'a, 'tcx> {
     fn visit_item(&mut self, i: &'tcx Item<'tcx>) {
         let orig_in_trait_impl = self.in_trait_impl;
         let mut kind = AnnotationKind::Required;
+        let mut const_stab_inherit = InheritConstStability::No;
         match i.kind {
             // Inherent impls and foreign modules serve only as containers for other items,
             // they don't have their own stability. They still can be annotated as unstable
             // and propagate this unstability to children, but this annotation is completely
             // optional. They inherit stability from their parents when unannotated.
-            hir::ItemKind::Impl { of_trait: None, .. } | hir::ItemKind::ForeignMod { .. } => {
+            hir::ItemKind::Impl(hir::Impl { of_trait: None, .. })
+            | hir::ItemKind::ForeignMod { .. } => {
                 self.in_trait_impl = false;
                 kind = AnnotationKind::Container;
             }
-            hir::ItemKind::Impl { of_trait: Some(_), .. } => {
+            hir::ItemKind::Impl(hir::Impl { of_trait: Some(_), .. }) => {
                 self.in_trait_impl = true;
                 kind = AnnotationKind::DeprecationProhibited;
+                const_stab_inherit = InheritConstStability::Yes;
             }
             hir::ItemKind::Struct(ref sd, _) => {
                 if let Some(ctor_hir_id) = sd.ctor_hir_id() {
@@ -346,6 +367,7 @@ impl<'a, 'tcx> Visitor<'tcx> for Annotator<'a, 'tcx> {
                         i.span,
                         AnnotationKind::Required,
                         InheritDeprecation::Yes,
+                        InheritConstStability::No,
                         |_| {},
                     )
                 }
@@ -353,9 +375,15 @@ impl<'a, 'tcx> Visitor<'tcx> for Annotator<'a, 'tcx> {
             _ => {}
         }
 
-        self.annotate(i.hir_id, &i.attrs, i.span, kind, InheritDeprecation::Yes, |v| {
-            intravisit::walk_item(v, i)
-        });
+        self.annotate(
+            i.hir_id,
+            &i.attrs,
+            i.span,
+            kind,
+            InheritDeprecation::Yes,
+            const_stab_inherit,
+            |v| intravisit::walk_item(v, i),
+        );
         self.in_trait_impl = orig_in_trait_impl;
     }
 
@@ -366,6 +394,7 @@ impl<'a, 'tcx> Visitor<'tcx> for Annotator<'a, 'tcx> {
             ti.span,
             AnnotationKind::Required,
             InheritDeprecation::Yes,
+            InheritConstStability::No,
             |v| {
                 intravisit::walk_trait_item(v, ti);
             },
@@ -375,9 +404,17 @@ impl<'a, 'tcx> Visitor<'tcx> for Annotator<'a, 'tcx> {
     fn visit_impl_item(&mut self, ii: &'tcx hir::ImplItem<'tcx>) {
         let kind =
             if self.in_trait_impl { AnnotationKind::Prohibited } else { AnnotationKind::Required };
-        self.annotate(ii.hir_id, &ii.attrs, ii.span, kind, InheritDeprecation::Yes, |v| {
-            intravisit::walk_impl_item(v, ii);
-        });
+        self.annotate(
+            ii.hir_id,
+            &ii.attrs,
+            ii.span,
+            kind,
+            InheritDeprecation::Yes,
+            InheritConstStability::No,
+            |v| {
+                intravisit::walk_impl_item(v, ii);
+            },
+        );
     }
 
     fn visit_variant(&mut self, var: &'tcx Variant<'tcx>, g: &'tcx Generics<'tcx>, item_id: HirId) {
@@ -387,6 +424,7 @@ impl<'a, 'tcx> Visitor<'tcx> for Annotator<'a, 'tcx> {
             var.span,
             AnnotationKind::Required,
             InheritDeprecation::Yes,
+            InheritConstStability::No,
             |v| {
                 if let Some(ctor_hir_id) = var.data.ctor_hir_id() {
                     v.annotate(
@@ -395,6 +433,7 @@ impl<'a, 'tcx> Visitor<'tcx> for Annotator<'a, 'tcx> {
                         var.span,
                         AnnotationKind::Required,
                         InheritDeprecation::Yes,
+                        InheritConstStability::No,
                         |_| {},
                     );
                 }
@@ -411,6 +450,7 @@ impl<'a, 'tcx> Visitor<'tcx> for Annotator<'a, 'tcx> {
             s.span,
             AnnotationKind::Required,
             InheritDeprecation::Yes,
+            InheritConstStability::No,
             |v| {
                 intravisit::walk_struct_field(v, s);
             },
@@ -424,6 +464,7 @@ impl<'a, 'tcx> Visitor<'tcx> for Annotator<'a, 'tcx> {
             i.span,
             AnnotationKind::Required,
             InheritDeprecation::Yes,
+            InheritConstStability::No,
             |v| {
                 intravisit::walk_foreign_item(v, i);
             },
@@ -437,22 +478,31 @@ impl<'a, 'tcx> Visitor<'tcx> for Annotator<'a, 'tcx> {
             md.span,
             AnnotationKind::Required,
             InheritDeprecation::Yes,
+            InheritConstStability::No,
             |_| {},
         );
     }
 
     fn visit_generic_param(&mut self, p: &'tcx hir::GenericParam<'tcx>) {
         let kind = match &p.kind {
-            // FIXME(const_generics:defaults)
+            // FIXME(const_generics_defaults)
             hir::GenericParamKind::Type { default, .. } if default.is_some() => {
                 AnnotationKind::Container
             }
             _ => AnnotationKind::Prohibited,
         };
 
-        self.annotate(p.hir_id, &p.attrs, p.span, kind, InheritDeprecation::No, |v| {
-            intravisit::walk_generic_param(v, p);
-        });
+        self.annotate(
+            p.hir_id,
+            &p.attrs,
+            p.span,
+            kind,
+            InheritDeprecation::No,
+            InheritConstStability::No,
+            |v| {
+                intravisit::walk_generic_param(v, p);
+            },
+        );
     }
 }
 
@@ -503,7 +553,7 @@ impl<'tcx> Visitor<'tcx> for MissingStabilityAnnotations<'tcx> {
         // optional. They inherit stability from their parents when unannotated.
         if !matches!(
             i.kind,
-            hir::ItemKind::Impl { of_trait: None, .. } | hir::ItemKind::ForeignMod { .. }
+            hir::ItemKind::Impl(hir::Impl { of_trait: None, .. }) | hir::ItemKind::ForeignMod { .. }
         ) {
             self.check_missing_stability(i.hir_id, i.span);
         }
@@ -617,6 +667,7 @@ fn new_index(tcx: TyCtxt<'tcx>) -> Index<'tcx> {
             krate.item.span,
             AnnotationKind::Required,
             InheritDeprecation::Yes,
+            InheritConstStability::No,
             |v| intravisit::walk_crate(v, krate),
         );
     }
@@ -672,7 +723,7 @@ impl Visitor<'tcx> for Checker<'tcx> {
             // For implementations of traits, check the stability of each item
             // individually as it's possible to have a stable trait with unstable
             // items.
-            hir::ItemKind::Impl { of_trait: Some(ref t), self_ty, items, .. } => {
+            hir::ItemKind::Impl(hir::Impl { of_trait: Some(ref t), self_ty, items, .. }) => {
                 if self.tcx.features().staged_api {
                     // If this impl block has an #[unstable] attribute, give an
                     // error if all involved types and traits are stable, because

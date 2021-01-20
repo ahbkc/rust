@@ -12,7 +12,6 @@ mod ty;
 use crate::lexer::UnmatchedBrace;
 pub use diagnostics::AttemptLocalParseRecovery;
 use diagnostics::Error;
-pub use pat::OrPatNonterminalMode;
 pub use path::PathStyle;
 
 use rustc_ast::ptr::P;
@@ -20,8 +19,8 @@ use rustc_ast::token::{self, DelimToken, Token, TokenKind};
 use rustc_ast::tokenstream::{self, DelimSpan, LazyTokenStream, Spacing};
 use rustc_ast::tokenstream::{CreateTokenStream, TokenStream, TokenTree, TreeAndSpacing};
 use rustc_ast::DUMMY_NODE_ID;
-use rustc_ast::{self as ast, AnonConst, AttrStyle, AttrVec, Const, CrateSugar, Extern, Unsafe};
-use rustc_ast::{Async, Expr, ExprKind, MacArgs, MacDelimiter, Mutability, StrLit};
+use rustc_ast::{self as ast, AnonConst, AttrStyle, AttrVec, Const, CrateSugar, Extern, HasTokens};
+use rustc_ast::{Async, Expr, ExprKind, MacArgs, MacDelimiter, Mutability, StrLit, Unsafe};
 use rustc_ast::{Visibility, VisibilityKind};
 use rustc_ast_pretty::pprust;
 use rustc_data_structures::sync::Lrc;
@@ -721,13 +720,9 @@ impl<'a> Parser<'a> {
                                 Ok(t) => {
                                     // Parsed successfully, therefore most probably the code only
                                     // misses a separator.
-                                    let mut exp_span = self.sess.source_map().next_point(sp);
-                                    if self.sess.source_map().is_multiline(exp_span) {
-                                        exp_span = sp;
-                                    }
                                     expect_err
                                         .span_suggestion_short(
-                                            exp_span,
+                                            sp,
                                             &format!("missing `{}`", token_str),
                                             token_str,
                                             Applicability::MaybeIncorrect,
@@ -988,8 +983,8 @@ impl<'a> Parser<'a> {
                         _ => self.sess.gated_spans.gate(sym::extended_key_value_attributes, span),
                     }
 
-                    let token = token::Interpolated(Lrc::new(token::NtExpr(expr)));
-                    MacArgs::Eq(eq_span, TokenTree::token(token, span).into())
+                    let token_kind = token::Interpolated(Lrc::new(token::NtExpr(expr)));
+                    MacArgs::Eq(eq_span, Token::new(token_kind, span))
                 } else {
                     MacArgs::Empty
                 }
@@ -1239,14 +1234,22 @@ impl<'a> Parser<'a> {
     /// This restriction shouldn't be an issue in practice,
     /// since this function is used to record the tokens for
     /// a parsed AST item, which always has matching delimiters.
-    pub fn collect_tokens<R>(
+    pub fn collect_tokens<R: HasTokens>(
         &mut self,
         f: impl FnOnce(&mut Self) -> PResult<'a, R>,
-    ) -> PResult<'a, (R, Option<LazyTokenStream>)> {
+    ) -> PResult<'a, R> {
         let start_token = (self.token.clone(), self.token_spacing);
-        let cursor_snapshot = self.token_cursor.clone();
+        let cursor_snapshot = TokenCursor {
+            frame: self.token_cursor.frame.clone(),
+            // We only ever capture tokens within our current frame,
+            // so we can just use an empty frame stack
+            stack: vec![],
+            desugar_doc_comments: self.token_cursor.desugar_doc_comments,
+            num_next_calls: self.token_cursor.num_next_calls,
+            append_unglued_token: self.token_cursor.append_unglued_token.clone(),
+        };
 
-        let ret = f(self)?;
+        let mut ret = f(self)?;
 
         // Produces a `TokenStream` on-demand. Using `cursor_snapshot`
         // and `num_calls`, we can reconstruct the `TokenStream` seen
@@ -1316,7 +1319,8 @@ impl<'a> Parser<'a> {
             trailing_semi: false,
             append_unglued_token: self.token_cursor.append_unglued_token.clone(),
         };
-        Ok((ret, Some(LazyTokenStream::new(lazy_impl))))
+        ret.finalize_tokens(LazyTokenStream::new(lazy_impl));
+        Ok(ret)
     }
 
     /// `::{` or `::*`

@@ -41,8 +41,8 @@ pub fn is_const_evaluatable<'cx, 'tcx>(
             // We are looking at a generic abstract constant.
             Some(ct) => {
                 for pred in param_env.caller_bounds() {
-                    match pred.skip_binders() {
-                        ty::PredicateAtom::ConstEvaluatable(b_def, b_substs) => {
+                    match pred.kind().skip_binder() {
+                        ty::PredicateKind::ConstEvaluatable(b_def, b_substs) => {
                             debug!(
                                 "is_const_evaluatable: caller_bound={:?}, {:?}",
                                 b_def, b_substs
@@ -152,7 +152,7 @@ pub fn is_const_evaluatable<'cx, 'tcx>(
     if concrete.is_ok() && substs.has_param_types_or_consts() {
         match infcx.tcx.def_kind(def.did) {
             DefKind::AnonConst => {
-                let mir_body = infcx.tcx.optimized_mir_opt_const_arg(def);
+                let mir_body = infcx.tcx.mir_for_ctfe_opt_const_arg(def);
 
                 if mir_body.is_polymorphic {
                     future_compat_lint();

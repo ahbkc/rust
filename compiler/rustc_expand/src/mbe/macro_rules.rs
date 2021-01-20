@@ -56,36 +56,11 @@ crate fn annotate_err_with_kind(
     };
 }
 
-/// Instead of e.g. `vec![a, b, c]` in a pattern context, suggest `[a, b, c]`.
-fn suggest_slice_pat(e: &mut DiagnosticBuilder<'_>, site_span: Span, parser: &Parser<'_>) {
-    let mut suggestion = None;
-    if let Ok(code) = parser.sess.source_map().span_to_snippet(site_span) {
-        if let Some(bang) = code.find('!') {
-            suggestion = Some(code[bang + 1..].to_string());
-        }
-    }
-    if let Some(suggestion) = suggestion {
-        e.span_suggestion(
-            site_span,
-            "use a slice pattern here instead",
-            suggestion,
-            Applicability::MachineApplicable,
-        );
-    } else {
-        e.span_label(site_span, "use a slice pattern here instead");
-    }
-    e.help(
-        "for more information, see https://doc.rust-lang.org/edition-guide/\
-        rust-2018/slice-patterns.html",
-    );
-}
-
 fn emit_frag_parse_err(
     mut e: DiagnosticBuilder<'_>,
     parser: &Parser<'_>,
     orig_parser: &mut Parser<'_>,
     site_span: Span,
-    macro_ident: Ident,
     arm_span: Span,
     kind: AstFragmentKind,
 ) {
@@ -113,9 +88,6 @@ fn emit_frag_parse_err(
         e.span_label(site_span, "in this macro invocation");
     }
     match kind {
-        AstFragmentKind::Pat if macro_ident.name == sym::vec => {
-            suggest_slice_pat(&mut e, site_span, parser);
-        }
         // Try a statement if an expression is wanted but failed and suggest adding `;` to call.
         AstFragmentKind::Expr => match parse_ast_fragment(orig_parser, AstFragmentKind::Stmts) {
             Err(mut err) => err.cancel(),
@@ -143,7 +115,7 @@ impl<'a> ParserAnyMacro<'a> {
         let fragment = match parse_ast_fragment(parser, kind) {
             Ok(f) => f,
             Err(err) => {
-                emit_frag_parse_err(err, parser, snapshot, site_span, macro_ident, arm_span, kind);
+                emit_frag_parse_err(err, parser, snapshot, site_span, arm_span, kind);
                 return kind.dummy(site_span);
             }
         };
@@ -203,7 +175,7 @@ fn macro_rules_dummy_expander<'cx>(
 }
 
 fn trace_macros_note(cx_expansions: &mut FxHashMap<Span, Vec<String>>, sp: Span, message: String) {
-    let sp = sp.macro_backtrace().last().map(|trace| trace.call_site).unwrap_or(sp);
+    let sp = sp.macro_backtrace().last().map_or(sp, |trace| trace.call_site);
     cx_expansions.entry(sp).or_default().push(message);
 }
 
@@ -401,7 +373,7 @@ pub fn compile_declarative_macro(
     let diag = &sess.parse_sess.span_diagnostic;
     let lhs_nm = Ident::new(sym::lhs, def.span);
     let rhs_nm = Ident::new(sym::rhs, def.span);
-    let tt_spec = NonterminalKind::TT;
+    let tt_spec = Some(NonterminalKind::TT);
 
     // Parse the macro_rules! invocation
     let (macro_rules, body) = match &def.kind {
@@ -476,10 +448,15 @@ pub fn compile_declarative_macro(
             .map(|m| {
                 if let MatchedNonterminal(ref nt) = *m {
                     if let NtTT(ref tt) = **nt {
-                        let tt =
-                            mbe::quoted::parse(tt.clone().into(), true, &sess.parse_sess, def.id)
-                                .pop()
-                                .unwrap();
+                        let tt = mbe::quoted::parse(
+                            tt.clone().into(),
+                            true,
+                            &sess.parse_sess,
+                            def.id,
+                            features,
+                        )
+                        .pop()
+                        .unwrap();
                         valid &= check_lhs_nt_follows(&sess.parse_sess, features, &def.attrs, &tt);
                         return tt;
                     }
@@ -501,6 +478,7 @@ pub fn compile_declarative_macro(
                             false,
                             &sess.parse_sess,
                             def.id,
+                            features,
                         )
                         .pop()
                         .unwrap();
@@ -578,7 +556,7 @@ fn check_lhs_no_empty_seq(sess: &ParseSess, tts: &[mbe::TokenTree]) -> bool {
             TokenTree::Sequence(span, ref seq) => {
                 if seq.separator.is_none()
                     && seq.tts.iter().all(|seq_tt| match *seq_tt {
-                        TokenTree::MetaVarDecl(_, _, NonterminalKind::Vis) => true,
+                        TokenTree::MetaVarDecl(_, _, Some(NonterminalKind::Vis)) => true,
                         TokenTree::Sequence(_, ref sub_seq) => {
                             sub_seq.kleene.op == mbe::KleeneOp::ZeroOrMore
                                 || sub_seq.kleene.op == mbe::KleeneOp::ZeroOrOne
@@ -961,7 +939,7 @@ fn check_matcher_core(
         // Now `last` holds the complete set of NT tokens that could
         // end the sequence before SUFFIX. Check that every one works with `suffix`.
         for token in &last.tokens {
-            if let TokenTree::MetaVarDecl(_, name, kind) = *token {
+            if let TokenTree::MetaVarDecl(_, name, Some(kind)) = *token {
                 for next_token in &suffix_first.tokens {
                     match is_in_follow(next_token, kind) {
                         IsInFollow::Yes => {}
@@ -1019,7 +997,7 @@ fn check_matcher_core(
 }
 
 fn token_can_be_followed_by_any(tok: &mbe::TokenTree) -> bool {
-    if let mbe::TokenTree::MetaVarDecl(_, _, kind) = *tok {
+    if let mbe::TokenTree::MetaVarDecl(_, _, Some(kind)) = *tok {
         frag_can_be_followed_by_any(kind)
     } else {
         // (Non NT's can always be followed by anything in matchers.)
@@ -1090,7 +1068,7 @@ fn is_in_follow(tok: &mbe::TokenTree, kind: NonterminalKind) -> IsInFollow {
                     _ => IsInFollow::No(TOKENS),
                 }
             }
-            NonterminalKind::Pat => {
+            NonterminalKind::Pat2018 { .. } | NonterminalKind::Pat2021 { .. } => {
                 const TOKENS: &[&str] = &["`=>`", "`,`", "`=`", "`|`", "`if`", "`in`"];
                 match tok {
                     TokenTree::Token(token) => match token.kind {
@@ -1123,7 +1101,7 @@ fn is_in_follow(tok: &mbe::TokenTree, kind: NonterminalKind) -> IsInFollow {
                         }
                         _ => IsInFollow::No(TOKENS),
                     },
-                    TokenTree::MetaVarDecl(_, _, NonterminalKind::Block) => IsInFollow::Yes,
+                    TokenTree::MetaVarDecl(_, _, Some(NonterminalKind::Block)) => IsInFollow::Yes,
                     _ => IsInFollow::No(TOKENS),
                 }
             }
@@ -1158,7 +1136,7 @@ fn is_in_follow(tok: &mbe::TokenTree, kind: NonterminalKind) -> IsInFollow {
                     TokenTree::MetaVarDecl(
                         _,
                         _,
-                        NonterminalKind::Ident | NonterminalKind::Ty | NonterminalKind::Path,
+                        Some(NonterminalKind::Ident | NonterminalKind::Ty | NonterminalKind::Path),
                     ) => IsInFollow::Yes,
                     _ => IsInFollow::No(TOKENS),
                 }
@@ -1171,7 +1149,8 @@ fn quoted_tt_to_string(tt: &mbe::TokenTree) -> String {
     match *tt {
         mbe::TokenTree::Token(ref token) => pprust::token_to_string(&token),
         mbe::TokenTree::MetaVar(_, name) => format!("${}", name),
-        mbe::TokenTree::MetaVarDecl(_, name, kind) => format!("${}:{}", name, kind),
+        mbe::TokenTree::MetaVarDecl(_, name, Some(kind)) => format!("${}:{}", name, kind),
+        mbe::TokenTree::MetaVarDecl(_, name, None) => format!("${}:", name),
         _ => panic!(
             "{}",
             "unexpected mbe::TokenTree::{Sequence or Delimited} \

@@ -2,6 +2,7 @@
 
 use core::cell::Cell;
 use core::convert::TryFrom;
+use core::iter::TrustedRandomAccess;
 use core::iter::*;
 
 /// An iterator wrapper that panics whenever `next` or `next_back` is called
@@ -599,6 +600,26 @@ fn test_zip_nth_back_side_effects_exhausted() {
     assert_eq!(iter.nth_back(0), None);
     assert_eq!(a, vec![1, 2, 3, 4, 6, 5]);
     assert_eq!(b, vec![200, 300, 400]);
+}
+
+#[test]
+fn test_zip_trusted_random_access_composition() {
+    let a = [0, 1, 2, 3, 4];
+    let b = a;
+    let c = a;
+
+    let a = a.iter().copied();
+    let b = b.iter().copied();
+    let mut c = c.iter().copied();
+    c.next();
+
+    let mut z1 = a.zip(b);
+    assert_eq!(z1.next().unwrap(), (0, 0));
+
+    let mut z2 = z1.zip(c);
+    fn assert_trusted_random_access<T: TrustedRandomAccess>(_a: &T) {}
+    assert_trusted_random_access(&z2);
+    assert_eq!(z2.next().unwrap(), ((1, 1), 1));
 }
 
 #[test]
@@ -3504,4 +3525,116 @@ pub fn extend_for_unit() {
         ().extend(iter);
     }
     assert_eq!(x, 5);
+}
+
+#[test]
+fn test_intersperse() {
+    let v = std::iter::empty().intersperse(0u32).collect::<Vec<_>>();
+    assert_eq!(v, vec![]);
+
+    let v = std::iter::once(1).intersperse(0).collect::<Vec<_>>();
+    assert_eq!(v, vec![1]);
+
+    let xs = ["a", "", "b", "c"];
+    let v: Vec<&str> = xs.iter().map(|x| x.clone()).intersperse(", ").collect();
+    let text: String = v.concat();
+    assert_eq!(text, "a, , b, c".to_string());
+
+    let ys = [0, 1, 2, 3];
+    let mut it = ys[..0].iter().map(|x| *x).intersperse(1);
+    assert!(it.next() == None);
+}
+
+#[test]
+fn test_intersperse_size_hint() {
+    let iter = std::iter::empty::<i32>().intersperse(0);
+    assert_eq!(iter.size_hint(), (0, Some(0)));
+
+    let xs = ["a", "", "b", "c"];
+    let mut iter = xs.iter().map(|x| x.clone()).intersperse(", ");
+    assert_eq!(iter.size_hint(), (7, Some(7)));
+
+    assert_eq!(iter.next(), Some("a"));
+    assert_eq!(iter.size_hint(), (6, Some(6)));
+    assert_eq!(iter.next(), Some(", "));
+    assert_eq!(iter.size_hint(), (5, Some(5)));
+
+    assert_eq!([].iter().intersperse(&()).size_hint(), (0, Some(0)));
+}
+
+#[test]
+fn test_fold_specialization_intersperse() {
+    let mut iter = (1..2).intersperse(0);
+    iter.clone().for_each(|x| assert_eq!(Some(x), iter.next()));
+
+    let mut iter = (1..3).intersperse(0);
+    iter.clone().for_each(|x| assert_eq!(Some(x), iter.next()));
+
+    let mut iter = (1..4).intersperse(0);
+    iter.clone().for_each(|x| assert_eq!(Some(x), iter.next()));
+}
+
+#[test]
+fn test_try_fold_specialization_intersperse_ok() {
+    let mut iter = (1..2).intersperse(0);
+    iter.clone().try_for_each(|x| {
+        assert_eq!(Some(x), iter.next());
+        Some(())
+    });
+
+    let mut iter = (1..3).intersperse(0);
+    iter.clone().try_for_each(|x| {
+        assert_eq!(Some(x), iter.next());
+        Some(())
+    });
+
+    let mut iter = (1..4).intersperse(0);
+    iter.clone().try_for_each(|x| {
+        assert_eq!(Some(x), iter.next());
+        Some(())
+    });
+}
+
+#[test]
+fn test_try_fold_specialization_intersperse_err() {
+    let orig_iter = ["a", "b"].iter().copied().intersperse("-");
+
+    // Abort after the first item.
+    let mut iter = orig_iter.clone();
+    iter.try_for_each(|_| None::<()>);
+    assert_eq!(iter.next(), Some("-"));
+    assert_eq!(iter.next(), Some("b"));
+    assert_eq!(iter.next(), None);
+
+    // Abort after the second item.
+    let mut iter = orig_iter.clone();
+    iter.try_for_each(|item| if item == "-" { None } else { Some(()) });
+    assert_eq!(iter.next(), Some("b"));
+    assert_eq!(iter.next(), None);
+
+    // Abort after the third item.
+    let mut iter = orig_iter.clone();
+    iter.try_for_each(|item| if item == "b" { None } else { Some(()) });
+    assert_eq!(iter.next(), None);
+}
+
+#[test]
+fn test_intersperse_with() {
+    #[derive(PartialEq, Debug)]
+    struct NotClone {
+        u: u32,
+    }
+    let r = vec![NotClone { u: 0 }, NotClone { u: 1 }]
+        .into_iter()
+        .intersperse_with(|| NotClone { u: 2 })
+        .collect::<Vec<_>>();
+    assert_eq!(r, vec![NotClone { u: 0 }, NotClone { u: 2 }, NotClone { u: 1 }]);
+
+    let mut ctr = 100;
+    let separator = || {
+        ctr *= 2;
+        ctr
+    };
+    let r = (0..3).intersperse_with(separator).collect::<Vec<_>>();
+    assert_eq!(r, vec![0, 200, 1, 400, 2]);
 }

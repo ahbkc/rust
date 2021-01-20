@@ -29,7 +29,7 @@ use self::Ordering::*;
 ///
 /// This trait allows for partial equality, for types that do not have a full
 /// equivalence relation. For example, in floating point numbers `NaN != NaN`,
-/// so floating point types implement `PartialEq` but not [`Eq`].
+/// so floating point types implement `PartialEq` but not [`trait@Eq`].
 ///
 /// Formally, the equality must be (for all `a`, `b` and `c`):
 ///
@@ -541,7 +541,7 @@ impl Ordering {
     /// assert_eq!(result, Ordering::Equal);
     ///
     /// let x: (i64, i64, i64) = (1, 2, 7);
-    /// let y: (i64, i64, i64)  = (1, 5, 3);
+    /// let y: (i64, i64, i64) = (1, 5, 3);
     /// let result = x.0.cmp(&y.0).then_with(|| x.1.cmp(&y.1)).then_with(|| x.2.cmp(&y.2));
     ///
     /// assert_eq!(result, Ordering::Less);

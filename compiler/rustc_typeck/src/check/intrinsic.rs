@@ -63,8 +63,6 @@ pub fn intrinsic_operation_unsafety(intrinsic: Symbol) -> hir::Unsafety {
         | sym::min_align_of
         | sym::needs_drop
         | sym::caller_location
-        | sym::size_of_val
-        | sym::min_align_of_val
         | sym::add_with_overflow
         | sym::sub_with_overflow
         | sym::mul_with_overflow
@@ -92,6 +90,7 @@ pub fn intrinsic_operation_unsafety(intrinsic: Symbol) -> hir::Unsafety {
         | sym::rustc_peek
         | sym::maxnumf64
         | sym::type_name
+        | sym::forget
         | sym::variant_count => hir::Unsafety::Normal,
         _ => hir::Unsafety::Unsafe,
     }
@@ -158,7 +157,6 @@ pub fn check_intrinsic_type(tcx: TyCtxt<'_>, it: &hir::ForeignItem<'_>) {
             }
             sym::forget => (1, vec![param(0)], tcx.mk_unit()),
             sym::transmute => (2, vec![param(0)], param(1)),
-            sym::move_val_init => (1, vec![tcx.mk_mut_ptr(param(0)), param(0)], tcx.mk_unit()),
             sym::prefetch_read_data
             | sym::prefetch_write_data
             | sym::prefetch_read_instruction

@@ -511,7 +511,7 @@ impl<'a> Parser<'a> {
         //
         // `x.foo::<u32>>>(3)`
         let parsed_angle_bracket_args =
-            segment.args.as_ref().map(|args| args.is_angle_bracketed()).unwrap_or(false);
+            segment.args.as_ref().map_or(false, |args| args.is_angle_bracketed());
 
         debug!(
             "check_trailing_angle_brackets: parsed_angle_bracket_args={:?}",
@@ -1911,5 +1911,23 @@ impl<'a> Parser<'a> {
         }
         *self = snapshot;
         Err(err)
+    }
+
+    /// Get the diagnostics for the cases where `move async` is found.
+    ///
+    /// `move_async_span` starts at the 'm' of the move keyword and ends with the 'c' of the async keyword
+    pub(super) fn incorrect_move_async_order_found(
+        &self,
+        move_async_span: Span,
+    ) -> DiagnosticBuilder<'a> {
+        let mut err =
+            self.struct_span_err(move_async_span, "the order of `move` and `async` is incorrect");
+        err.span_suggestion_verbose(
+            move_async_span,
+            "try switching the order",
+            "async move".to_owned(),
+            Applicability::MaybeIncorrect,
+        );
+        err
     }
 }

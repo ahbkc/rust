@@ -384,7 +384,6 @@ impl<'a> Builder<'a> {
                 test::ExpandYamlAnchors,
                 test::Tidy,
                 test::Ui,
-                test::CompileFail,
                 test::RunPassValgrind,
                 test::MirOpt,
                 test::Codegen,
@@ -471,6 +470,7 @@ impl<'a> Builder<'a> {
                 dist::RustDev,
                 dist::Extended,
                 dist::BuildManifest,
+                dist::ReproducibleArtifacts,
             ),
             Kind::Install => describe!(
                 install::Docs,
@@ -736,10 +736,7 @@ impl<'a> Builder<'a> {
         if self.config.deny_warnings {
             cmd.arg("-Dwarnings");
         }
-        // cfg(not(bootstrap)), can be removed on the next beta bump
-        if compiler.stage != 0 {
-            cmd.arg("-Znormalize-docs");
-        }
+        cmd.arg("-Znormalize-docs");
 
         // Remove make-related flags that can cause jobserver problems.
         cmd.env_remove("MAKEFLAGS");
@@ -817,12 +814,22 @@ impl<'a> Builder<'a> {
             cargo.env("REAL_LIBRARY_PATH", e);
         }
 
+        // Found with `rg "init_env_logger\("`. If anyone uses `init_env_logger`
+        // from out of tree it shouldn't matter, since x.py is only used for
+        // building in-tree.
+        let color_logs = ["RUSTDOC_LOG_COLOR", "RUSTC_LOG_COLOR", "RUST_LOG_COLOR"];
         match self.build.config.color {
             Color::Always => {
                 cargo.arg("--color=always");
+                for log in &color_logs {
+                    cargo.env(log, "always");
+                }
             }
             Color::Never => {
                 cargo.arg("--color=never");
+                for log in &color_logs {
+                    cargo.env(log, "never");
+                }
             }
             Color::Auto => {} // nothing to do
         }
@@ -1537,7 +1544,7 @@ impl Rustflags {
     fn arg(&mut self, arg: &str) -> &mut Self {
         assert_eq!(arg.split(' ').count(), 1);
         if !self.0.is_empty() {
-            self.0.push_str(" ");
+            self.0.push(' ');
         }
         self.0.push_str(arg);
         self

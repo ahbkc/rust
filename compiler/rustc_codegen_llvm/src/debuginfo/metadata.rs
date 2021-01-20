@@ -1832,8 +1832,9 @@ impl<'tcx> VariantInfo<'_, 'tcx> {
     fn source_info(&self, cx: &CodegenCx<'ll, 'tcx>) -> Option<SourceInfo<'ll>> {
         match self {
             VariantInfo::Generator { def_id, variant_index, .. } => {
-                let span =
-                    cx.tcx.generator_layout(*def_id).variant_source_info[*variant_index].span;
+                let span = cx.tcx.generator_layout(*def_id).unwrap().variant_source_info
+                    [*variant_index]
+                    .span;
                 if !span.is_dummy() {
                     let loc = cx.lookup_debug_loc(span.lo());
                     return Some(SourceInfo {
@@ -2322,13 +2323,13 @@ fn set_members_of_composite_type(
             DIB(cx),
             composite_type_metadata,
             Some(type_array),
-            type_params,
+            Some(type_params),
         );
     }
 }
 
 /// Computes the type parameters for a type, if any, for the given metadata.
-fn compute_type_parameters(cx: &CodegenCx<'ll, 'tcx>, ty: Ty<'tcx>) -> Option<&'ll DIArray> {
+fn compute_type_parameters(cx: &CodegenCx<'ll, 'tcx>, ty: Ty<'tcx>) -> &'ll DIArray {
     if let ty::Adt(def, substs) = *ty.kind() {
         if substs.types().next().is_some() {
             let generics = cx.tcx.generics_of(def.did);
@@ -2358,10 +2359,10 @@ fn compute_type_parameters(cx: &CodegenCx<'ll, 'tcx>, ty: Ty<'tcx>) -> Option<&'
                 })
                 .collect();
 
-            return Some(create_DIArray(DIB(cx), &template_params[..]));
+            return create_DIArray(DIB(cx), &template_params[..]);
         }
     }
-    return Some(create_DIArray(DIB(cx), &[]));
+    return create_DIArray(DIB(cx), &[]);
 
     fn get_parameter_names(cx: &CodegenCx<'_, '_>, generics: &ty::Generics) -> Vec<Symbol> {
         let mut names = generics

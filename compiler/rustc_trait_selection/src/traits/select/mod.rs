@@ -69,16 +69,16 @@ impl IntercrateAmbiguityCause {
 
     pub fn intercrate_ambiguity_hint(&self) -> String {
         match self {
-            &IntercrateAmbiguityCause::DownstreamCrate { ref trait_desc, ref self_desc } => {
-                let self_desc = if let &Some(ref ty) = self_desc {
+            IntercrateAmbiguityCause::DownstreamCrate { trait_desc, self_desc } => {
+                let self_desc = if let Some(ty) = self_desc {
                     format!(" for type `{}`", ty)
                 } else {
                     String::new()
                 };
                 format!("downstream crates may implement trait `{}`{}", trait_desc, self_desc)
             }
-            &IntercrateAmbiguityCause::UpstreamCrateUpdate { ref trait_desc, ref self_desc } => {
-                let self_desc = if let &Some(ref ty) = self_desc {
+            IntercrateAmbiguityCause::UpstreamCrateUpdate { trait_desc, self_desc } => {
+                let self_desc = if let Some(ty) = self_desc {
                     format!(" for type `{}`", ty)
                 } else {
                     String::new()
@@ -89,7 +89,7 @@ impl IntercrateAmbiguityCause {
                     trait_desc, self_desc
                 )
             }
-            &IntercrateAmbiguityCause::ReservationImpl { ref message } => message.clone(),
+            IntercrateAmbiguityCause::ReservationImpl { message } => message.clone(),
         }
     }
 }
@@ -291,6 +291,10 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
         self.infcx.tcx
     }
 
+    pub(super) fn query_mode(&self) -> TraitQueryMode {
+        self.query_mode
+    }
+
     ///////////////////////////////////////////////////////////////////////////
     // Selection
     //
@@ -450,16 +454,16 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
         }
 
         let result = ensure_sufficient_stack(|| {
-            let bound_predicate = obligation.predicate.bound_atom();
+            let bound_predicate = obligation.predicate.kind();
             match bound_predicate.skip_binder() {
-                ty::PredicateAtom::Trait(t, _) => {
+                ty::PredicateKind::Trait(t, _) => {
                     let t = bound_predicate.rebind(t);
                     debug_assert!(!t.has_escaping_bound_vars());
                     let obligation = obligation.with(t);
                     self.evaluate_trait_predicate_recursively(previous_stack, obligation)
                 }
 
-                ty::PredicateAtom::Subtype(p) => {
+                ty::PredicateKind::Subtype(p) => {
                     let p = bound_predicate.rebind(p);
                     // Does this code ever run?
                     match self.infcx.subtype_predicate(&obligation.cause, obligation.param_env, p) {
@@ -475,7 +479,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                     }
                 }
 
-                ty::PredicateAtom::WellFormed(arg) => match wf::obligations(
+                ty::PredicateKind::WellFormed(arg) => match wf::obligations(
                     self.infcx,
                     obligation.param_env,
                     obligation.cause.body_id,
@@ -490,12 +494,12 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                     None => Ok(EvaluatedToAmbig),
                 },
 
-                ty::PredicateAtom::TypeOutlives(..) | ty::PredicateAtom::RegionOutlives(..) => {
+                ty::PredicateKind::TypeOutlives(..) | ty::PredicateKind::RegionOutlives(..) => {
                     // We do not consider region relationships when evaluating trait matches.
                     Ok(EvaluatedToOkModuloRegions)
                 }
 
-                ty::PredicateAtom::ObjectSafe(trait_def_id) => {
+                ty::PredicateKind::ObjectSafe(trait_def_id) => {
                     if self.tcx().is_object_safe(trait_def_id) {
                         Ok(EvaluatedToOk)
                     } else {
@@ -503,7 +507,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                     }
                 }
 
-                ty::PredicateAtom::Projection(data) => {
+                ty::PredicateKind::Projection(data) => {
                     let data = bound_predicate.rebind(data);
                     let project_obligation = obligation.with(data);
                     match project::poly_project_and_unify_type(self, &project_obligation) {
@@ -524,7 +528,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                     }
                 }
 
-                ty::PredicateAtom::ClosureKind(_, closure_substs, kind) => {
+                ty::PredicateKind::ClosureKind(_, closure_substs, kind) => {
                     match self.infcx.closure_kind(closure_substs) {
                         Some(closure_kind) => {
                             if closure_kind.extends(kind) {
@@ -537,7 +541,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                     }
                 }
 
-                ty::PredicateAtom::ConstEvaluatable(def_id, substs) => {
+                ty::PredicateKind::ConstEvaluatable(def_id, substs) => {
                     match const_evaluatable::is_const_evaluatable(
                         self.infcx,
                         def_id,
@@ -551,7 +555,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                     }
                 }
 
-                ty::PredicateAtom::ConstEquate(c1, c2) => {
+                ty::PredicateKind::ConstEquate(c1, c2) => {
                     debug!(?c1, ?c2, "evaluate_predicate_recursively: equating consts");
 
                     let evaluate = |c: &'tcx ty::Const<'tcx>| {
@@ -594,7 +598,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                         }
                     }
                 }
-                ty::PredicateAtom::TypeWellFormedFromEnv(..) => {
+                ty::PredicateKind::TypeWellFormedFromEnv(..) => {
                     bug!("TypeWellFormedFromEnv is only used for chalk")
                 }
             }
@@ -841,8 +845,8 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
     }
 
     fn coinductive_predicate(&self, predicate: ty::Predicate<'tcx>) -> bool {
-        let result = match predicate.skip_binders() {
-            ty::PredicateAtom::Trait(ref data, _) => self.tcx().trait_is_auto(data.def_id()),
+        let result = match predicate.kind().skip_binder() {
+            ty::PredicateKind::Trait(ref data, _) => self.tcx().trait_is_auto(data.def_id()),
             _ => false,
         };
         debug!(?predicate, ?result, "coinductive_predicate");
@@ -1170,8 +1174,8 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
             .iter()
             .enumerate()
             .filter_map(|(idx, bound)| {
-                let bound_predicate = bound.bound_atom();
-                if let ty::PredicateAtom::Trait(pred, _) = bound_predicate.skip_binder() {
+                let bound_predicate = bound.kind();
+                if let ty::PredicateKind::Trait(pred, _) = bound_predicate.skip_binder() {
                     let bound = bound_predicate.rebind(pred.trait_ref);
                     if self.infcx.probe(|_| {
                         match self.match_normalize_trait_ref(

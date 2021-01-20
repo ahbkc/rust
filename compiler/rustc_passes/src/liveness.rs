@@ -367,10 +367,7 @@ impl<'tcx> Visitor<'tcx> for IrMaps<'tcx> {
     }
 
     fn visit_param(&mut self, param: &'tcx hir::Param<'tcx>) {
-        let is_shorthand = match param.pat.kind {
-            rustc_hir::PatKind::Struct(..) => true,
-            _ => false,
-        };
+        let is_shorthand = matches!(param.pat.kind, rustc_hir::PatKind::Struct(..));
         param.pat.each_binding(|_bm, hir_id, _x, ident| {
             let var = if is_shorthand {
                 Local(LocalInfo { id: hir_id, name: ident.name, is_shorthand: true })
@@ -422,7 +419,7 @@ impl<'tcx> Visitor<'tcx> for IrMaps<'tcx> {
             }
 
             // live nodes required for interesting control flow:
-            hir::ExprKind::Match(..) | hir::ExprKind::Loop(..) => {
+            hir::ExprKind::If(..) | hir::ExprKind::Match(..) | hir::ExprKind::Loop(..) => {
                 self.add_live_node_for_node(expr.hir_id, ExprNode(expr.span));
                 intravisit::walk_expr(self, expr);
             }
@@ -848,6 +845,29 @@ impl<'a, 'tcx> Liveness<'a, 'tcx> {
             // Note that labels have been resolved, so we don't need to look
             // at the label ident
             hir::ExprKind::Loop(ref blk, _, _) => self.propagate_through_loop(expr, &blk, succ),
+
+            hir::ExprKind::If(ref cond, ref then, ref else_opt) => {
+                //
+                //     (cond)
+                //       |
+                //       v
+                //     (expr)
+                //     /   \
+                //    |     |
+                //    v     v
+                //  (then)(els)
+                //    |     |
+                //    v     v
+                //   (  succ  )
+                //
+                let else_ln =
+                    self.propagate_through_opt_expr(else_opt.as_ref().map(|e| &**e), succ);
+                let then_ln = self.propagate_through_expr(&then, succ);
+                let ln = self.live_node(expr.hir_id, expr.span);
+                self.init_from_succ(ln, else_ln);
+                self.merge_from_succ(ln, then_ln);
+                self.propagate_through_expr(&cond, ln)
+            }
 
             hir::ExprKind::Match(ref e, arms, _) => {
                 //
@@ -1339,6 +1359,7 @@ fn check_expr<'tcx>(this: &mut Liveness<'_, 'tcx>, expr: &'tcx Expr<'tcx>) {
         | hir::ExprKind::Tup(..)
         | hir::ExprKind::Binary(..)
         | hir::ExprKind::Cast(..)
+        | hir::ExprKind::If(..)
         | hir::ExprKind::DropTemps(..)
         | hir::ExprKind::Unary(..)
         | hir::ExprKind::Ret(..)
@@ -1385,7 +1406,7 @@ impl<'tcx> Liveness<'_, 'tcx> {
 
     fn should_warn(&self, var: Variable) -> Option<String> {
         let name = self.ir.variable_name(var);
-        if name == kw::Invalid {
+        if name == kw::Empty {
             return None;
         }
         let name: &str = &name.as_str();

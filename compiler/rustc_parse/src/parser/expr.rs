@@ -15,6 +15,7 @@ use rustc_ast::{AnonConst, BinOp, BinOpKind, FnDecl, FnRetTy, MacCall, Param, Ty
 use rustc_ast::{Arm, Async, BlockCheckMode, Expr, ExprKind, Label, Movability, RangeLimits};
 use rustc_ast_pretty::pprust;
 use rustc_errors::{Applicability, DiagnosticBuilder, PResult};
+use rustc_span::edition::LATEST_STABLE_EDITION;
 use rustc_span::source_map::{self, Span, Spanned};
 use rustc_span::symbol::{kw, sym, Ident, Symbol};
 use rustc_span::{BytePos, Pos};
@@ -471,7 +472,8 @@ impl<'a> Parser<'a> {
     /// Parses a prefix-unary-operator expr.
     fn parse_prefix_expr(&mut self, attrs: Option<AttrVec>) -> PResult<'a, P<Expr>> {
         let attrs = self.parse_or_use_outer_attributes(attrs)?;
-        self.maybe_collect_tokens(super::attr::maybe_needs_tokens(&attrs), |this| {
+        let needs_tokens = super::attr::maybe_needs_tokens(&attrs);
+        let do_parse = |this: &mut Parser<'a>| {
             let lo = this.token.span;
             // Note: when adding new unary operators, don't forget to adjust TokenKind::can_begin_expr()
             let (hi, ex) = match this.token.uninterpolate().kind {
@@ -487,7 +489,8 @@ impl<'a> Parser<'a> {
                 _ => return this.parse_dot_or_call_expr(Some(attrs)),
             }?;
             Ok(this.mk_expr(lo.to(hi), ex, attrs))
-        })
+        };
+        if needs_tokens { self.collect_tokens(do_parse) } else { do_parse(self) }
     }
 
     fn parse_prefix_expr_common(&mut self, lo: Span) -> PResult<'a, (Span, P<Expr>)> {
@@ -1124,20 +1127,6 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn maybe_collect_tokens(
-        &mut self,
-        needs_tokens: bool,
-        f: impl FnOnce(&mut Self) -> PResult<'a, P<Expr>>,
-    ) -> PResult<'a, P<Expr>> {
-        if needs_tokens {
-            let (mut expr, tokens) = self.collect_tokens(f)?;
-            expr.tokens = tokens;
-            Ok(expr)
-        } else {
-            f(self)
-        }
-    }
-
     fn parse_lit_expr(&mut self, attrs: AttrVec) -> PResult<'a, P<Expr>> {
         let lo = self.token.span;
         match self.parse_opt_lit() {
@@ -1598,12 +1587,8 @@ impl<'a> Parser<'a> {
         } else {
             Async::No
         };
-        if let Async::Yes { span, .. } = asyncness {
-            // Feature-gate `async ||` closures.
-            self.sess.gated_spans.gate(sym::async_closure, span);
-        }
 
-        let capture_clause = self.parse_capture_clause();
+        let capture_clause = self.parse_capture_clause()?;
         let decl = self.parse_fn_block_decl()?;
         let decl_hi = self.prev_token.span;
         let body = match decl.output {
@@ -1618,6 +1603,11 @@ impl<'a> Parser<'a> {
             }
         };
 
+        if let Async::Yes { span, .. } = asyncness {
+            // Feature-gate `async ||` closures.
+            self.sess.gated_spans.gate(sym::async_closure, span);
+        }
+
         Ok(self.mk_expr(
             lo.to(body.span),
             ExprKind::Closure(capture_clause, asyncness, movability, decl, body, lo.to(decl_hi)),
@@ -1626,8 +1616,18 @@ impl<'a> Parser<'a> {
     }
 
     /// Parses an optional `move` prefix to a closure-like construct.
-    fn parse_capture_clause(&mut self) -> CaptureBy {
-        if self.eat_keyword(kw::Move) { CaptureBy::Value } else { CaptureBy::Ref }
+    fn parse_capture_clause(&mut self) -> PResult<'a, CaptureBy> {
+        if self.eat_keyword(kw::Move) {
+            // Check for `move async` and recover
+            if self.check_keyword(kw::Async) {
+                let move_async_span = self.token.span.with_lo(self.prev_token.span.data().lo);
+                Err(self.incorrect_move_async_order_found(move_async_span))
+            } else {
+                Ok(CaptureBy::Value)
+            }
+        } else {
+            Ok(CaptureBy::Ref)
+        }
     }
 
     /// Parses the `|arg, arg|` header of a closure.
@@ -2019,7 +2019,7 @@ impl<'a> Parser<'a> {
     fn parse_async_block(&mut self, mut attrs: AttrVec) -> PResult<'a, P<Expr>> {
         let lo = self.token.span;
         self.expect_keyword(kw::Async)?;
-        let capture_clause = self.parse_capture_clause();
+        let capture_clause = self.parse_capture_clause()?;
         let (iattrs, body) = self.parse_inner_attrs_and_block()?;
         attrs.extend(iattrs);
         let kind = ExprKind::Async(capture_clause, DUMMY_NODE_ID, body);
@@ -2098,8 +2098,8 @@ impl<'a> Parser<'a> {
 
         let mut async_block_err = |e: &mut DiagnosticBuilder<'_>, span: Span| {
             recover_async = true;
-            e.span_label(span, "`async` blocks are only allowed in the 2018 edition");
-            e.help("set `edition = \"2018\"` in `Cargo.toml`");
+            e.span_label(span, "`async` blocks are only allowed in Rust 2018 or later");
+            e.help(&format!("set `edition = \"{}\"` in `Cargo.toml`", LATEST_STABLE_EDITION));
             e.note("for more on editions, read https://doc.rust-lang.org/edition-guide");
         };
 

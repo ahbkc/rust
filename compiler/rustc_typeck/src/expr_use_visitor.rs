@@ -219,6 +219,14 @@ impl<'a, 'tcx> ExprUseVisitor<'a, 'tcx> {
                 self.consume_exprs(exprs);
             }
 
+            hir::ExprKind::If(ref cond_expr, ref then_expr, ref opt_else_expr) => {
+                self.consume_expr(&cond_expr);
+                self.consume_expr(&then_expr);
+                if let Some(ref else_expr) = *opt_else_expr {
+                    self.consume_expr(&else_expr);
+                }
+            }
+
             hir::ExprKind::Match(ref discr, arms, _) => {
                 let discr_place = return_if_err!(self.mc.cat_expr(&discr));
                 self.borrow_expr(&discr, ty::ImmBorrow);
@@ -595,10 +603,10 @@ impl<'a, 'tcx> ExprUseVisitor<'a, 'tcx> {
         let upvars = self.tcx().upvars_mentioned(self.body_owner);
 
         // For purposes of this function, generator and closures are equivalent.
-        let body_owner_is_closure = match self.tcx().type_of(self.body_owner.to_def_id()).kind() {
-            ty::Closure(..) | ty::Generator(..) => true,
-            _ => false,
-        };
+        let body_owner_is_closure = matches!(
+            self.tcx().type_of(self.body_owner.to_def_id()).kind(),
+            ty::Closure(..) | ty::Generator(..)
+        );
 
         if let Some(min_captures) = self.mc.typeck_results.closure_min_captures.get(&closure_def_id)
         {

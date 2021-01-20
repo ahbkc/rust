@@ -70,7 +70,6 @@
 #![warn(missing_docs)]
 #![warn(missing_debug_implementations)]
 #![allow(explicit_outlives_requirements)]
-#![allow(incomplete_features)]
 #![deny(unsafe_op_in_unsafe_fn)]
 #![feature(rustc_allow_const_fn_unstable)]
 #![cfg_attr(not(test), feature(generator_trait))]
@@ -90,7 +89,6 @@
 #![feature(coerce_unsized)]
 #![feature(const_btree_new)]
 #![feature(const_fn)]
-#![feature(const_generics)]
 #![feature(const_in_array_repeat_expressions)]
 #![feature(cow_is_borrowed)]
 #![feature(const_cow_is_borrowed)]
@@ -112,8 +110,7 @@
 #![feature(never_type)]
 #![feature(nll)]
 #![feature(nonnull_slice_from_raw_parts)]
-#![cfg_attr(bootstrap, feature(optin_builtin_traits))]
-#![cfg_attr(not(bootstrap), feature(auto_traits))]
+#![feature(auto_traits)]
 #![feature(or_patterns)]
 #![feature(pattern)]
 #![feature(ptr_internals)]
@@ -121,7 +118,9 @@
 #![feature(raw_ref_op)]
 #![feature(rustc_attrs)]
 #![feature(receiver_trait)]
+#![cfg_attr(bootstrap, feature(min_const_generics))]
 #![feature(min_specialization)]
+#![feature(set_ptr_value)]
 #![feature(slice_ptr_get)]
 #![feature(slice_ptr_len)]
 #![feature(staged_api)]
@@ -140,6 +139,8 @@
 #![feature(try_trait)]
 #![feature(type_alias_impl_trait)]
 #![feature(associated_type_bounds)]
+#![feature(slice_group_by)]
+#![feature(decl_macro)]
 // Allow testing this library
 
 #[cfg(test)]
@@ -184,13 +185,15 @@ pub mod task;
 mod tests;
 pub mod vec;
 
-#[cfg(not(test))]
-mod std {
-    pub use core::ops; // RangeFull
-}
-
 #[doc(hidden)]
 #[unstable(feature = "liballoc_internals", issue = "none", reason = "implementation detail")]
 pub mod __export {
     pub use core::format_args;
+
+    /// Force AST node to an expression to improve diagnostics in pattern position.
+    #[rustc_macro_transparency = "semitransparent"]
+    #[unstable(feature = "liballoc_internals", issue = "none", reason = "implementation detail")]
+    pub macro force_expr($e:expr) {
+        $e
+    }
 }

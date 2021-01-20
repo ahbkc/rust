@@ -88,7 +88,7 @@ pub fn check(
         &[
             &src_path.join("test/ui"),
             &src_path.join("test/ui-fulldeps"),
-            &src_path.join("test/compile-fail"),
+            &src_path.join("test/rustdoc-ui"),
         ],
         &mut |path| super::filter_dirs(path),
         &mut |entry, contents| {
