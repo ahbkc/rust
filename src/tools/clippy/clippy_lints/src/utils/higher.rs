@@ -9,6 +9,7 @@ use rustc_ast::ast;
 use rustc_hir as hir;
 use rustc_hir::{BorrowKind, Expr, ExprKind, StmtKind, UnOp};
 use rustc_lint::LateContext;
+use rustc_span::source_map::Span;
 
 /// Converts a hir binary operator to the corresponding `ast` type.
 #[must_use]
@@ -133,22 +134,22 @@ pub fn is_from_for_desugar(local: &hir::Local<'_>) -> bool {
     false
 }
 
-/// Recover the essential nodes of a desugared for loop:
-/// `for pat in arg { body }` becomes `(pat, arg, body)`.
+/// Recover the essential nodes of a desugared for loop as well as the entire span:
+/// `for pat in arg { body }` becomes `(pat, arg, body)`. Return `(pat, arg, body, span)`.
 pub fn for_loop<'tcx>(
     expr: &'tcx hir::Expr<'tcx>,
-) -> Option<(&hir::Pat<'_>, &'tcx hir::Expr<'tcx>, &'tcx hir::Expr<'tcx>)> {
+) -> Option<(&hir::Pat<'_>, &'tcx hir::Expr<'tcx>, &'tcx hir::Expr<'tcx>, Span)> {
     if_chain! {
         if let hir::ExprKind::Match(ref iterexpr, ref arms, hir::MatchSource::ForLoopDesugar) = expr.kind;
         if let hir::ExprKind::Call(_, ref iterargs) = iterexpr.kind;
         if iterargs.len() == 1 && arms.len() == 1 && arms[0].guard.is_none();
-        if let hir::ExprKind::Loop(ref block, _, _) = arms[0].body.kind;
+        if let hir::ExprKind::Loop(ref block, ..) = arms[0].body.kind;
         if block.expr.is_none();
         if let [ _, _, ref let_stmt, ref body ] = *block.stmts;
         if let hir::StmtKind::Local(ref local) = let_stmt.kind;
         if let hir::StmtKind::Expr(ref expr) = body.kind;
         then {
-            return Some((&*local.pat, &iterargs[0], expr));
+            return Some((&*local.pat, &iterargs[0], expr, arms[0].span));
         }
     }
     None
@@ -158,8 +159,7 @@ pub fn for_loop<'tcx>(
 /// `while cond { body }` becomes `(cond, body)`.
 pub fn while_loop<'tcx>(expr: &'tcx hir::Expr<'tcx>) -> Option<(&'tcx hir::Expr<'tcx>, &'tcx hir::Expr<'tcx>)> {
     if_chain! {
-        if let hir::ExprKind::Loop(block, _, hir::LoopSource::While) = &expr.kind;
-        if let hir::Block { expr: Some(expr), .. } = &**block;
+        if let hir::ExprKind::Loop(hir::Block { expr: Some(expr), .. }, _, hir::LoopSource::While, _) = &expr.kind;
         if let hir::ExprKind::Match(cond, arms, hir::MatchSource::WhileDesugar) = &expr.kind;
         if let hir::ExprKind::DropTemps(cond) = &cond.kind;
         if let [hir::Arm { body, .. }, ..] = &arms[..];
@@ -244,7 +244,7 @@ pub fn extract_assert_macro_args<'tcx>(e: &'tcx Expr<'tcx>) -> Option<Vec<&'tcx 
                 // macros with unique arg: `{debug_}assert!` (e.g., `debug_assert!(some_condition)`)
                 if_chain! {
                     if let ExprKind::If(ref clause, _, _)  = matchexpr.kind;
-                    if let ExprKind::Unary(UnOp::UnNot, condition) = clause.kind;
+                    if let ExprKind::Unary(UnOp::Not, condition) = clause.kind;
                     then {
                         return Some(vec![condition]);
                     }

@@ -645,7 +645,7 @@ impl EmitterWriter {
         margin: Margin,
     ) {
         // Tabs are assumed to have been replaced by spaces in calling code.
-        assert!(!source_string.contains('\t'));
+        debug_assert!(!source_string.contains('\t'));
         let line_len = source_string.len();
         // Create the source line we will highlight.
         let left = margin.left(line_len);
@@ -1713,7 +1713,18 @@ impl EmitterWriter {
         let max_line_num_len = if self.ui_testing {
             ANONYMIZED_LINE_NUM.len()
         } else {
-            self.get_max_line_num(span, children).to_string().len()
+            // Instead of using .to_string().len(), we iteratively count the
+            // number of digits to avoid allocation. This strategy has sizable
+            // performance gains over the old string strategy.
+            let mut n = self.get_max_line_num(span, children);
+            let mut num_digits = 0;
+            loop {
+                num_digits += 1;
+                n /= 10;
+                if n == 0 {
+                    break num_digits;
+                }
+            }
         };
 
         match self.emit_message_default(span, message, code, level, max_line_num_len, false) {

@@ -4,10 +4,9 @@ use crate::dep_graph::DepNode;
 use crate::dep_graph::SerializedDepNodeIndex;
 use crate::query::caches::QueryCache;
 use crate::query::plumbing::CycleError;
-use crate::query::{QueryContext, QueryState};
+use crate::query::{QueryCacheStore, QueryContext, QueryState};
 
 use rustc_data_structures::fingerprint::Fingerprint;
-use std::borrow::Cow;
 use std::fmt::Debug;
 use std::hash::Hash;
 
@@ -74,7 +73,12 @@ pub trait QueryAccessors<CTX: QueryContext>: QueryConfig {
     type Cache: QueryCache<Key = Self::Key, Stored = Self::Stored, Value = Self::Value>;
 
     // Don't use this method to access query results, instead use the methods on TyCtxt
-    fn query_state<'a>(tcx: CTX) -> &'a QueryState<CTX::DepKind, CTX::Query, Self::Cache>;
+    fn query_state<'a>(tcx: CTX) -> &'a QueryState<CTX::DepKind, CTX::Query, Self::Key>;
+
+    // Don't use this method to access query results, instead use the methods on TyCtxt
+    fn query_cache<'a>(tcx: CTX) -> &'a QueryCacheStore<Self::Cache>
+    where
+        CTX: 'a;
 
     fn to_dep_node(tcx: CTX, key: &Self::Key) -> DepNode<CTX::DepKind>
     where
@@ -95,7 +99,7 @@ pub trait QueryAccessors<CTX: QueryContext>: QueryConfig {
 }
 
 pub trait QueryDescription<CTX: QueryContext>: QueryAccessors<CTX> {
-    fn describe(tcx: CTX, key: Self::Key) -> Cow<'static, str>;
+    fn describe(tcx: CTX, key: Self::Key) -> String;
 
     #[inline]
     fn cache_on_disk(_: CTX, _: &Self::Key, _: Option<&Self::Value>) -> bool {

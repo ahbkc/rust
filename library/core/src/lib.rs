@@ -73,11 +73,8 @@
 #![feature(const_discriminant)]
 #![feature(const_cell_into_inner)]
 #![feature(const_intrinsic_copy)]
-#![feature(const_checked_int_methods)]
-#![feature(const_euclidean_int_methods)]
 #![feature(const_float_classify)]
 #![feature(const_float_bits_conv)]
-#![feature(const_overflowing_int_methods)]
 #![feature(const_int_unchecked_arith)]
 #![feature(const_mut_refs)]
 #![feature(const_cttz)]
@@ -114,6 +111,7 @@
 #![feature(extended_key_value_attributes)]
 #![feature(extern_types)]
 #![feature(fundamental)]
+#![cfg_attr(not(bootstrap), feature(intra_doc_pointers))]
 #![feature(intrinsics)]
 #![feature(lang_items)]
 #![feature(link_llvm_intrinsics)]
@@ -126,6 +124,7 @@
 #![feature(auto_traits)]
 #![feature(or_patterns)]
 #![feature(prelude_import)]
+#![cfg_attr(not(bootstrap), feature(ptr_metadata))]
 #![feature(repr_simd, platform_intrinsics)]
 #![feature(rustc_attrs)]
 #![feature(simd_ffi)]
@@ -136,6 +135,7 @@
 #![feature(stmt_expr_attributes)]
 #![feature(str_split_as_str)]
 #![feature(str_split_inclusive_as_str)]
+#![feature(trait_alias)]
 #![feature(transparent_unions)]
 #![feature(try_blocks)]
 #![feature(unboxed_closures)]
@@ -253,6 +253,8 @@ pub mod panicking;
 pub mod pin;
 pub mod raw;
 pub mod result;
+#[unstable(feature = "async_stream", issue = "79024")]
+pub mod stream;
 pub mod sync;
 
 pub mod fmt;

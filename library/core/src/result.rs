@@ -229,7 +229,7 @@
 
 use crate::iter::{self, FromIterator, FusedIterator, TrustedLen};
 use crate::ops::{self, Deref, DerefMut};
-use crate::{convert, fmt};
+use crate::{convert, fmt, hint};
 
 /// `Result` is a type that represents either success ([`Ok`]) or failure ([`Err`]).
 ///
@@ -821,6 +821,74 @@ impl<T, E> Result<T, E> {
             Err(e) => op(e),
         }
     }
+
+    /// Returns the contained [`Ok`] value, consuming the `self` value,
+    /// without checking that the value is not an [`Err`].
+    ///
+    /// # Safety
+    ///
+    /// Calling this method on an [`Err`] is *[undefined behavior]*.
+    ///
+    /// [undefined behavior]: https://doc.rust-lang.org/reference/behavior-considered-undefined.html
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// #![feature(option_result_unwrap_unchecked)]
+    /// let x: Result<u32, &str> = Ok(2);
+    /// assert_eq!(unsafe { x.unwrap_unchecked() }, 2);
+    /// ```
+    ///
+    /// ```no_run
+    /// #![feature(option_result_unwrap_unchecked)]
+    /// let x: Result<u32, &str> = Err("emergency failure");
+    /// unsafe { x.unwrap_unchecked(); } // Undefined behavior!
+    /// ```
+    #[inline]
+    #[track_caller]
+    #[unstable(feature = "option_result_unwrap_unchecked", reason = "newly added", issue = "81383")]
+    pub unsafe fn unwrap_unchecked(self) -> T {
+        debug_assert!(self.is_ok());
+        match self {
+            Ok(t) => t,
+            // SAFETY: the safety contract must be upheld by the caller.
+            Err(_) => unsafe { hint::unreachable_unchecked() },
+        }
+    }
+
+    /// Returns the contained [`Err`] value, consuming the `self` value,
+    /// without checking that the value is not an [`Ok`].
+    ///
+    /// # Safety
+    ///
+    /// Calling this method on an [`Ok`] is *[undefined behavior]*.
+    ///
+    /// [undefined behavior]: https://doc.rust-lang.org/reference/behavior-considered-undefined.html
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// #![feature(option_result_unwrap_unchecked)]
+    /// let x: Result<u32, &str> = Ok(2);
+    /// unsafe { x.unwrap_err_unchecked() }; // Undefined behavior!
+    /// ```
+    ///
+    /// ```
+    /// #![feature(option_result_unwrap_unchecked)]
+    /// let x: Result<u32, &str> = Err("emergency failure");
+    /// assert_eq!(unsafe { x.unwrap_err_unchecked() }, "emergency failure");
+    /// ```
+    #[inline]
+    #[track_caller]
+    #[unstable(feature = "option_result_unwrap_unchecked", reason = "newly added", issue = "81383")]
+    pub unsafe fn unwrap_err_unchecked(self) -> E {
+        debug_assert!(self.is_err());
+        match self {
+            // SAFETY: the safety contract must be upheld by the caller.
+            Ok(_) => unsafe { hint::unreachable_unchecked() },
+            Err(e) => e,
+        }
+    }
 }
 
 impl<T: Copy, E> Result<&T, E> {
@@ -1205,6 +1273,41 @@ impl<T, E> Result<Result<T, E>, E> {
     #[unstable(feature = "result_flattening", issue = "70142")]
     pub fn flatten(self) -> Result<T, E> {
         self.and_then(convert::identity)
+    }
+}
+
+impl<T> Result<T, T> {
+    /// Returns the [`Ok`] value if `self` is `Ok`, and the [`Err`] value if
+    /// `self` is `Err`.
+    ///
+    /// In other words, this function returns the value (the `T`) of a
+    /// `Result<T, T>`, regardless of whether or not that result is `Ok` or
+    /// `Err`.
+    ///
+    /// This can be useful in conjunction with APIs such as
+    /// [`Atomic*::compare_exchange`], or [`slice::binary_search`][binary_search], but only in
+    /// cases where you don't care if the result was `Ok` or not.
+    ///
+    /// [`Atomic*::compare_exchange`]: crate::sync::atomic::AtomicBool::compare_exchange
+    /// [binary_search]: ../../std/primitive.slice.html#method.binary_search
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// #![feature(result_into_ok_or_err)]
+    /// let ok: Result<u32, u32> = Ok(3);
+    /// let err: Result<u32, u32> = Err(4);
+    ///
+    /// assert_eq!(ok.into_ok_or_err(), 3);
+    /// assert_eq!(err.into_ok_or_err(), 4);
+    /// ```
+    #[inline]
+    #[unstable(feature = "result_into_ok_or_err", reason = "newly added", issue = "82223")]
+    pub const fn into_ok_or_err(self) -> T {
+        match self {
+            Ok(v) => v,
+            Err(v) => v,
+        }
     }
 }
 

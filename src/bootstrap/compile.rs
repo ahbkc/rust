@@ -27,7 +27,7 @@ use crate::config::TargetSelection;
 use crate::dist;
 use crate::native;
 use crate::tool::SourceType;
-use crate::util::{exe, is_dylib, symlink_dir};
+use crate::util::{exe, is_debug_info, is_dylib, symlink_dir};
 use crate::{Compiler, DependencyType, GitRepo, Mode};
 
 #[derive(Debug, PartialOrd, Ord, Copy, Clone, PartialEq, Eq, Hash)]
@@ -41,7 +41,10 @@ impl Step for Std {
     const DEFAULT: bool = true;
 
     fn should_run(run: ShouldRun<'_>) -> ShouldRun<'_> {
-        run.all_krates("test")
+        // When downloading stage1, the standard library has already been copied to the sysroot, so
+        // there's no need to rebuild it.
+        let download_rustc = run.builder.config.download_rustc;
+        run.all_krates("test").default_condition(!download_rustc)
     }
 
     fn make_run(run: RunConfig<'_>) {
@@ -904,6 +907,18 @@ impl Step for Sysroot {
         let _ = fs::remove_dir_all(&sysroot);
         t!(fs::create_dir_all(&sysroot));
 
+        // If we're downloading a compiler from CI, we can use the same compiler for all stages other than 0.
+        if builder.config.download_rustc {
+            assert_eq!(
+                builder.config.build, compiler.host,
+                "Cross-compiling is not yet supported with `download-rustc`",
+            );
+            // Copy the compiler into the correct sysroot.
+            let stage0_dir = builder.config.out.join(&*builder.config.build.triple).join("stage0");
+            builder.cp_r(&stage0_dir, &sysroot);
+            return INTERNER.intern_path(sysroot);
+        }
+
         // Symlink the source root into the same location inside the sysroot,
         // where `rust-src` component would go (`$sysroot/lib/rustlib/src/rust`),
         // so that any tools relying on `rust-src` also work for local builds,
@@ -975,12 +990,15 @@ impl Step for Assemble {
         // produce some other architecture compiler we need to start from
         // `build` to get there.
         //
-        // FIXME: Perhaps we should download those libraries?
-        //        It would make builds faster...
-        //
         // FIXME: It may be faster if we build just a stage 1 compiler and then
         //        use that to bootstrap this compiler forward.
         let build_compiler = builder.compiler(target_compiler.stage - 1, builder.config.build);
+
+        // If we're downloading a compiler from CI, we can use the same compiler for all stages other than 0.
+        if builder.config.download_rustc {
+            builder.ensure(Sysroot { compiler: target_compiler });
+            return target_compiler;
+        }
 
         // Build the libraries for this compiler to link to (i.e., the libraries
         // it uses at runtime). NOTE: Crates the target compiler compiles don't
@@ -1031,7 +1049,8 @@ impl Step for Assemble {
         let src_libdir = builder.sysroot_libdir(build_compiler, host);
         for f in builder.read_dir(&src_libdir) {
             let filename = f.file_name().into_string().unwrap();
-            if is_dylib(&filename) && !proc_macros.contains(&filename) {
+            if (is_dylib(&filename) || is_debug_info(&filename)) && !proc_macros.contains(&filename)
+            {
                 builder.copy(&f.path(), &rustc_libdir.join(&filename));
             }
         }
@@ -1050,13 +1069,18 @@ impl Step for Assemble {
             builder.copy(&lld_install.join("bin").join(&src_exe), &libdir_bin.join(&dst_exe));
         }
 
-        // Similarly, copy `llvm-dwp` into libdir for Split DWARF.
-        {
+        // Similarly, copy `llvm-dwp` into libdir for Split DWARF. Only copy it when the LLVM
+        // backend is used to avoid unnecessarily building LLVM and because LLVM is not checked
+        // out by default when the LLVM backend is not enabled.
+        if builder.config.rust_codegen_backends.contains(&INTERNER.intern_str("llvm")) {
             let src_exe = exe("llvm-dwp", target_compiler.host);
             let dst_exe = exe("rust-llvm-dwp", target_compiler.host);
             let llvm_config_bin = builder.ensure(native::Llvm { target: target_compiler.host });
-            let llvm_bin_dir = llvm_config_bin.parent().unwrap();
-            builder.copy(&llvm_bin_dir.join(&src_exe), &libdir_bin.join(&dst_exe));
+            if !builder.config.dry_run {
+                let llvm_bin_dir = output(Command::new(llvm_config_bin).arg("--bindir"));
+                let llvm_bin_dir = Path::new(llvm_bin_dir.trim());
+                builder.copy(&llvm_bin_dir.join(&src_exe), &libdir_bin.join(&dst_exe));
+            }
         }
 
         // Ensure that `libLLVM.so` ends up in the newly build compiler directory,
@@ -1143,6 +1167,7 @@ pub fn run_cargo(
             if !(filename.ends_with(".rlib")
                 || filename.ends_with(".lib")
                 || filename.ends_with(".a")
+                || is_debug_info(&filename)
                 || is_dylib(&filename)
                 || (is_check && filename.ends_with(".rmeta")))
             {

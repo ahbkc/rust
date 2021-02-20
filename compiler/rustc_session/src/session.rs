@@ -28,7 +28,7 @@ use rustc_span::source_map::{FileLoader, MultiSpan, RealFileLoader, SourceMap, S
 use rustc_span::{sym, SourceFileHashAlgorithm, Symbol};
 use rustc_target::asm::InlineAsmArch;
 use rustc_target::spec::{CodeModel, PanicStrategy, RelocModel, RelroLevel};
-use rustc_target::spec::{Target, TargetTriple, TlsModel};
+use rustc_target::spec::{SplitDebuginfo, Target, TargetTriple, TlsModel};
 
 use std::cell::{self, RefCell};
 use std::env;
@@ -804,6 +804,14 @@ impl Session {
             )
     }
 
+    pub fn split_debuginfo(&self) -> SplitDebuginfo {
+        self.opts.cg.split_debuginfo.unwrap_or(self.target.split_debuginfo)
+    }
+
+    pub fn target_can_use_split_dwarf(&self) -> bool {
+        !self.target.is_like_windows && !self.target.is_like_osx
+    }
+
     pub fn must_not_eliminate_frame_pointers(&self) -> bool {
         // "mcount" function relies on stack pointer.
         // See <https://sourceware.org/binutils/docs/gprof/Implementation.html>.
@@ -951,19 +959,19 @@ impl Session {
     }
 
     pub fn print_perf_stats(&self) {
-        println!(
+        eprintln!(
             "Total time spent computing symbol hashes:      {}",
             duration_to_secs_str(*self.perf_stats.symbol_hash_time.lock())
         );
-        println!(
+        eprintln!(
             "Total queries canonicalized:                   {}",
             self.perf_stats.queries_canonicalized.load(Ordering::Relaxed)
         );
-        println!(
+        eprintln!(
             "normalize_generic_arg_after_erasing_regions:   {}",
             self.perf_stats.normalize_generic_arg_after_erasing_regions.load(Ordering::Relaxed)
         );
-        println!(
+        eprintln!(
             "normalize_projection_ty:                       {}",
             self.perf_stats.normalize_projection_ty.load(Ordering::Relaxed)
         );
@@ -1118,7 +1126,8 @@ impl Session {
         self.opts.optimize != config::OptLevel::No
         // AddressSanitizer uses lifetimes to detect use after scope bugs.
         // MemorySanitizer uses lifetimes to detect use of uninitialized stack variables.
-        || self.opts.debugging_opts.sanitizer.intersects(SanitizerSet::ADDRESS | SanitizerSet::MEMORY)
+        // HWAddressSanitizer will use lifetimes to detect use after scope bugs in the future.
+        || self.opts.debugging_opts.sanitizer.intersects(SanitizerSet::ADDRESS | SanitizerSet::MEMORY | SanitizerSet::HWADDRESS)
     }
 
     pub fn link_dead_code(&self) -> bool {
@@ -1336,7 +1345,8 @@ pub fn build_session(
         None
     };
 
-    let parse_sess = ParseSess::with_span_handler(span_diagnostic, source_map);
+    let mut parse_sess = ParseSess::with_span_handler(span_diagnostic, source_map);
+    parse_sess.assume_incomplete_release = sopts.debugging_opts.assume_incomplete_release;
     let sysroot = match &sopts.maybe_sysroot {
         Some(sysroot) => sysroot.clone(),
         None => filesearch::get_or_default_sysroot(),
@@ -1553,6 +1563,8 @@ fn validate_commandline_args_with_session_available(sess: &Session) {
         "x86_64-unknown-freebsd",
         "x86_64-unknown-linux-gnu",
     ];
+    const HWASAN_SUPPORTED_TARGETS: &[&str] =
+        &["aarch64-linux-android", "aarch64-unknown-linux-gnu"];
 
     // Sanitizers can only be used on some tested platforms.
     for s in sess.opts.debugging_opts.sanitizer {
@@ -1561,6 +1573,7 @@ fn validate_commandline_args_with_session_available(sess: &Session) {
             SanitizerSet::LEAK => LSAN_SUPPORTED_TARGETS,
             SanitizerSet::MEMORY => MSAN_SUPPORTED_TARGETS,
             SanitizerSet::THREAD => TSAN_SUPPORTED_TARGETS,
+            SanitizerSet::HWADDRESS => HWASAN_SUPPORTED_TARGETS,
             _ => panic!("unrecognized sanitizer {}", s),
         };
         if !supported_targets.contains(&&*sess.opts.target_triple.triple()) {

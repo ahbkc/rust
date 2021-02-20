@@ -12,7 +12,7 @@ use rustc_session::lint;
 crate const CHECK_NON_AUTOLINKS: Pass = Pass {
     name: "check-non-autolinks",
     run: check_non_autolinks,
-    description: "detects URLS that could be written using angle brackets",
+    description: "detects URLs that could be linkified",
 };
 
 const URL_REGEX: &str = concat!(
@@ -23,15 +23,11 @@ const URL_REGEX: &str = concat!(
 );
 
 struct NonAutolinksLinter<'a, 'tcx> {
-    cx: &'a DocContext<'tcx>,
+    cx: &'a mut DocContext<'tcx>,
     regex: Regex,
 }
 
 impl<'a, 'tcx> NonAutolinksLinter<'a, 'tcx> {
-    fn new(cx: &'a DocContext<'tcx>) -> Self {
-        Self { cx, regex: Regex::new(URL_REGEX).expect("failed to build regex") }
-    }
-
     fn find_raw_urls(
         &self,
         text: &str,
@@ -52,11 +48,12 @@ impl<'a, 'tcx> NonAutolinksLinter<'a, 'tcx> {
     }
 }
 
-crate fn check_non_autolinks(krate: Crate, cx: &DocContext<'_>) -> Crate {
+crate fn check_non_autolinks(krate: Crate, cx: &mut DocContext<'_>) -> Crate {
     if !cx.tcx.sess.is_nightly_build() {
         krate
     } else {
-        let mut coll = NonAutolinksLinter::new(cx);
+        let mut coll =
+            NonAutolinksLinter { cx, regex: Regex::new(URL_REGEX).expect("failed to build regex") };
 
         coll.fold_crate(krate)
     }

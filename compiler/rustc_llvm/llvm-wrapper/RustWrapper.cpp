@@ -205,6 +205,8 @@ static Attribute::AttrKind fromRust(LLVMRustAttribute Kind) {
     return Attribute::ReadNone;
   case InaccessibleMemOnly:
     return Attribute::InaccessibleMemOnly;
+  case SanitizeHWAddress:
+    return Attribute::SanitizeHWAddress;
   }
   report_fatal_error("bad AttributeKind");
 }
@@ -215,6 +217,14 @@ extern "C" void LLVMRustAddCallSiteAttribute(LLVMValueRef Instr, unsigned Index,
   Attribute Attr = Attribute::get(Call->getContext(), fromRust(RustAttr));
   Call->addAttribute(Index, Attr);
 }
+
+extern "C" void LLVMRustAddCallSiteAttrString(LLVMValueRef Instr, unsigned Index,
+                                              const char *Name) {
+  CallBase *Call = unwrap<CallBase>(Instr);
+  Attribute Attr = Attribute::get(Call->getContext(), Name);
+  Call->addAttribute(Index, Attr);
+}
+
 
 extern "C" void LLVMRustAddAlignmentCallSiteAttr(LLVMValueRef Instr,
                                                  unsigned Index,

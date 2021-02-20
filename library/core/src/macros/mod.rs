@@ -1,6 +1,7 @@
+#[cfg(bootstrap)]
 #[doc(include = "panic.md")]
 #[macro_export]
-#[allow_internal_unstable(core_panic, const_caller_location)]
+#[allow_internal_unstable(core_panic)]
 #[stable(feature = "core", since = "1.6.0")]
 #[rustc_diagnostic_item = "core_panic_macro"]
 macro_rules! panic {
@@ -16,6 +17,21 @@ macro_rules! panic {
     ($fmt:expr, $($arg:tt)+) => (
         $crate::panicking::panic_fmt($crate::format_args!($fmt, $($arg)+))
     );
+}
+
+#[cfg(not(bootstrap))]
+#[doc(include = "panic.md")]
+#[macro_export]
+#[rustc_builtin_macro = "core_panic"]
+#[allow_internal_unstable(edition_panic)]
+#[stable(feature = "core", since = "1.6.0")]
+#[rustc_diagnostic_item = "core_panic_macro"]
+macro_rules! panic {
+    // Expands to either `$crate::panic::panic_2015` or `$crate::panic::panic_2021`
+    // depending on the edition of the caller.
+    ($($arg:tt)*) => {
+        /* compiler built-in */
+    };
 }
 
 /// Asserts that two expressions are equal to each other (using [`PartialEq`]).
@@ -800,6 +816,7 @@ pub(crate) mod builtin {
     #[macro_export]
     macro_rules! env {
         ($name:expr $(,)?) => {{ /* compiler built-in */ }};
+        ($name:expr, $error_msg:expr $(,)?) => {{ /* compiler built-in */ }};
     }
 
     /// Optionally inspects an environment variable at compile time.
@@ -1192,7 +1209,8 @@ pub(crate) mod builtin {
     ///
     /// This macro has a second form, where a custom panic message can
     /// be provided with or without arguments for formatting. See [`std::fmt`]
-    /// for syntax for this form.
+    /// for syntax for this form. Expressions used as format arguments will only
+    /// be evaluated if the assertion fails.
     ///
     /// [`std::fmt`]: ../std/fmt/index.html
     ///
@@ -1218,7 +1236,7 @@ pub(crate) mod builtin {
     #[rustc_builtin_macro]
     #[macro_export]
     #[rustc_diagnostic_item = "assert_macro"]
-    #[allow_internal_unstable(core_panic)]
+    #[allow_internal_unstable(core_panic, edition_panic)]
     macro_rules! assert {
         ($cond:expr $(,)?) => {{ /* compiler built-in */ }};
         ($cond:expr, $($arg:tt)+) => {{ /* compiler built-in */ }};
@@ -1306,6 +1324,14 @@ pub(crate) mod builtin {
     macro_rules! trace_macros {
         (true) => {{ /* compiler built-in */ }};
         (false) => {{ /* compiler built-in */ }};
+    }
+
+    /// Attribute macro used to apply derive macros.
+    #[cfg(not(bootstrap))]
+    #[stable(feature = "rust1", since = "1.0.0")]
+    #[rustc_builtin_macro]
+    pub macro derive($item:item) {
+        /* compiler built-in */
     }
 
     /// Attribute macro applied to a function to turn it into a unit test.

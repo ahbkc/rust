@@ -224,6 +224,7 @@
 #![feature(allocator_internals)]
 #![feature(allow_internal_unsafe)]
 #![feature(allow_internal_unstable)]
+#![feature(async_stream)]
 #![feature(arbitrary_self_types)]
 #![feature(array_error_internals)]
 #![feature(asm)]
@@ -258,11 +259,11 @@
 #![feature(dropck_eyepatch)]
 #![feature(duration_constants)]
 #![feature(duration_zero)]
+#![feature(edition_panic)]
 #![feature(exact_size_is_empty)]
 #![feature(exhaustive_patterns)]
 #![feature(extend_one)]
 #![feature(external_doc)]
-#![feature(fmt_as_str)]
 #![feature(fn_traits)]
 #![feature(format_args_nl)]
 #![feature(gen_future)]
@@ -274,6 +275,7 @@
 #![feature(int_error_matching)]
 #![feature(integer_atomics)]
 #![feature(into_future)]
+#![cfg_attr(not(bootstrap), feature(intra_doc_pointers))]
 #![feature(lang_items)]
 #![feature(link_args)]
 #![feature(linkage)]
@@ -282,6 +284,7 @@
 #![feature(maybe_uninit_extra)]
 #![feature(maybe_uninit_ref)]
 #![feature(maybe_uninit_slice)]
+#![feature(maybe_uninit_uninit_array)]
 #![feature(min_specialization)]
 #![feature(needs_panic_runtime)]
 #![feature(negative_impls)]
@@ -298,7 +301,6 @@
 #![feature(prelude_import)]
 #![feature(ptr_internals)]
 #![feature(raw)]
-#![feature(raw_ref_macros)]
 #![feature(ready_macro)]
 #![feature(rustc_attrs)]
 #![feature(rustc_private)]
@@ -326,7 +328,7 @@
 #![feature(unsafe_cell_raw_get)]
 #![feature(unwind_attributes)]
 #![feature(vec_into_raw_parts)]
-#![feature(wake_trait)]
+#![feature(vec_spare_capacity)]
 // NB: the above list is sorted to minimize merge conflicts.
 #![default_lib_allocator]
 
@@ -406,23 +408,31 @@ pub use core::cmp;
 pub use core::convert;
 #[stable(feature = "rust1", since = "1.0.0")]
 pub use core::default;
+#[stable(feature = "futures_api", since = "1.36.0")]
+pub use core::future;
 #[stable(feature = "rust1", since = "1.0.0")]
 pub use core::hash;
 #[stable(feature = "core_hint", since = "1.27.0")]
 pub use core::hint;
 #[stable(feature = "i128", since = "1.26.0")]
+#[allow(deprecated, deprecated_in_future)]
 pub use core::i128;
 #[stable(feature = "rust1", since = "1.0.0")]
+#[allow(deprecated, deprecated_in_future)]
 pub use core::i16;
 #[stable(feature = "rust1", since = "1.0.0")]
+#[allow(deprecated, deprecated_in_future)]
 pub use core::i32;
 #[stable(feature = "rust1", since = "1.0.0")]
+#[allow(deprecated, deprecated_in_future)]
 pub use core::i64;
 #[stable(feature = "rust1", since = "1.0.0")]
+#[allow(deprecated, deprecated_in_future)]
 pub use core::i8;
 #[stable(feature = "rust1", since = "1.0.0")]
 pub use core::intrinsics;
 #[stable(feature = "rust1", since = "1.0.0")]
+#[allow(deprecated, deprecated_in_future)]
 pub use core::isize;
 #[stable(feature = "rust1", since = "1.0.0")]
 pub use core::iter;
@@ -442,17 +452,25 @@ pub use core::ptr;
 pub use core::raw;
 #[stable(feature = "rust1", since = "1.0.0")]
 pub use core::result;
+#[unstable(feature = "async_stream", issue = "79024")]
+pub use core::stream;
 #[stable(feature = "i128", since = "1.26.0")]
+#[allow(deprecated, deprecated_in_future)]
 pub use core::u128;
 #[stable(feature = "rust1", since = "1.0.0")]
+#[allow(deprecated, deprecated_in_future)]
 pub use core::u16;
 #[stable(feature = "rust1", since = "1.0.0")]
+#[allow(deprecated, deprecated_in_future)]
 pub use core::u32;
 #[stable(feature = "rust1", since = "1.0.0")]
+#[allow(deprecated, deprecated_in_future)]
 pub use core::u64;
 #[stable(feature = "rust1", since = "1.0.0")]
+#[allow(deprecated, deprecated_in_future)]
 pub use core::u8;
 #[stable(feature = "rust1", since = "1.0.0")]
+#[allow(deprecated, deprecated_in_future)]
 pub use core::usize;
 
 pub mod f32;
@@ -489,12 +507,9 @@ pub mod task {
     pub use core::task::*;
 
     #[doc(inline)]
-    #[unstable(feature = "wake_trait", issue = "69912")]
+    #[stable(feature = "wake_trait", since = "1.51.0")]
     pub use alloc::task::*;
 }
-
-#[stable(feature = "futures_api", since = "1.36.0")]
-pub mod future;
 
 // Platform-abstraction modules
 #[macro_use]
@@ -567,3 +582,11 @@ include!("keyword_docs.rs");
 // is unconditional, so the unstable feature needs to be defined somewhere.
 #[unstable(feature = "restricted_std", issue = "none")]
 mod __restricted_std_workaround {}
+
+mod sealed {
+    /// This trait being unreachable from outside the crate
+    /// prevents outside implementations of our extension traits.
+    /// This allows adding more trait methods in the future.
+    #[unstable(feature = "sealed", issue = "none")]
+    pub trait Sealed {}
+}

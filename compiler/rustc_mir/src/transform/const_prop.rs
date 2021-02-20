@@ -440,7 +440,15 @@ impl<'mir, 'tcx> ConstPropagator<'mir, 'tcx> {
     }
 
     fn lint_root(&self, source_info: SourceInfo) -> Option<HirId> {
-        match &self.source_scopes[source_info.scope].local_data {
+        let mut data = &self.source_scopes[source_info.scope];
+        // FIXME(oli-obk): we should be able to just walk the `inlined_parent_scope`, but it
+        // does not work as I thought it would. Needs more investigation and documentation.
+        while data.inlined.is_some() {
+            trace!(?data);
+            data = &self.source_scopes[data.parent_scope.unwrap()];
+        }
+        trace!(?data);
+        match &data.local_data {
             ClearCrossCrate::Set(data) => Some(data.lint_root),
             ClearCrossCrate::Clear => None,
         }
@@ -458,7 +466,7 @@ impl<'mir, 'tcx> ConstPropagator<'mir, 'tcx> {
                 // an allocation, which we should avoid. When that happens,
                 // dedicated error variants should be introduced instead.
                 assert!(
-                    !error.kind.allocates(),
+                    !error.kind().allocates(),
                     "const-prop encountered allocating error: {}",
                     error
                 );

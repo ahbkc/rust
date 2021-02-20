@@ -1,9 +1,6 @@
-// From rust:
-/* global ALIASES */
-
 // Local js definitions:
-/* global addClass, getCurrentValue, hasClass */
-/* global onEachLazy, hasOwnProperty, removeClass, updateLocalStorage */
+/* global addClass, getSettingValue, hasClass */
+/* global onEach, onEachLazy, hasOwnProperty, removeClass, updateLocalStorage */
 /* global hideThemeButtonState, showThemeButtonState */
 
 if (!String.prototype.startsWith) {
@@ -92,6 +89,11 @@ function getThemesElement() {
 
 function getThemePickerElement() {
     return document.getElementById("theme-picker");
+}
+
+// Returns the current URL without any query parameter or hash.
+function getNakedUrl() {
+    return window.location.href.split("?")[0].split("#")[0];
 }
 
 // Sets the focus on the search bar at the top of the page
@@ -255,7 +257,9 @@ function defocusSearchBar() {
             hideSearchResults(search);
             var hash = ev.newURL.slice(ev.newURL.indexOf("#") + 1);
             if (browserSupportsHistoryApi()) {
-                history.replaceState(hash, "", "?search=#" + hash);
+                // `window.location.search`` contains all the query parameters, not just `search`.
+                history.replaceState(hash, "",
+                    getNakedUrl() + window.location.search + "#" + hash);
             }
             elem = document.getElementById(hash);
             if (elem) {
@@ -1691,15 +1695,6 @@ function defocusSearchBar() {
 
             search.innerHTML = output;
             showSearchResults(search);
-            var tds = search.getElementsByTagName("td");
-            var td_width = 0;
-            if (tds.length > 0) {
-                td_width = tds[0].offsetWidth;
-            }
-            var width = search.offsetWidth - 40 - td_width;
-            onEachLazy(search.getElementsByClassName("desc"), function(e) {
-                e.style.width = width + "px";
-            });
             initSearchNav();
             var elems = document.getElementById("titles").childNodes;
             elems[0].onclick = function() { printTab(0); };
@@ -1813,10 +1808,12 @@ function defocusSearchBar() {
             // Because searching is incremental by character, only the most
             // recent search query is added to the browser history.
             if (browserSupportsHistoryApi()) {
+                var newURL = getNakedUrl() + "?search=" + encodeURIComponent(query.raw) +
+                    window.location.hash;
                 if (!history.state && !params.search) {
-                    history.pushState(query, "", "?search=" + encodeURIComponent(query.raw));
+                    history.pushState(query, "", newURL);
                 } else {
-                    history.replaceState(query, "", "?search=" + encodeURIComponent(query.raw));
+                    history.replaceState(query, "", newURL);
                 }
             }
 
@@ -1925,7 +1922,8 @@ function defocusSearchBar() {
                 clearInputTimeout();
                 if (search_input.value.length === 0) {
                     if (browserSupportsHistoryApi()) {
-                        history.replaceState("", window.currentCrate + " - Rust", "?search=");
+                        history.replaceState("", window.currentCrate + " - Rust",
+                            getNakedUrl() + window.location.hash);
                     }
                     hideSearchResults();
                 } else {
@@ -2214,7 +2212,7 @@ function defocusSearchBar() {
         }
     }
 
-    function toggleAllDocs(pageId, fromAutoCollapse) {
+    function toggleAllDocs(fromAutoCollapse) {
         var innerToggle = document.getElementById(toggleAllDocsId);
         if (!innerToggle) {
             return;
@@ -2257,14 +2255,14 @@ function defocusSearchBar() {
                     }
                     if (!parent || !superParent || superParent.id !== "main" ||
                         hasClass(parent, "impl") === false) {
-                        collapseDocs(e, "hide", pageId);
+                        collapseDocs(e, "hide");
                     }
                 });
             }
         }
     }
 
-    function collapseDocs(toggle, mode, pageId) {
+    function collapseDocs(toggle, mode) {
         if (!toggle || !toggle.parentNode) {
             return;
         }
@@ -2384,27 +2382,27 @@ function defocusSearchBar() {
         }
     }
 
-    function collapser(pageId, e, collapse) {
+    function collapser(e, collapse) {
         // inherent impl ids are like "impl" or impl-<number>'.
         // they will never be hidden by default.
         var n = e.parentElement;
         if (n.id.match(/^impl(?:-\d+)?$/) === null) {
             // Automatically minimize all non-inherent impls
             if (collapse || hasClass(n, "impl")) {
-                collapseDocs(e, "hide", pageId);
+                collapseDocs(e, "hide");
             }
         }
     }
 
-    function autoCollapse(pageId, collapse) {
+    function autoCollapse(collapse) {
         if (collapse) {
-            toggleAllDocs(pageId, true);
+            toggleAllDocs(true);
         } else if (getSettingValue("auto-hide-trait-implementations") !== "false") {
             var impl_list = document.getElementById("trait-implementations-list");
 
             if (impl_list !== null) {
                 onEachLazy(impl_list.getElementsByClassName("collapse-toggle"), function(e) {
-                    collapser(pageId, e, collapse);
+                    collapser(e, collapse);
                 });
             }
 
@@ -2412,7 +2410,7 @@ function defocusSearchBar() {
 
             if (blanket_list !== null) {
                 onEachLazy(blanket_list.getElementsByClassName("collapse-toggle"), function(e) {
-                    collapser(pageId, e, collapse);
+                    collapser(e, collapse);
                 });
             }
         }
@@ -2475,7 +2473,6 @@ function defocusSearchBar() {
         var toggle = createSimpleToggle(false);
         var hideMethodDocs = getSettingValue("auto-hide-method-docs") === "true";
         var hideImplementors = getSettingValue("auto-collapse-implementors") !== "false";
-        var pageId = getPageId();
 
         var func = function(e) {
             var next = e.nextElementSibling;
@@ -2489,7 +2486,7 @@ function defocusSearchBar() {
                 var newToggle = toggle.cloneNode(true);
                 insertAfter(newToggle, e.childNodes[e.childNodes.length - 1]);
                 if (hideMethodDocs === true && hasClass(e, "method") === true) {
-                    collapseDocs(newToggle, "hide", pageId);
+                    collapseDocs(newToggle, "hide");
                 }
             }
         };
@@ -2513,7 +2510,7 @@ function defocusSearchBar() {
                 // In case the option "auto-collapse implementors" is not set to false, we collapse
                 // all implementors.
                 if (hideImplementors === true && e.parentNode.id === "implementors-list") {
-                    collapseDocs(newToggle, "hide", pageId);
+                    collapseDocs(newToggle, "hide");
                 }
             }
         };
@@ -2527,7 +2524,7 @@ function defocusSearchBar() {
                 if (e.id.match(/^impl(?:-\d+)?$/) === null) {
                     // Automatically minimize all non-inherent impls
                     if (hasClass(e, "impl") === true) {
-                        collapseDocs(newToggle, "hide", pageId);
+                        collapseDocs(newToggle, "hide");
                     }
                 }
             };
@@ -2562,14 +2559,12 @@ function defocusSearchBar() {
         }
         onEachLazy(document.getElementsByClassName("impl-items"), function(e) {
             onEachLazy(e.getElementsByClassName("associatedconstant"), func);
-            var hiddenElems = e.getElementsByClassName("hidden");
-            var needToggle = false;
-
-            var needToggle = onEachLazy(e.getElementsByClassName("hidden"), function(hiddenElem) {
-                if (hasClass(hiddenElem, "content") === false &&
-                    hasClass(hiddenElem, "docblock") === false) {
-                    return true;
-                }
+            // We transform the DOM iterator into a vec of DOM elements to prevent performance
+            // issues on webkit browsers.
+            var hiddenElems = Array.prototype.slice.call(e.getElementsByClassName("hidden"));
+            var needToggle = hiddenElems.some(function(hiddenElem) {
+                return hasClass(hiddenElem, "content") === false &&
+                    hasClass(hiddenElem, "docblock") === false;
             });
             if (needToggle === true) {
                 var inner_toggle = newToggle.cloneNode(true);
@@ -2672,10 +2667,10 @@ function defocusSearchBar() {
 
         onEachLazy(document.getElementsByClassName("docblock"), buildToggleWrapper);
         onEachLazy(document.getElementsByClassName("sub-variant"), buildToggleWrapper);
+
+        autoCollapse(getSettingValue("collapse") === "true");
+
         var pageId = getPageId();
-
-        autoCollapse(pageId, getSettingValue("collapse") === "true");
-
         if (pageId !== null) {
             expandSection(pageId);
         }
@@ -2785,9 +2780,9 @@ function defocusSearchBar() {
         if (search_input.value !== "" && hasClass(search, "hidden")) {
             showSearchResults(search);
             if (browserSupportsHistoryApi()) {
-                history.replaceState(search_input.value,
-                                     "",
-                                     "?search=" + encodeURIComponent(search_input.value));
+                var extra = "?search=" + encodeURIComponent(search_input.value);
+                history.replaceState(search_input.value, "",
+                    getNakedUrl() + extra + window.location.hash);
             }
             document.title = searchTitle;
         }
@@ -2913,10 +2908,14 @@ function defocusSearchBar() {
             ["&#9166;", "Go to active search result"],
             ["+", "Expand all sections"],
             ["-", "Collapse all sections"],
-        ].map(x => "<dt>" +
-            x[0].split(" ")
-                .map((y, index) => (index & 1) === 0 ? "<kbd>" + y + "</kbd>" : y)
-                .join("") + "</dt><dd>" + x[1] + "</dd>").join("");
+        ].map(function(x) {
+            return "<dt>" +
+                x[0].split(" ")
+                    .map(function(y, index) {
+                        return (index & 1) === 0 ? "<kbd>" + y + "</kbd>" : " " + y + " ";
+                    })
+                    .join("") + "</dt><dd>" + x[1] + "</dd>";
+        }).join("");
         var div_shortcuts = document.createElement("div");
         addClass(div_shortcuts, "shortcuts");
         div_shortcuts.innerHTML = "<h2>Keyboard Shortcuts</h2><dl>" + shortcuts + "</dl></div>";
@@ -2934,7 +2933,9 @@ function defocusSearchBar() {
             "You can look for items with an exact name by putting double quotes around \
              your request: <code>\"string\"</code>",
             "Look for items inside another one by searching for a path: <code>vec::Vec</code>",
-        ].map(x => "<p>" + x + "</p>").join("");
+        ].map(function(x) {
+            return "<p>" + x + "</p>";
+        }).join("");
         var div_infos = document.createElement("div");
         addClass(div_infos, "infos");
         div_infos.innerHTML = "<h2>Search Tricks</h2>" + infos;

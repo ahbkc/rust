@@ -252,7 +252,7 @@ fn resolve_expr<'tcx>(visitor: &mut RegionResolutionVisitor<'tcx>, expr: &'tcx h
                 terminating(then.hir_id.local_id);
             }
 
-            hir::ExprKind::Loop(ref body, _, _) => {
+            hir::ExprKind::Loop(ref body, _, _, _) => {
                 terminating(body.hir_id.local_id);
             }
 
@@ -664,7 +664,7 @@ fn resolve_local<'tcx>(
 
             match expr.kind {
                 hir::ExprKind::AddrOf(_, _, ref subexpr)
-                | hir::ExprKind::Unary(hir::UnOp::UnDeref, ref subexpr)
+                | hir::ExprKind::Unary(hir::UnOp::Deref, ref subexpr)
                 | hir::ExprKind::Field(ref subexpr, _)
                 | hir::ExprKind::Index(ref subexpr, _) => {
                     expr = &subexpr;

@@ -93,10 +93,9 @@ pub(super) fn run_jit(tcx: TyCtxt<'_>, codegen_mode: CodegenMode) -> ! {
                 MonoItem::Static(def_id) => {
                     crate::constant::codegen_static(&mut cx.constants_cx, def_id);
                 }
-                MonoItem::GlobalAsm(hir_id) => {
-                    let item = cx.tcx.hir().expect_item(hir_id);
-                    tcx.sess
-                        .span_fatal(item.span, "Global asm is not supported in JIT mode");
+                MonoItem::GlobalAsm(item_id) => {
+                    let item = cx.tcx.hir().item(item_id);
+                    tcx.sess.span_fatal(item.span, "Global asm is not supported in JIT mode");
                 }
             }
         }
@@ -156,12 +155,8 @@ extern "C" fn __clif_jit_fn(instance_ptr: *const Instance<'static>) -> *const u8
             let jit_module = jit_module.as_mut().unwrap();
             let mut cx = crate::CodegenCx::new(tcx, jit_module, false, false);
 
-            let (name, sig) = crate::abi::get_function_name_and_sig(
-                tcx,
-                cx.module.isa().triple(),
-                instance,
-                true,
-            );
+            let name = tcx.symbol_name(instance).name.to_string();
+            let sig = crate::abi::get_function_sig(tcx, cx.module.isa().triple(), instance);
             let func_id = cx
                 .module
                 .declare_function(&name, Linkage::Export, &sig)
@@ -246,8 +241,8 @@ pub(super) fn codegen_shim<'tcx>(cx: &mut CodegenCx<'tcx, impl Module>, inst: In
 
     let pointer_type = cx.module.target_config().pointer_type();
 
-    let (name, sig) =
-        crate::abi::get_function_name_and_sig(tcx, cx.module.isa().triple(), inst, true);
+    let name = tcx.symbol_name(inst).name.to_string();
+    let sig = crate::abi::get_function_sig(tcx, cx.module.isa().triple(), inst);
     let func_id = cx
         .module
         .declare_function(&name, Linkage::Export, &sig)

@@ -274,10 +274,13 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         }
 
         let autoborrow_mut = adj.iter().any(|adj| {
-            matches!(adj, &Adjustment {
-                kind: Adjust::Borrow(AutoBorrow::Ref(_, AutoBorrowMutability::Mut { .. })),
-                ..
-            })
+            matches!(
+                adj,
+                &Adjustment {
+                    kind: Adjust::Borrow(AutoBorrow::Ref(_, AutoBorrowMutability::Mut { .. })),
+                    ..
+                }
+            )
         });
 
         match self.typeck_results.borrow_mut().adjustments_mut().entry(expr.hir_id) {
@@ -766,9 +769,10 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             .filter_map(move |obligation| {
                 let bound_predicate = obligation.predicate.kind();
                 match bound_predicate.skip_binder() {
-                    ty::PredicateKind::Projection(data) => {
-                        Some((bound_predicate.rebind(data).to_poly_trait_ref(self.tcx), obligation))
-                    }
+                    ty::PredicateKind::Projection(data) => Some((
+                        bound_predicate.rebind(data).required_poly_trait_ref(self.tcx),
+                        obligation,
+                    )),
                     ty::PredicateKind::Trait(data, _) => {
                         Some((bound_predicate.rebind(data).to_poly_trait_ref(), obligation))
                     }
@@ -894,7 +898,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 return (
                     path.res,
                     opt_qself.as_ref().map(|qself| self.to_ty(qself)),
-                    &path.segments[..],
+                    path.segments,
                 );
             }
             QPath::TypeRelative(ref qself, ref segment) => (self.to_ty(qself), qself, segment),

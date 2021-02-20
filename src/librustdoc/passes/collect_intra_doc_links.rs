@@ -13,6 +13,7 @@ use rustc_hir::def::{
     PerNS,
 };
 use rustc_hir::def_id::{CrateNum, DefId};
+use rustc_middle::ty::TyCtxt;
 use rustc_middle::{bug, ty};
 use rustc_resolve::ParentScope;
 use rustc_session::lint::{
@@ -43,11 +44,17 @@ use super::span_of_attrs;
 crate const COLLECT_INTRA_DOC_LINKS: Pass = Pass {
     name: "collect-intra-doc-links",
     run: collect_intra_doc_links,
-    description: "reads a crate's documentation to resolve intra-doc-links",
+    description: "resolves intra-doc links",
 };
 
-crate fn collect_intra_doc_links(krate: Crate, cx: &DocContext<'_>) -> Crate {
-    LinkCollector::new(cx).fold_crate(krate)
+crate fn collect_intra_doc_links(krate: Crate, cx: &mut DocContext<'_>) -> Crate {
+    LinkCollector {
+        cx,
+        mod_ids: Vec::new(),
+        kind_side_channel: Cell::new(None),
+        visited_links: FxHashMap::default(),
+    }
+    .fold_crate(krate)
 }
 
 /// Top-level errors emitted by this pass.
@@ -85,7 +92,7 @@ impl Res {
         }
     }
 
-    fn name(self, tcx: ty::TyCtxt<'_>) -> String {
+    fn name(self, tcx: TyCtxt<'_>) -> String {
         match self {
             Res::Def(_, id) => tcx.item_name(id).to_string(),
             Res::Primitive(prim) => prim.as_str().to_string(),
@@ -256,7 +263,7 @@ struct CachedLink {
 }
 
 struct LinkCollector<'a, 'tcx> {
-    cx: &'a DocContext<'tcx>,
+    cx: &'a mut DocContext<'tcx>,
     /// A stack of modules used to decide what scope to resolve in.
     ///
     /// The last module will be used if the parent scope of the current item is
@@ -272,15 +279,6 @@ struct LinkCollector<'a, 'tcx> {
 }
 
 impl<'a, 'tcx> LinkCollector<'a, 'tcx> {
-    fn new(cx: &'a DocContext<'tcx>) -> Self {
-        LinkCollector {
-            cx,
-            mod_ids: Vec::new(),
-            kind_side_channel: Cell::new(None),
-            visited_links: FxHashMap::default(),
-        }
-    }
-
     /// Given a full link, parse it as an [enum struct variant].
     ///
     /// In particular, this will return an error whenever there aren't three
@@ -292,7 +290,7 @@ impl<'a, 'tcx> LinkCollector<'a, 'tcx> {
         path_str: &'path str,
         module_id: DefId,
     ) -> Result<(Res, Option<String>), ErrorKind<'path>> {
-        let cx = self.cx;
+        let tcx = self.cx.tcx;
         let no_res = || ResolutionFailure::NotResolved {
             module_id,
             partial_res: None,
@@ -316,7 +314,8 @@ impl<'a, 'tcx> LinkCollector<'a, 'tcx> {
             // If there's no third component, we saw `[a::b]` before and it failed to resolve.
             // So there's no partial res.
             .ok_or_else(no_res)?;
-        let ty_res = cx
+        let ty_res = self
+            .cx
             .enter_resolver(|resolver| {
                 resolver.resolve_str_path_error(DUMMY_SP, &path, TypeNS, module_id)
             })
@@ -325,18 +324,17 @@ impl<'a, 'tcx> LinkCollector<'a, 'tcx> {
 
         match ty_res {
             Res::Def(DefKind::Enum, did) => {
-                if cx
-                    .tcx
+                if tcx
                     .inherent_impls(did)
                     .iter()
-                    .flat_map(|imp| cx.tcx.associated_items(*imp).in_definition_order())
+                    .flat_map(|imp| tcx.associated_items(*imp).in_definition_order())
                     .any(|item| item.ident.name == variant_name)
                 {
                     // This is just to let `fold_item` know that this shouldn't be considered;
                     // it's a bug for the error to make it to the user
                     return Err(ResolutionFailure::Dummy.into());
                 }
-                match cx.tcx.type_of(did).kind() {
+                match tcx.type_of(did).kind() {
                     ty::Adt(def, _) if def.is_enum() => {
                         if def.all_fields().any(|item| item.ident.name == variant_field_name) {
                             Ok((
@@ -379,20 +377,14 @@ impl<'a, 'tcx> LinkCollector<'a, 'tcx> {
         item_name: Symbol,
         item_str: &'path str,
     ) -> Result<(Res, Option<String>), ErrorKind<'path>> {
-        let cx = self.cx;
+        let tcx = self.cx.tcx;
 
         prim_ty
-            .impls(cx.tcx)
+            .impls(tcx)
             .into_iter()
             .find_map(|&impl_| {
-                cx.tcx
-                    .associated_items(impl_)
-                    .find_by_name_and_namespace(
-                        cx.tcx,
-                        Ident::with_dummy_span(item_name),
-                        ns,
-                        impl_,
-                    )
+                tcx.associated_items(impl_)
+                    .find_by_name_and_namespace(tcx, Ident::with_dummy_span(item_name), ns, impl_)
                     .map(|item| {
                         let kind = item.kind;
                         self.kind_side_channel.set(Some((kind.as_def_kind(), item.def_id)));
@@ -433,9 +425,8 @@ impl<'a, 'tcx> LinkCollector<'a, 'tcx> {
         path_str: &'a str,
         module_id: DefId,
     ) -> Result<Res, ResolutionFailure<'a>> {
-        let cx = self.cx;
         let path = ast::Path::from_ident(Ident::from_str(path_str));
-        cx.enter_resolver(|resolver| {
+        self.cx.enter_resolver(|resolver| {
             // FIXME(jynelson): does this really need 3 separate lookups?
             if let Ok((Some(ext), res)) = resolver.resolve_macro_path(
                 &path,
@@ -497,7 +488,7 @@ impl<'a, 'tcx> LinkCollector<'a, 'tcx> {
         module_id: DefId,
         extra_fragment: &Option<String>,
     ) -> Result<(Res, Option<String>), ErrorKind<'path>> {
-        let cx = self.cx;
+        let cx = &self.cx;
 
         if let Some(res) = self.resolve_path(path_str, ns, module_id) {
             match res {
@@ -865,12 +856,11 @@ impl<'a, 'tcx> DocFolder for LinkCollector<'a, 'tcx> {
 
         // FIXME(jynelson): this shouldn't go through stringification, rustdoc should just use the DefId directly
         let self_name = self_id.and_then(|self_id| {
-            use ty::TyKind;
             if matches!(self.cx.tcx.def_kind(self_id), DefKind::Impl) {
                 // using `ty.to_string()` (or any variant) has issues with raw idents
                 let ty = self.cx.tcx.type_of(self_id);
                 let name = match ty.kind() {
-                    TyKind::Adt(def, _) => Some(self.cx.tcx.item_name(def.did).to_string()),
+                    ty::Adt(def, _) => Some(self.cx.tcx.item_name(def.did).to_string()),
                     other if other.is_primitive() => Some(ty.to_string()),
                     _ => None,
                 };
@@ -948,12 +938,18 @@ impl LinkCollector<'_, '_> {
             return None;
         }
 
-        let cx = self.cx;
         let link = ori_link.link.replace("`", "");
         let parts = link.split('#').collect::<Vec<_>>();
         let (link, extra_fragment) = if parts.len() > 2 {
             // A valid link can't have multiple #'s
-            anchor_failure(cx, &item, &link, dox, ori_link.range, AnchorFailure::MultipleAnchors);
+            anchor_failure(
+                self.cx,
+                &item,
+                &link,
+                dox,
+                ori_link.range,
+                AnchorFailure::MultipleAnchors,
+            );
             return None;
         } else if parts.len() == 2 {
             if parts[0].trim().is_empty() {
@@ -981,7 +977,7 @@ impl LinkCollector<'_, '_> {
         let link_text =
             disambiguator.map(|d| d.display_for(path_str)).unwrap_or_else(|| path_str.to_owned());
 
-        // In order to correctly resolve intra-doc-links we need to
+        // In order to correctly resolve intra-doc links we need to
         // pick a base AST node to work from.  If the documentation for
         // this module came from an inner comment (//!) then we anchor
         // our name resolution *inside* the module.  If, on the other
@@ -1105,7 +1101,7 @@ impl LinkCollector<'_, '_> {
                 if matches!(disambiguator, Some(Disambiguator::Primitive)) {
                     if fragment.is_some() {
                         anchor_failure(
-                            cx,
+                            self.cx,
                             &item,
                             path_str,
                             dox,
@@ -1119,7 +1115,7 @@ impl LinkCollector<'_, '_> {
                 } else {
                     // `[char]` when a `char` module is in scope
                     let candidates = vec![res, prim];
-                    ambiguity_error(cx, &item, path_str, dox, ori_link.range, candidates);
+                    ambiguity_error(self.cx, &item, path_str, dox, ori_link.range, candidates);
                     return None;
                 }
             }
@@ -1140,7 +1136,7 @@ impl LinkCollector<'_, '_> {
                 suggest_disambiguator(resolved, diag, path_str, dox, sp, &ori_link.range);
             };
             report_diagnostic(
-                cx,
+                self.cx,
                 BROKEN_INTRA_DOC_LINKS,
                 &msg,
                 &item,
@@ -1151,11 +1147,12 @@ impl LinkCollector<'_, '_> {
         };
 
         let verify = |kind: DefKind, id: DefId| {
-            debug!("intra-doc link to {} resolved to {:?}", path_str, res);
+            let (kind, id) = self.kind_side_channel.take().unwrap_or((kind, id));
+            debug!("intra-doc link to {} resolved to {:?} (id: {:?})", path_str, res, id);
 
             // Disallow e.g. linking to enums with `struct@`
             debug!("saw kind {:?} with disambiguator {:?}", kind, disambiguator);
-            match (self.kind_side_channel.take().map(|(kind, _)| kind).unwrap_or(kind), disambiguator) {
+            match (kind, disambiguator) {
                 | (DefKind::Const | DefKind::ConstParam | DefKind::AssocConst | DefKind::AnonConst, Some(Disambiguator::Kind(DefKind::Const)))
                 // NOTE: this allows 'method' to mean both normal functions and associated functions
                 // This can't cause ambiguity because both are in the same namespace.
@@ -1186,11 +1183,11 @@ impl LinkCollector<'_, '_> {
                 if self.cx.tcx.privacy_access_levels(LOCAL_CRATE).is_exported(hir_src)
                     && !self.cx.tcx.privacy_access_levels(LOCAL_CRATE).is_exported(hir_dst)
                 {
-                    privacy_error(cx, &item, &path_str, dox, &ori_link);
+                    privacy_error(self.cx, &item, &path_str, dox, &ori_link);
                 }
             }
 
-            Some((kind, id))
+            Some(())
         };
 
         match res {
@@ -1210,7 +1207,7 @@ impl LinkCollector<'_, '_> {
                         && !self.cx.tcx.features().intra_doc_pointers
                     {
                         let span = super::source_span_for_markdown_range(
-                            cx,
+                            self.cx,
                             dox,
                             &ori_link.range,
                             &item.attrs,
@@ -1241,8 +1238,8 @@ impl LinkCollector<'_, '_> {
                 Some(ItemLink { link: ori_link.link, link_text, did: None, fragment })
             }
             Res::Def(kind, id) => {
-                let (kind, id) = verify(kind, id)?;
-                let id = clean::register_res(cx, rustc_hir::def::Res::Def(kind, id));
+                verify(kind, id)?;
+                let id = clean::register_res(self.cx, rustc_hir::def::Res::Def(kind, id));
                 Some(ItemLink { link: ori_link.link, link_text, did: Some(id), fragment })
             }
         }

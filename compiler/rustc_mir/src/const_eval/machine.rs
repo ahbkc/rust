@@ -245,8 +245,8 @@ impl<'mir, 'tcx> interpret::Machine<'mir, 'tcx> for CompileTimeInterpreter<'mir,
         Ok(Some(match ecx.load_mir(instance.def, None) {
             Ok(body) => body,
             Err(err) => {
-                if let err_unsup!(NoMirFor(did)) = err.kind {
-                    let path = ecx.tcx.def_path_str(did);
+                if let err_unsup!(NoMirFor(did)) = err.kind() {
+                    let path = ecx.tcx.def_path_str(*did);
                     return Err(ConstEvalErrKind::NeedsRfc(format!(
                         "calling extern function `{}`",
                         path
@@ -352,7 +352,7 @@ impl<'mir, 'tcx> interpret::Machine<'mir, 'tcx> for CompileTimeInterpreter<'mir,
     }
 
     fn ptr_to_int(_mem: &Memory<'mir, 'tcx, Self>, _ptr: Pointer) -> InterpResult<'tcx, u64> {
-        Err(ConstEvalErrKind::NeedsRfc("pointer-to-integer cast".to_string()).into())
+        Err(ConstEvalErrKind::PtrToIntCast.into())
     }
 
     fn binary_ptr_op(

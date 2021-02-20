@@ -131,6 +131,7 @@ pub enum Attribute {
     ReturnsTwice = 25,
     ReadNone = 26,
     InaccessibleMemOnly = 27,
+    SanitizeHWAddress = 28,
 }
 
 /// LLVMIntPredicate
@@ -439,6 +440,8 @@ pub struct SanitizerOptions {
     pub sanitize_memory_recover: bool,
     pub sanitize_memory_track_origins: c_int,
     pub sanitize_thread: bool,
+    pub sanitize_hwaddress: bool,
+    pub sanitize_hwaddress_recover: bool,
 }
 
 /// LLVMRelocMode
@@ -1100,6 +1103,7 @@ extern "C" {
     // Operations on call sites
     pub fn LLVMSetInstructionCallConv(Instr: &Value, CC: c_uint);
     pub fn LLVMRustAddCallSiteAttribute(Instr: &Value, index: c_uint, attr: Attribute);
+    pub fn LLVMRustAddCallSiteAttrString(Instr: &Value, index: c_uint, Name: *const c_char);
     pub fn LLVMRustAddAlignmentCallSiteAttr(Instr: &Value, index: c_uint, bytes: u32);
     pub fn LLVMRustAddDereferenceableCallSiteAttr(Instr: &Value, index: c_uint, bytes: u64);
     pub fn LLVMRustAddDereferenceableOrNullCallSiteAttr(Instr: &Value, index: c_uint, bytes: u64);
@@ -2127,6 +2131,7 @@ extern "C" {
         Recover: bool,
     ) -> &'static mut Pass;
     pub fn LLVMRustCreateThreadSanitizerPass() -> &'static mut Pass;
+    pub fn LLVMRustCreateHWAddressSanitizerPass(Recover: bool) -> &'static mut Pass;
     pub fn LLVMRustAddPass(PM: &PassManager<'_>, Pass: &'static mut Pass);
     pub fn LLVMRustAddLastExtensionPasses(
         PMB: &PassManagerBuilder,

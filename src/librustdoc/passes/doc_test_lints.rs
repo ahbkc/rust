@@ -1,7 +1,7 @@
 //! This pass is overloaded and runs two different lints.
 //!
-//! - MISSING_DOC_CODE_EXAMPLES: this lint is **UNSTABLE** and looks for public items missing doc-tests
-//! - PRIVATE_DOC_TESTS: this lint is **STABLE** and looks for private items with doc-tests.
+//! - MISSING_DOC_CODE_EXAMPLES: this lint is **UNSTABLE** and looks for public items missing doctests
+//! - PRIVATE_DOC_TESTS: this lint is **STABLE** and looks for private items with doctests.
 
 use super::{span_of_attrs, Pass};
 use crate::clean;
@@ -19,27 +19,20 @@ crate const CHECK_PRIVATE_ITEMS_DOC_TESTS: Pass = Pass {
 };
 
 struct PrivateItemDocTestLinter<'a, 'tcx> {
-    cx: &'a DocContext<'tcx>,
+    cx: &'a mut DocContext<'tcx>,
 }
 
-impl<'a, 'tcx> PrivateItemDocTestLinter<'a, 'tcx> {
-    fn new(cx: &'a DocContext<'tcx>) -> Self {
-        PrivateItemDocTestLinter { cx }
-    }
-}
-
-crate fn check_private_items_doc_tests(krate: Crate, cx: &DocContext<'_>) -> Crate {
-    let mut coll = PrivateItemDocTestLinter::new(cx);
+crate fn check_private_items_doc_tests(krate: Crate, cx: &mut DocContext<'_>) -> Crate {
+    let mut coll = PrivateItemDocTestLinter { cx };
 
     coll.fold_crate(krate)
 }
 
 impl<'a, 'tcx> DocFolder for PrivateItemDocTestLinter<'a, 'tcx> {
     fn fold_item(&mut self, item: Item) -> Option<Item> {
-        let cx = self.cx;
         let dox = item.attrs.collapsed_doc_value().unwrap_or_else(String::new);
 
-        look_for_tests(&cx, &dox, &item);
+        look_for_tests(self.cx, &dox, &item);
 
         Some(self.fold_item_recur(item))
     }

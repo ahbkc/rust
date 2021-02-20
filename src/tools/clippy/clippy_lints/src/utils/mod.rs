@@ -8,7 +8,6 @@ pub mod author;
 pub mod camel_case;
 pub mod comparisons;
 pub mod conf;
-pub mod constants;
 mod diagnostics;
 pub mod eager_or_lazy;
 pub mod higher;
@@ -31,16 +30,14 @@ pub use self::hir_utils::{both, eq_expr_value, over, SpanlessEq, SpanlessHash};
 use std::borrow::Cow;
 use std::collections::hash_map::Entry;
 use std::hash::BuildHasherDefault;
-use std::mem;
 
 use if_chain::if_chain;
 use rustc_ast::ast::{self, Attribute, LitKind};
-use rustc_attr as attr;
 use rustc_data_structures::fx::FxHashMap;
 use rustc_errors::Applicability;
 use rustc_hir as hir;
-use rustc_hir::def::{DefKind, Res};
-use rustc_hir::def_id::{DefId, CRATE_DEF_INDEX, LOCAL_CRATE};
+use rustc_hir::def::{CtorKind, CtorOf, DefKind, Res};
+use rustc_hir::def_id::{DefId, LOCAL_CRATE};
 use rustc_hir::intravisit::{self, NestedVisitorMap, Visitor};
 use rustc_hir::Node;
 use rustc_hir::{
@@ -49,9 +46,10 @@ use rustc_hir::{
 };
 use rustc_infer::infer::TyCtxtInferExt;
 use rustc_lint::{LateContext, Level, Lint, LintContext};
+use rustc_middle::hir::exports::Export;
 use rustc_middle::hir::map::Map;
 use rustc_middle::ty::subst::{GenericArg, GenericArgKind};
-use rustc_middle::ty::{self, layout::IntegerExt, Ty, TyCtxt, TypeFoldable};
+use rustc_middle::ty::{self, layout::IntegerExt, DefIdTree, Ty, TyCtxt, TypeFoldable};
 use rustc_semver::RustcVersion;
 use rustc_session::Session;
 use rustc_span::hygiene::{ExpnKind, MacroKind};
@@ -308,92 +306,75 @@ pub fn match_path_ast(path: &ast::Path, segments: &[&str]) -> bool {
         .all(|(a, b)| a.ident.name.as_str() == *b)
 }
 
-/// Gets the definition associated to a path.
-pub fn path_to_res(cx: &LateContext<'_>, path: &[&str]) -> Option<def::Res> {
-    let crates = cx.tcx.crates();
-    let krate = crates
-        .iter()
-        .find(|&&krate| cx.tcx.crate_name(krate).as_str() == path[0]);
-    if let Some(krate) = krate {
-        let krate = DefId {
-            krate: *krate,
-            index: CRATE_DEF_INDEX,
-        };
-        let mut current_item = None;
-        let mut items = cx.tcx.item_children(krate);
-        let mut path_it = path.iter().skip(1).peekable();
-
-        loop {
-            let segment = match path_it.next() {
-                Some(segment) => segment,
-                None => return None,
-            };
-
-            // `get_def_path` seems to generate these empty segments for extern blocks.
-            // We can just ignore them.
-            if segment.is_empty() {
-                continue;
-            }
-
-            let result = SmallVec::<[_; 8]>::new();
-            for item in mem::replace(&mut items, cx.tcx.arena.alloc_slice(&result)).iter() {
-                if item.ident.name.as_str() == *segment {
-                    if path_it.peek().is_none() {
-                        return Some(item.res);
-                    }
-
-                    current_item = Some(item);
-                    items = cx.tcx.item_children(item.res.def_id());
-                    break;
-                }
-            }
-
-            // The segment isn't a child_item.
-            // Try to find it under an inherent impl.
-            if_chain! {
-                if path_it.peek().is_none();
-                if let Some(current_item) = current_item;
-                let item_def_id = current_item.res.def_id();
-                if cx.tcx.def_kind(item_def_id) == DefKind::Struct;
-                then {
-                    // Bad `find_map` suggestion. See #4193.
-                    #[allow(clippy::find_map)]
-                    return cx.tcx.inherent_impls(item_def_id).iter()
-                        .flat_map(|&impl_def_id| cx.tcx.item_children(impl_def_id))
-                        .find(|item| item.ident.name.as_str() == *segment)
-                        .map(|item| item.res);
-                }
-            }
+/// If the expression is a path to a local, returns the canonical `HirId` of the local.
+pub fn path_to_local(expr: &Expr<'_>) -> Option<HirId> {
+    if let ExprKind::Path(QPath::Resolved(None, ref path)) = expr.kind {
+        if let Res::Local(id) = path.res {
+            return Some(id);
         }
-    } else {
-        None
     }
+    None
 }
 
-pub fn qpath_res(cx: &LateContext<'_>, qpath: &hir::QPath<'_>, id: hir::HirId) -> Res {
-    match qpath {
-        hir::QPath::Resolved(_, path) => path.res,
-        hir::QPath::TypeRelative(..) | hir::QPath::LangItem(..) => {
-            if cx.tcx.has_typeck_results(id.owner.to_def_id()) {
-                cx.tcx.typeck(id.owner).qpath_res(qpath, id)
-            } else {
-                Res::Err
+/// Returns true if the expression is a path to a local with the specified `HirId`.
+/// Use this function to see if an expression matches a function argument or a match binding.
+pub fn path_to_local_id(expr: &Expr<'_>, id: HirId) -> bool {
+    path_to_local(expr) == Some(id)
+}
+
+/// Gets the definition associated to a path.
+#[allow(clippy::shadow_unrelated)] // false positive #6563
+pub fn path_to_res(cx: &LateContext<'_>, path: &[&str]) -> Res {
+    macro_rules! try_res {
+        ($e:expr) => {
+            match $e {
+                Some(e) => e,
+                None => return Res::Err,
             }
-        },
+        };
     }
+    fn item_child_by_name<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId, name: &str) -> Option<&'tcx Export<HirId>> {
+        tcx.item_children(def_id)
+            .iter()
+            .find(|item| item.ident.name.as_str() == name)
+    }
+
+    let (krate, first, path) = match *path {
+        [krate, first, ref path @ ..] => (krate, first, path),
+        _ => return Res::Err,
+    };
+    let tcx = cx.tcx;
+    let crates = tcx.crates();
+    let krate = try_res!(crates.iter().find(|&&num| tcx.crate_name(num).as_str() == krate));
+    let first = try_res!(item_child_by_name(tcx, krate.as_def_id(), first));
+    let last = path
+        .iter()
+        .copied()
+        // `get_def_path` seems to generate these empty segments for extern blocks.
+        // We can just ignore them.
+        .filter(|segment| !segment.is_empty())
+        // for each segment, find the child item
+        .try_fold(first, |item, segment| {
+            let def_id = item.res.def_id();
+            if let Some(item) = item_child_by_name(tcx, def_id, segment) {
+                Some(item)
+            } else if matches!(item.res, Res::Def(DefKind::Enum | DefKind::Struct, _)) {
+                // it is not a child item so check inherent impl items
+                tcx.inherent_impls(def_id)
+                    .iter()
+                    .find_map(|&impl_def_id| item_child_by_name(tcx, impl_def_id, segment))
+            } else {
+                None
+            }
+        });
+    try_res!(last).res
 }
 
 /// Convenience function to get the `DefId` of a trait by path.
 /// It could be a trait or trait alias.
 pub fn get_trait_def_id(cx: &LateContext<'_>, path: &[&str]) -> Option<DefId> {
-    let res = match path_to_res(cx, path) {
-        Some(res) => res,
-        None => return None,
-    };
-
-    match res {
+    match path_to_res(cx, path) {
         Res::Def(DefKind::Trait | DefKind::TraitAlias, trait_id) => Some(trait_id),
-        Res::Err => unreachable!("this trait resolution is impossible: {:?}", &path),
         _ => None,
     }
 }
@@ -1148,8 +1129,7 @@ pub fn is_self(slf: &Param<'_>) -> bool {
 
 pub fn is_self_ty(slf: &hir::Ty<'_>) -> bool {
     if_chain! {
-        if let TyKind::Path(ref qp) = slf.kind;
-        if let QPath::Resolved(None, ref path) = *qp;
+        if let TyKind::Path(QPath::Resolved(None, ref path)) = slf.kind;
         if let Res::SelfTy(..) = path.res;
         then {
             return true
@@ -1170,9 +1150,7 @@ pub fn is_try<'tcx>(expr: &'tcx Expr<'tcx>) -> Option<&'tcx Expr<'tcx>> {
             if let PatKind::TupleStruct(ref path, ref pat, None) = arm.pat.kind;
             if match_qpath(path, &paths::RESULT_OK[1..]);
             if let PatKind::Binding(_, hir_id, _, None) = pat[0].kind;
-            if let ExprKind::Path(QPath::Resolved(None, ref path)) = arm.body.kind;
-            if let Res::Local(lid) = path.res;
-            if lid == hir_id;
+            if path_to_local_id(arm.body, hir_id);
             then {
                 return true;
             }
@@ -1216,35 +1194,34 @@ pub fn is_allowed(cx: &LateContext<'_>, lint: &'static Lint, id: HirId) -> bool 
     cx.tcx.lint_level_at_node(lint, id).0 == Level::Allow
 }
 
-pub fn get_arg_name(pat: &Pat<'_>) -> Option<Symbol> {
-    match pat.kind {
-        PatKind::Binding(.., ident, None) => Some(ident.name),
-        PatKind::Ref(ref subpat, _) => get_arg_name(subpat),
-        _ => None,
+pub fn strip_pat_refs<'hir>(mut pat: &'hir Pat<'hir>) -> &'hir Pat<'hir> {
+    while let PatKind::Ref(subpat, _) = pat.kind {
+        pat = subpat;
     }
+    pat
 }
 
-pub fn int_bits(tcx: TyCtxt<'_>, ity: ast::IntTy) -> u64 {
-    Integer::from_attr(&tcx, attr::IntType::SignedInt(ity)).size().bits()
+pub fn int_bits(tcx: TyCtxt<'_>, ity: ty::IntTy) -> u64 {
+    Integer::from_int_ty(&tcx, ity).size().bits()
 }
 
 #[allow(clippy::cast_possible_wrap)]
 /// Turn a constant int byte representation into an i128
-pub fn sext(tcx: TyCtxt<'_>, u: u128, ity: ast::IntTy) -> i128 {
+pub fn sext(tcx: TyCtxt<'_>, u: u128, ity: ty::IntTy) -> i128 {
     let amt = 128 - int_bits(tcx, ity);
     ((u as i128) << amt) >> amt
 }
 
 #[allow(clippy::cast_sign_loss)]
 /// clip unused bytes
-pub fn unsext(tcx: TyCtxt<'_>, u: i128, ity: ast::IntTy) -> u128 {
+pub fn unsext(tcx: TyCtxt<'_>, u: i128, ity: ty::IntTy) -> u128 {
     let amt = 128 - int_bits(tcx, ity);
     ((u as u128) << amt) >> amt
 }
 
 /// clip unused bytes
-pub fn clip(tcx: TyCtxt<'_>, u: u128, ity: ast::UintTy) -> u128 {
-    let bits = Integer::from_attr(&tcx, attr::IntType::UnsignedInt(ity)).size().bits();
+pub fn clip(tcx: TyCtxt<'_>, u: u128, ity: ty::UintTy) -> u128 {
+    let bits = Integer::from_uint_ty(&tcx, ity).size().bits();
     let amt = 128 - bits;
     (u << amt) >> amt
 }
@@ -1569,10 +1546,11 @@ pub fn fn_def_id(cx: &LateContext<'_>, expr: &Expr<'_>) -> Option<DefId> {
         ExprKind::Call(
             Expr {
                 kind: ExprKind::Path(qpath),
+                hir_id: path_hir_id,
                 ..
             },
             ..,
-        ) => cx.typeck_results().qpath_res(qpath, expr.hir_id).opt_def_id(),
+        ) => cx.typeck_results().qpath_res(qpath, *path_hir_id).opt_def_id(),
         _ => None,
     }
 }
@@ -1669,6 +1647,44 @@ where
     match_expr_list
 }
 
+/// Peels off all references on the pattern. Returns the underlying pattern and the number of
+/// references removed.
+pub fn peel_hir_pat_refs(pat: &'a Pat<'a>) -> (&'a Pat<'a>, usize) {
+    fn peel(pat: &'a Pat<'a>, count: usize) -> (&'a Pat<'a>, usize) {
+        if let PatKind::Ref(pat, _) = pat.kind {
+            peel(pat, count + 1)
+        } else {
+            (pat, count)
+        }
+    }
+    peel(pat, 0)
+}
+
+/// Peels off up to the given number of references on the expression. Returns the underlying
+/// expression and the number of references removed.
+pub fn peel_n_hir_expr_refs(expr: &'a Expr<'a>, count: usize) -> (&'a Expr<'a>, usize) {
+    fn f(expr: &'a Expr<'a>, count: usize, target: usize) -> (&'a Expr<'a>, usize) {
+        match expr.kind {
+            ExprKind::AddrOf(_, _, expr) if count != target => f(expr, count + 1, target),
+            _ => (expr, count),
+        }
+    }
+    f(expr, 0, count)
+}
+
+/// Peels off all references on the type. Returns the underlying type and the number of references
+/// removed.
+pub fn peel_mid_ty_refs(ty: Ty<'_>) -> (Ty<'_>, usize) {
+    fn peel(ty: Ty<'_>, count: usize) -> (Ty<'_>, usize) {
+        if let ty::Ref(_, ty, _) = ty.kind() {
+            peel(ty, count + 1)
+        } else {
+            (ty, count)
+        }
+    }
+    peel(ty, 0)
+}
+
 #[macro_export]
 macro_rules! unwrap_cargo_metadata {
     ($cx: ident, $lint: ident, $deps: expr) => {{
@@ -1697,6 +1713,30 @@ pub fn is_hir_ty_cfg_dependant(cx: &LateContext<'_>, ty: &hir::Ty<'_>) -> bool {
             false
         }
     }
+}
+
+/// Check if the resolution of a given path is an `Ok` variant of `Result`.
+pub fn is_ok_ctor(cx: &LateContext<'_>, res: Res) -> bool {
+    if let Some(ok_id) = cx.tcx.lang_items().result_ok_variant() {
+        if let Res::Def(DefKind::Ctor(CtorOf::Variant, CtorKind::Fn), id) = res {
+            if let Some(variant_id) = cx.tcx.parent(id) {
+                return variant_id == ok_id;
+            }
+        }
+    }
+    false
+}
+
+/// Check if the resolution of a given path is a `Some` variant of `Option`.
+pub fn is_some_ctor(cx: &LateContext<'_>, res: Res) -> bool {
+    if let Some(some_id) = cx.tcx.lang_items().option_some_variant() {
+        if let Res::Def(DefKind::Ctor(CtorOf::Variant, CtorKind::Fn), id) = res {
+            if let Some(variant_id) = cx.tcx.parent(id) {
+                return variant_id == some_id;
+            }
+        }
+    }
+    false
 }
 
 #[cfg(test)]

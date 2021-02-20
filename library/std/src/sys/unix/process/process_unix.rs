@@ -47,7 +47,7 @@ impl Command {
         // a lock any more because the parent won't do anything and the child is
         // in its own process.
         let result = unsafe {
-            let _env_lock = sys::os::env_lock();
+            let _env_lock = sys::os::env_read_lock();
             cvt(libc::fork())?
         };
 
@@ -124,7 +124,7 @@ impl Command {
                     // Similar to when forking, we want to ensure that access to
                     // the environment is synchronized, so make sure to grab the
                     // environment lock before we try to exec.
-                    let _lock = sys::os::env_lock();
+                    let _lock = sys::os::env_read_lock();
 
                     let Err(e) = self.do_exec(theirs, envp.as_ref());
                     e
@@ -183,20 +183,26 @@ impl Command {
 
         #[cfg(not(target_os = "l4re"))]
         {
+            if let Some(_g) = self.get_groups() {
+                //FIXME: Redox kernel does not support setgroups yet
+                #[cfg(not(target_os = "redox"))]
+                cvt(libc::setgroups(_g.len().try_into().unwrap(), _g.as_ptr()))?;
+            }
             if let Some(u) = self.get_gid() {
                 cvt(libc::setgid(u as gid_t))?;
             }
             if let Some(u) = self.get_uid() {
                 // When dropping privileges from root, the `setgroups` call
-                // will remove any extraneous groups. If we don't call this,
-                // then even though our uid has dropped, we may still have
-                // groups that enable us to do super-user things. This will
-                // fail if we aren't root, so don't bother checking the
-                // return value, this is just done as an optimistic
-                // privilege dropping function.
+                // will remove any extraneous groups. We only drop groups
+                // if the current uid is 0 and we weren't given an explicit
+                // set of groups. If we don't call this, then even though our
+                // uid has dropped, we may still have groups that enable us to
+                // do super-user things.
                 //FIXME: Redox kernel does not support setgroups yet
                 #[cfg(not(target_os = "redox"))]
-                let _ = libc::setgroups(0, ptr::null());
+                if libc::getuid() == 0 && self.get_groups().is_none() {
+                    cvt(libc::setgroups(0, ptr::null()))?;
+                }
                 cvt(libc::setuid(u as uid_t))?;
             }
         }
@@ -287,6 +293,7 @@ impl Command {
             || self.get_uid().is_some()
             || (self.env_saw_path() && !self.program_is_path())
             || !self.get_closures().is_empty()
+            || self.get_groups().is_some()
         {
             return Ok(None);
         }
@@ -397,7 +404,7 @@ impl Command {
             cvt_nz(libc::posix_spawnattr_setflags(attrs.0.as_mut_ptr(), flags as _))?;
 
             // Make sure we synchronize access to the global `environ` resource
-            let _env_lock = sys::os::env_lock();
+            let _env_lock = sys::os::env_read_lock();
             let envp = envp.map(|c| c.as_ptr()).unwrap_or_else(|| *sys::os::environ() as *const _);
             cvt_nz(libc::posix_spawnp(
                 &mut p.pid,

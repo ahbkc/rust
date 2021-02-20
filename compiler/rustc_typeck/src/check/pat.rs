@@ -150,7 +150,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
     ///
     /// Outside of this module, `check_pat_top` should always be used.
     /// Conversely, inside this module, `check_pat_top` should never be used.
-    #[instrument(skip(self, ti))]
+    #[instrument(level = "debug", skip(self, ti))]
     fn check_pat(
         &self,
         pat: &'tcx Pat<'tcx>,
@@ -1041,12 +1041,8 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 vec![(left, "(".to_string()), (right.shrink_to_hi(), ")".to_string())],
                 Applicability::MachineApplicable,
             );
-        } else if fields.len() > subpats.len() {
-            let after_fields_span = if pat_span == DUMMY_SP {
-                pat_span
-            } else {
-                pat_span.with_hi(pat_span.hi() - BytePos(1)).shrink_to_hi()
-            };
+        } else if fields.len() > subpats.len() && pat_span != DUMMY_SP {
+            let after_fields_span = pat_span.with_hi(pat_span.hi() - BytePos(1)).shrink_to_hi();
             let all_fields_span = match subpats {
                 [] => after_fields_span,
                 [field] => field.span,
@@ -1055,7 +1051,19 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
             // Check if all the fields in the pattern are wildcards.
             let all_wildcards = subpats.iter().all(|pat| matches!(pat.kind, PatKind::Wild));
+            let first_tail_wildcard =
+                subpats.iter().enumerate().fold(None, |acc, (pos, pat)| match (acc, &pat.kind) {
+                    (None, PatKind::Wild) => Some(pos),
+                    (Some(_), PatKind::Wild) => acc,
+                    _ => None,
+                });
+            let tail_span = match first_tail_wildcard {
+                None => after_fields_span,
+                Some(0) => subpats[0].span.to(after_fields_span),
+                Some(pos) => subpats[pos - 1].span.shrink_to_hi().to(after_fields_span),
+            };
 
+            // FIXME: heuristic-based suggestion to check current types for where to add `_`.
             let mut wildcard_sugg = vec!["_"; fields.len() - subpats.len()].join(", ");
             if !subpats.is_empty() {
                 wildcard_sugg = String::from(", ") + &wildcard_sugg;
@@ -1080,7 +1088,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     );
                 } else {
                     err.span_suggestion_verbose(
-                        after_fields_span,
+                        tail_span,
                         "use `..` to ignore the rest of the fields",
                         String::from(", .."),
                         Applicability::MaybeIncorrect,
@@ -1525,24 +1533,13 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 _ => return err,
             },
             [.., field] => {
-                // if last field has a trailing comma, use the comma
-                // as the span to avoid trailing comma in ultimate
-                // suggestion (Issue #78511)
-                let tail = field.span.shrink_to_hi().until(pat.span.shrink_to_hi());
-                let tail_through_comma = self.tcx.sess.source_map().span_through_char(tail, ',');
-                let sp = if tail_through_comma == tail {
-                    field.span.shrink_to_hi()
-                } else {
-                    tail_through_comma
-                };
-                (
-                    match pat.kind {
-                        PatKind::Struct(_, [_, ..], _) => ", ",
-                        _ => "",
-                    },
-                    "",
-                    sp,
-                )
+                // Account for last field having a trailing comma or parse recovery at the tail of
+                // the pattern to avoid invalid suggestion (#78511).
+                let tail = field.span.shrink_to_hi().with_hi(pat.span.hi());
+                match &pat.kind {
+                    PatKind::Struct(..) => (", ", " }", tail),
+                    _ => return err,
+                }
             }
         };
         err.span_suggestion(

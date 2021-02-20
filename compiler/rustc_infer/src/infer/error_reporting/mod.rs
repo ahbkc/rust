@@ -1509,7 +1509,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
 
         impl<'tcx> ty::fold::TypeVisitor<'tcx> for OpaqueTypesVisitor<'tcx> {
             fn visit_ty(&mut self, t: Ty<'tcx>) -> ControlFlow<Self::BreakTy> {
-                if let Some((kind, def_id)) = TyCategory::from_ty(t) {
+                if let Some((kind, def_id)) = TyCategory::from_ty(self.tcx, t) {
                     let span = self.tcx.def_span(def_id);
                     // Avoid cluttering the output when the "found" and error span overlap:
                     //
@@ -1582,11 +1582,11 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
         };
         if let Some((expected, found)) = expected_found {
             let expected_label = match exp_found {
-                Mismatch::Variable(ef) => ef.expected.prefix_string(),
+                Mismatch::Variable(ef) => ef.expected.prefix_string(self.tcx),
                 Mismatch::Fixed(s) => s.into(),
             };
             let found_label = match exp_found {
-                Mismatch::Variable(ef) => ef.found.prefix_string(),
+                Mismatch::Variable(ef) => ef.found.prefix_string(self.tcx),
                 Mismatch::Fixed(s) => s.into(),
             };
             let exp_found = match exp_found {
@@ -1661,6 +1661,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
         debug!("exp_found {:?} terr {:?}", exp_found, terr);
         if let Some(exp_found) = exp_found {
             self.suggest_as_ref_where_appropriate(span, &exp_found, diag);
+            self.suggest_accessing_field_where_appropriate(cause, &exp_found, diag);
             self.suggest_await_on_expect_found(cause, span, &exp_found, diag);
         }
 
@@ -1816,6 +1817,53 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
                 );
             }
             _ => {}
+        }
+    }
+
+    fn suggest_accessing_field_where_appropriate(
+        &self,
+        cause: &ObligationCause<'tcx>,
+        exp_found: &ty::error::ExpectedFound<Ty<'tcx>>,
+        diag: &mut DiagnosticBuilder<'tcx>,
+    ) {
+        debug!(
+            "suggest_accessing_field_where_appropriate(cause={:?}, exp_found={:?})",
+            cause, exp_found
+        );
+        if let ty::Adt(expected_def, expected_substs) = exp_found.expected.kind() {
+            if expected_def.is_enum() {
+                return;
+            }
+
+            if let Some((name, ty)) = expected_def
+                .non_enum_variant()
+                .fields
+                .iter()
+                .filter(|field| field.vis.is_accessible_from(field.did, self.tcx))
+                .map(|field| (field.ident.name, field.ty(self.tcx, expected_substs)))
+                .find(|(_, ty)| ty::TyS::same_type(ty, exp_found.found))
+            {
+                if let ObligationCauseCode::Pattern { span: Some(span), .. } = cause.code {
+                    if let Ok(snippet) = self.tcx.sess.source_map().span_to_snippet(span) {
+                        let suggestion = if expected_def.is_struct() {
+                            format!("{}.{}", snippet, name)
+                        } else if expected_def.is_union() {
+                            format!("unsafe {{ {}.{} }}", snippet, name)
+                        } else {
+                            return;
+                        };
+                        diag.span_suggestion(
+                            span,
+                            &format!(
+                                "you might have meant to use field `{}` whose type is `{}`",
+                                name, ty
+                            ),
+                            suggestion,
+                            Applicability::MaybeIncorrect,
+                        );
+                    }
+                }
+            }
         }
     }
 
@@ -2200,13 +2248,18 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
                     "...",
                 );
                 if let Some(infer::RelateParamBound(_, t)) = origin {
+                    let return_impl_trait = self
+                        .in_progress_typeck_results
+                        .map(|typeck_results| typeck_results.borrow().hir_owner)
+                        .and_then(|owner| self.tcx.return_type_impl_trait(owner))
+                        .is_some();
                     let t = self.resolve_vars_if_possible(t);
                     match t.kind() {
                         // We've got:
                         // fn get_later<G, T>(g: G, dest: &mut T) -> impl FnOnce() + '_
                         // suggest:
                         // fn get_later<'a, G: 'a, T>(g: G, dest: &mut T) -> impl FnOnce() + '_ + 'a
-                        ty::Closure(_, _substs) | ty::Opaque(_, _substs) => {
+                        ty::Closure(_, _substs) | ty::Opaque(_, _substs) if return_impl_trait => {
                             new_binding_suggestion(&mut err, type_param_span, bound_kind);
                         }
                         _ => {
@@ -2342,7 +2395,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
                 let var_name = self.tcx.hir().name(upvar_id.var_path.hir_id);
                 format!(" for capture of `{}` by closure", var_name)
             }
-            infer::NLL(..) => bug!("NLL variable found in lexical phase"),
+            infer::Nll(..) => bug!("NLL variable found in lexical phase"),
         };
 
         struct_span_err!(
@@ -2436,7 +2489,7 @@ impl<'tcx> ObligationCauseExt<'tcx> for ObligationCause<'tcx> {
 pub enum TyCategory {
     Closure,
     Opaque,
-    Generator,
+    Generator(hir::GeneratorKind),
     Foreign,
 }
 
@@ -2445,16 +2498,18 @@ impl TyCategory {
         match self {
             Self::Closure => "closure",
             Self::Opaque => "opaque type",
-            Self::Generator => "generator",
+            Self::Generator(gk) => gk.descr(),
             Self::Foreign => "foreign type",
         }
     }
 
-    pub fn from_ty(ty: Ty<'_>) -> Option<(Self, DefId)> {
+    pub fn from_ty(tcx: TyCtxt<'_>, ty: Ty<'_>) -> Option<(Self, DefId)> {
         match *ty.kind() {
             ty::Closure(def_id, _) => Some((Self::Closure, def_id)),
             ty::Opaque(def_id, _) => Some((Self::Opaque, def_id)),
-            ty::Generator(def_id, ..) => Some((Self::Generator, def_id)),
+            ty::Generator(def_id, ..) => {
+                Some((Self::Generator(tcx.generator_kind(def_id).unwrap()), def_id))
+            }
             ty::Foreign(def_id) => Some((Self::Foreign, def_id)),
             _ => None,
         }

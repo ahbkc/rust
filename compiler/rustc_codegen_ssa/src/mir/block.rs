@@ -709,7 +709,7 @@ impl<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>> FunctionCx<'a, 'tcx, Bx> {
             let (tup, args) = args.split_last().unwrap();
             (args, Some(tup))
         } else {
-            (&args[..], None)
+            (args, None)
         };
 
         'make_args: for (i, arg) in first_args.iter().enumerate() {
@@ -875,20 +875,16 @@ impl<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>> FunctionCx<'a, 'tcx, Bx> {
                             ty::Uint(_) => value.to_string(),
                             ty::Int(int_ty) => {
                                 match int_ty.normalize(bx.tcx().sess.target.pointer_width) {
-                                    ast::IntTy::I8 => (value as i8).to_string(),
-                                    ast::IntTy::I16 => (value as i16).to_string(),
-                                    ast::IntTy::I32 => (value as i32).to_string(),
-                                    ast::IntTy::I64 => (value as i64).to_string(),
-                                    ast::IntTy::I128 => (value as i128).to_string(),
-                                    ast::IntTy::Isize => unreachable!(),
+                                    ty::IntTy::I8 => (value as i8).to_string(),
+                                    ty::IntTy::I16 => (value as i16).to_string(),
+                                    ty::IntTy::I32 => (value as i32).to_string(),
+                                    ty::IntTy::I64 => (value as i64).to_string(),
+                                    ty::IntTy::I128 => (value as i128).to_string(),
+                                    ty::IntTy::Isize => unreachable!(),
                                 }
                             }
-                            ty::Float(ast::FloatTy::F32) => {
-                                f32::from_bits(value as u32).to_string()
-                            }
-                            ty::Float(ast::FloatTy::F64) => {
-                                f64::from_bits(value as u64).to_string()
-                            }
+                            ty::Float(ty::FloatTy::F32) => f32::from_bits(value as u32).to_string(),
+                            ty::Float(ty::FloatTy::F64) => f64::from_bits(value as u64).to_string(),
                             _ => span_bug!(span, "asm const has bad type {}", ty),
                         };
                         InlineAsmOperandRef::Const { string }

@@ -94,9 +94,23 @@ impl<T> [T] {
     // SAFETY: const sound because we transmute out the length field as a usize (which it must be)
     #[rustc_allow_const_fn_unstable(const_fn_union)]
     pub const fn len(&self) -> usize {
-        // SAFETY: this is safe because `&[T]` and `FatPtr<T>` have the same layout.
-        // Only `std` can make this guarantee.
-        unsafe { crate::ptr::Repr { rust: self }.raw.len }
+        #[cfg(bootstrap)]
+        {
+            // SAFETY: this is safe because `&[T]` and `FatPtr<T>` have the same layout.
+            // Only `std` can make this guarantee.
+            unsafe { crate::ptr::Repr { rust: self }.raw.len }
+        }
+        #[cfg(not(bootstrap))]
+        {
+            // FIXME: Replace with `crate::ptr::metadata(self)` when that is const-stable.
+            // As of this writing this causes a "Const-stable functions can only call other
+            // const-stable functions" error.
+
+            // SAFETY: Accessing the value from the `PtrRepr` union is safe since *const T
+            // and PtrComponents<T> have the same memory layouts. Only std can make this
+            // guarantee.
+            unsafe { crate::ptr::PtrRepr { const_ptr: self }.components.metadata }
+        }
     }
 
     /// Returns `true` if the slice has a length of 0.
@@ -542,10 +556,9 @@ impl<T> [T] {
     #[stable(feature = "rust1", since = "1.0.0")]
     #[inline]
     pub fn swap(&mut self, a: usize, b: usize) {
-        // Can't take two mutable loans from one vector, so instead just cast
-        // them to their raw pointers to do the swap.
-        let pa: *mut T = &mut self[a];
-        let pb: *mut T = &mut self[b];
+        // Can't take two mutable loans from one vector, so instead use raw pointers.
+        let pa = ptr::addr_of_mut!(self[a]);
+        let pb = ptr::addr_of_mut!(self[b]);
         // SAFETY: `pa` and `pb` have been created from safe mutable references and refer
         // to elements in the slice and therefore are guaranteed to be valid and aligned.
         // Note that accessing the elements behind `a` and `b` is checked and will
@@ -2083,6 +2096,12 @@ impl<T> [T] {
     /// [`Result::Err`] is returned, containing the index where a matching
     /// element could be inserted while maintaining sorted order.
     ///
+    /// See also [`binary_search_by`], [`binary_search_by_key`], and [`partition_point`].
+    ///
+    /// [`binary_search_by`]: #method.binary_search_by
+    /// [`binary_search_by_key`]: #method.binary_search_by_key
+    /// [`partition_point`]: #method.partition_point
+    ///
     /// # Examples
     ///
     /// Looks up a series of four elements. The first is found, with a
@@ -2129,6 +2148,12 @@ impl<T> [T] {
     /// one of the matches could be returned. If the value is not found then
     /// [`Result::Err`] is returned, containing the index where a matching
     /// element could be inserted while maintaining sorted order.
+    ///
+    /// See also [`binary_search`], [`binary_search_by_key`], and [`partition_point`].
+    ///
+    /// [`binary_search`]: #method.binary_search
+    /// [`binary_search_by_key`]: #method.binary_search_by_key
+    /// [`partition_point`]: #method.partition_point
     ///
     /// # Examples
     ///
@@ -2187,7 +2212,12 @@ impl<T> [T] {
     /// [`Result::Err`] is returned, containing the index where a matching
     /// element could be inserted while maintaining sorted order.
     ///
+    /// See also [`binary_search`], [`binary_search_by`], and [`partition_point`].
+    ///
     /// [`sort_by_key`]: #method.sort_by_key
+    /// [`binary_search`]: #method.binary_search
+    /// [`binary_search_by`]: #method.binary_search_by
+    /// [`partition_point`]: #method.partition_point
     ///
     /// # Examples
     ///
@@ -2853,13 +2883,12 @@ impl<T> [T] {
     /// # Examples
     ///
     /// ```
-    /// #![feature(slice_fill_with)]
-    ///
     /// let mut buf = vec![1; 10];
     /// buf.fill_with(Default::default);
     /// assert_eq!(buf, vec![0; 10]);
     /// ```
-    #[unstable(feature = "slice_fill_with", issue = "79221")]
+    #[doc(alias = "memset")]
+    #[stable(feature = "slice_fill_with", since = "1.51.0")]
     pub fn fill_with<F>(&mut self, mut f: F)
     where
         F: FnMut() -> T,
@@ -2929,15 +2958,7 @@ impl<T> [T] {
     where
         T: Clone,
     {
-        assert!(self.len() == src.len(), "destination and source slices have different lengths");
-        // NOTE: We need to explicitly slice them to the same length
-        // for bounds checking to be elided, and the optimizer will
-        // generate memcpy for simple cases (for example T = u8).
-        let len = self.len();
-        let src = &src[..len];
-        for i in 0..len {
-            self[i].clone_from(&src[i]);
-        }
+        self.spec_clone_from(src);
     }
 
     /// Copies all elements from `src` into `self`, using a memcpy.
@@ -3401,11 +3422,15 @@ impl<T> [T] {
     /// If this slice is not partitioned, the returned result is unspecified and meaningless,
     /// as this method performs a kind of binary search.
     ///
+    /// See also [`binary_search`], [`binary_search_by`], and [`binary_search_by_key`].
+    ///
+    /// [`binary_search`]: #method.binary_search
+    /// [`binary_search_by`]: #method.binary_search_by
+    /// [`binary_search_by_key`]: #method.binary_search_by_key
+    ///
     /// # Examples
     ///
     /// ```
-    /// #![feature(partition_point)]
-    ///
     /// let v = [1, 2, 3, 3, 5, 6, 7];
     /// let i = v.partition_point(|&x| x < 5);
     ///
@@ -3413,7 +3438,7 @@ impl<T> [T] {
     /// assert!(v[..i].iter().all(|&x| x < 5));
     /// assert!(v[i..].iter().all(|&x| !(x < 5)));
     /// ```
-    #[unstable(feature = "partition_point", reason = "new API", issue = "73831")]
+    #[stable(feature = "partition_point", since = "1.52.0")]
     pub fn partition_point<P>(&self, mut pred: P) -> usize
     where
         P: FnMut(&T) -> bool,
@@ -3439,6 +3464,36 @@ impl<T> [T] {
         }
 
         left
+    }
+}
+
+trait CloneFromSpec<T> {
+    fn spec_clone_from(&mut self, src: &[T]);
+}
+
+impl<T> CloneFromSpec<T> for [T]
+where
+    T: Clone,
+{
+    default fn spec_clone_from(&mut self, src: &[T]) {
+        assert!(self.len() == src.len(), "destination and source slices have different lengths");
+        // NOTE: We need to explicitly slice them to the same length
+        // to make it easier for the optimizer to elide bounds checking.
+        // But since it can't be relied on we also have an explicit specialization for T: Copy.
+        let len = self.len();
+        let src = &src[..len];
+        for i in 0..len {
+            self[i].clone_from(&src[i]);
+        }
+    }
+}
+
+impl<T> CloneFromSpec<T> for [T]
+where
+    T: Copy,
+{
+    fn spec_clone_from(&mut self, src: &[T]) {
+        self.copy_from_slice(src);
     }
 }
 

@@ -143,6 +143,14 @@ impl<'a, T: EarlyLintPass> ast_visit::Visitor<'a> for EarlyContextAndPass<'a, T>
         run_early_pass!(self, check_fn, fk, span, id);
         self.check_id(id);
         ast_visit::walk_fn(self, fk, span);
+
+        // Explicitly check for lints associated with 'closure_id', since
+        // it does not have a corresponding AST node
+        if let ast_visit::FnKind::Fn(_, _, sig, _, _) = fk {
+            if let ast::Async::Yes { closure_id, .. } = sig.header.asyncness {
+                self.check_id(closure_id);
+            }
+        }
         run_early_pass!(self, check_fn_post, fk, span, id);
     }
 
@@ -180,13 +188,6 @@ impl<'a, T: EarlyLintPass> ast_visit::Visitor<'a> for EarlyContextAndPass<'a, T>
         run_early_pass!(self, check_ident, ident);
     }
 
-    fn visit_mod(&mut self, m: &'a ast::Mod, s: Span, _a: &[ast::Attribute], n: ast::NodeId) {
-        run_early_pass!(self, check_mod, m, s, n);
-        self.check_id(n);
-        ast_visit::walk_mod(self, m);
-        run_early_pass!(self, check_mod_post, m, s, n);
-    }
-
     fn visit_local(&mut self, l: &'a ast::Local) {
         self.with_lint_attrs(l.id, &l.attrs, |cx| {
             run_early_pass!(cx, check_local, l);
@@ -208,6 +209,14 @@ impl<'a, T: EarlyLintPass> ast_visit::Visitor<'a> for EarlyContextAndPass<'a, T>
 
     fn visit_expr_post(&mut self, e: &'a ast::Expr) {
         run_early_pass!(self, check_expr_post, e);
+
+        // Explicitly check for lints associated with 'closure_id', since
+        // it does not have a corresponding AST node
+        match e.kind {
+            ast::ExprKind::Closure(_, ast::Async::Yes { closure_id, .. }, ..)
+            | ast::ExprKind::Async(_, closure_id, ..) => self.check_id(closure_id),
+            _ => {}
+        }
     }
 
     fn visit_generic_arg(&mut self, arg: &'a ast::GenericArg) {
@@ -379,17 +388,9 @@ pub fn check_ast_crate<T: EarlyLintPass>(
     // All of the buffered lints should have been emitted at this point.
     // If not, that means that we somehow buffered a lint for a node id
     // that was not lint-checked (perhaps it doesn't exist?). This is a bug.
-    //
-    // Rustdoc runs everybody-loops before the early lints and removes
-    // function bodies, so it's totally possible for linted
-    // node ids to not exist (e.g., macros defined within functions for the
-    // unused_macro lint) anymore. So we only run this check
-    // when we're not in rustdoc mode. (see issue #47639)
-    if !sess.opts.actually_rustdoc {
-        for (_id, lints) in buffered.map {
-            for early_lint in lints {
-                sess.delay_span_bug(early_lint.span, "failed to process buffered lint here");
-            }
+    for (_id, lints) in buffered.map {
+        for early_lint in lints {
+            sess.delay_span_bug(early_lint.span, "failed to process buffered lint here");
         }
     }
 }

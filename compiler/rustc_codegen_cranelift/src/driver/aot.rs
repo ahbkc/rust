@@ -164,8 +164,8 @@ fn module_codegen(tcx: TyCtxt<'_>, cgu_name: rustc_span::Symbol) -> ModuleCodege
             MonoItem::Static(def_id) => {
                 crate::constant::codegen_static(&mut cx.constants_cx, def_id)
             }
-            MonoItem::GlobalAsm(hir_id) => {
-                let item = cx.tcx.hir().expect_item(hir_id);
+            MonoItem::GlobalAsm(item_id) => {
+                let item = cx.tcx.hir().item(item_id);
                 if let rustc_hir::ItemKind::GlobalAsm(rustc_hir::GlobalAsm { asm }) = item.kind {
                     cx.global_asm.push_str(&*asm.as_str());
                     cx.global_asm.push_str("\n\n");
@@ -281,9 +281,6 @@ pub(super) fn run_aot(
         None
     };
 
-    rustc_incremental::assert_dep_graph(tcx);
-    rustc_incremental::save_dep_graph(tcx);
-
     let metadata_module = if need_metadata_module {
         let _timer = tcx.prof.generic_activity("codegen crate metadata");
         let (metadata_cgu_name, tmp_file) = tcx.sess.time("write compressed metadata", || {
@@ -321,10 +318,6 @@ pub(super) fn run_aot(
     } else {
         None
     };
-
-    if tcx.sess.opts.output_types.should_codegen() {
-        rustc_incremental::assert_module_sources::assert_module_sources(tcx);
-    }
 
     Box::new((
         CodegenResults {

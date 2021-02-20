@@ -16,7 +16,7 @@ use rustc_infer::infer::canonical::QueryRegionConstraints;
 use rustc_infer::infer::outlives::env::RegionBoundPairs;
 use rustc_infer::infer::type_variable::{TypeVariableOrigin, TypeVariableOriginKind};
 use rustc_infer::infer::{
-    InferCtxt, InferOk, LateBoundRegionConversionTime, NLLRegionVariableOrigin,
+    InferCtxt, InferOk, LateBoundRegionConversionTime, NllRegionVariableOrigin,
 };
 use rustc_middle::mir::tcx::PlaceTy;
 use rustc_middle::mir::visit::{NonMutatingUseContext, PlaceContext, Visitor};
@@ -44,8 +44,7 @@ use crate::dataflow::impls::MaybeInitializedPlaces;
 use crate::dataflow::move_paths::MoveData;
 use crate::dataflow::ResultsCursor;
 use crate::transform::{
-    check_consts::ConstCx,
-    promote_consts::should_suggest_const_in_array_repeat_expressions_attribute,
+    check_consts::ConstCx, promote_consts::is_const_fn_in_array_repeat_expression,
 };
 
 use crate::borrow_check::{
@@ -132,7 +131,7 @@ pub(crate) fn type_check<'mir, 'tcx>(
     flow_inits: &mut ResultsCursor<'mir, 'tcx, MaybeInitializedPlaces<'mir, 'tcx>>,
     move_data: &MoveData<'tcx>,
     elements: &Rc<RegionValueElements>,
-    upvars: &[Upvar],
+    upvars: &[Upvar<'tcx>],
 ) -> MirTypeckResults<'tcx> {
     let implicit_region_bound = infcx.tcx.mk_region(ty::ReVar(universal_regions.fr_fn_body));
     let mut constraints = MirTypeckRegionConstraints {
@@ -821,7 +820,7 @@ struct BorrowCheckContext<'a, 'tcx> {
     all_facts: &'a mut Option<AllFacts>,
     borrow_set: &'a BorrowSet<'tcx>,
     constraints: &'a mut MirTypeckRegionConstraints<'tcx>,
-    upvars: &'a [Upvar],
+    upvars: &'a [Upvar<'tcx>],
 }
 
 crate struct MirTypeckResults<'tcx> {
@@ -876,7 +875,7 @@ impl MirTypeckRegionConstraints<'tcx> {
         match self.placeholder_index_to_region.get(placeholder_index) {
             Some(&v) => v,
             None => {
-                let origin = NLLRegionVariableOrigin::Placeholder(placeholder);
+                let origin = NllRegionVariableOrigin::Placeholder(placeholder);
                 let region = infcx.next_nll_region_var_in_universe(origin, placeholder.universe);
                 self.placeholder_index_to_region.push(region);
                 region
@@ -1102,6 +1101,7 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
     ) -> Fallible<()> {
         relate_tys::relate_types(
             self.infcx,
+            self.param_env,
             a,
             v,
             b,
@@ -1992,19 +1992,16 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
                         Operand::Copy(..) | Operand::Constant(..) => {
                             // These are always okay: direct use of a const, or a value that can evidently be copied.
                         }
-                        Operand::Move(_) => {
+                        Operand::Move(place) => {
                             // Make sure that repeated elements implement `Copy`.
                             let span = body.source_info(location).span;
                             let ty = operand.ty(body, tcx);
                             if !self.infcx.type_is_copy_modulo_regions(self.param_env, ty, span) {
                                 let ccx = ConstCx::new_with_param_env(tcx, body, self.param_env);
-                                // To determine if `const_in_array_repeat_expressions` feature gate should
-                                // be mentioned, need to check if the rvalue is promotable.
-                                let should_suggest =
-                                    should_suggest_const_in_array_repeat_expressions_attribute(
-                                        &ccx, operand,
-                                    );
-                                debug!("check_rvalue: should_suggest={:?}", should_suggest);
+                                let is_const_fn =
+                                    is_const_fn_in_array_repeat_expression(&ccx, &place, &body);
+
+                                debug!("check_rvalue: is_const_fn={:?}", is_const_fn);
 
                                 let def_id = body.source.def_id().expect_local();
                                 self.infcx.report_selection_error(
@@ -2012,7 +2009,7 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
                                         ObligationCause::new(
                                             span,
                                             self.tcx().hir().local_def_id_to_hir_id(def_id),
-                                            traits::ObligationCauseCode::RepeatVec(should_suggest),
+                                            traits::ObligationCauseCode::RepeatVec(is_const_fn),
                                         ),
                                         self.param_env,
                                         ty::Binder::bind(ty::TraitRef::new(
@@ -2204,19 +2201,18 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
                     CastKind::Pointer(PointerCast::ArrayToPointer) => {
                         let ty_from = op.ty(body, tcx);
 
-                        let opt_ty_elem = match ty_from.kind() {
-                            ty::RawPtr(ty::TypeAndMut {
-                                mutbl: hir::Mutability::Not,
-                                ty: array_ty,
-                            }) => match array_ty.kind() {
-                                ty::Array(ty_elem, _) => Some(ty_elem),
-                                _ => None,
-                            },
+                        let opt_ty_elem_mut = match ty_from.kind() {
+                            ty::RawPtr(ty::TypeAndMut { mutbl: array_mut, ty: array_ty }) => {
+                                match array_ty.kind() {
+                                    ty::Array(ty_elem, _) => Some((ty_elem, *array_mut)),
+                                    _ => None,
+                                }
+                            }
                             _ => None,
                         };
 
-                        let ty_elem = match opt_ty_elem {
-                            Some(ty_elem) => ty_elem,
+                        let (ty_elem, ty_mut) = match opt_ty_elem_mut {
+                            Some(ty_elem_mut) => ty_elem_mut,
                             None => {
                                 span_mirbug!(
                                     self,
@@ -2228,11 +2224,10 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
                             }
                         };
 
-                        let ty_to = match ty.kind() {
-                            ty::RawPtr(ty::TypeAndMut {
-                                mutbl: hir::Mutability::Not,
-                                ty: ty_to,
-                            }) => ty_to,
+                        let (ty_to, ty_to_mut) = match ty.kind() {
+                            ty::RawPtr(ty::TypeAndMut { mutbl: ty_to_mut, ty: ty_to }) => {
+                                (ty_to, *ty_to_mut)
+                            }
                             _ => {
                                 span_mirbug!(
                                     self,
@@ -2243,6 +2238,17 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
                                 return;
                             }
                         };
+
+                        if ty_to_mut == Mutability::Mut && ty_mut == Mutability::Not {
+                            span_mirbug!(
+                                self,
+                                rvalue,
+                                "ArrayToPointer cast from const {:?} to mut {:?}",
+                                ty,
+                                ty_to
+                            );
+                            return;
+                        }
 
                         if let Err(terr) = self.sub_types(
                             ty_elem,
@@ -2490,7 +2496,9 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
             body,
         );
         let category = if let Some(field) = field {
-            ConstraintCategory::ClosureUpvar(self.borrowck_context.upvars[field.index()].var_hir_id)
+            let var_hir_id = self.borrowck_context.upvars[field.index()].place.get_root_variable();
+            // FIXME(project-rfc-2229#8): Use Place for better diagnostics
+            ConstraintCategory::ClosureUpvar(var_hir_id)
         } else {
             ConstraintCategory::Boring
         };

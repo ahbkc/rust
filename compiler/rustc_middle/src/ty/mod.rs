@@ -65,7 +65,6 @@ use std::ptr;
 use std::str;
 
 pub use self::sty::BoundRegionKind::*;
-pub use self::sty::InferTy::*;
 pub use self::sty::RegionKind;
 pub use self::sty::RegionKind::*;
 pub use self::sty::TyKind::*;
@@ -74,13 +73,14 @@ pub use self::sty::{BoundRegion, BoundRegionKind, EarlyBoundRegion, FreeRegion, 
 pub use self::sty::{CanonicalPolyFnSig, FnSig, GenSig, PolyFnSig, PolyGenSig};
 pub use self::sty::{ClosureSubsts, GeneratorSubsts, TypeAndMut, UpvarSubsts};
 pub use self::sty::{ClosureSubstsParts, GeneratorSubstsParts};
-pub use self::sty::{ConstVid, FloatVid, IntVid, RegionVid, TyVid};
-pub use self::sty::{ExistentialPredicate, InferTy, ParamConst, ParamTy, ProjectionTy};
+pub use self::sty::{ConstVid, RegionVid};
+pub use self::sty::{ExistentialPredicate, ParamConst, ParamTy, ProjectionTy};
 pub use self::sty::{ExistentialProjection, PolyExistentialProjection};
 pub use self::sty::{ExistentialTraitRef, PolyExistentialTraitRef};
 pub use self::sty::{PolyTraitRef, TraitRef, TyKind};
 pub use crate::ty::diagnostics::*;
-pub use rustc_type_ir::{DebruijnIndex, TypeFlags, INNERMOST};
+pub use rustc_type_ir::InferTy::*;
+pub use rustc_type_ir::*;
 
 pub use self::binding::BindingMode;
 pub use self::binding::BindingMode::*;
@@ -185,7 +185,7 @@ pub struct ImplHeader<'tcx> {
     pub predicates: Vec<Predicate<'tcx>>,
 }
 
-#[derive(Copy, Clone, PartialEq, TyEncodable, TyDecodable, HashStable)]
+#[derive(Copy, Clone, PartialEq, TyEncodable, TyDecodable, HashStable, Debug)]
 pub enum ImplPolarity {
     /// `impl Trait for Type`
     Positive,
@@ -421,86 +421,18 @@ impl Visibility {
     }
 }
 
-#[derive(Copy, Clone, PartialEq, TyDecodable, TyEncodable, HashStable)]
-pub enum Variance {
-    Covariant,     // T<A> <: T<B> iff A <: B -- e.g., function return type
-    Invariant,     // T<A> <: T<B> iff B == A -- e.g., type of mutable cell
-    Contravariant, // T<A> <: T<B> iff B <: A -- e.g., function param type
-    Bivariant,     // T<A> <: T<B>            -- e.g., unused type parameter
-}
-
 /// The crate variances map is computed during typeck and contains the
 /// variance of every item in the local crate. You should not use it
 /// directly, because to do so will make your pass dependent on the
 /// HIR of every item in the local crate. Instead, use
 /// `tcx.variances_of()` to get the variance for a *particular*
 /// item.
-#[derive(HashStable)]
+#[derive(HashStable, Debug)]
 pub struct CrateVariancesMap<'tcx> {
     /// For each item with generics, maps to a vector of the variance
     /// of its generics. If an item has no generics, it will have no
     /// entry.
     pub variances: FxHashMap<DefId, &'tcx [ty::Variance]>,
-}
-
-impl Variance {
-    /// `a.xform(b)` combines the variance of a context with the
-    /// variance of a type with the following meaning. If we are in a
-    /// context with variance `a`, and we encounter a type argument in
-    /// a position with variance `b`, then `a.xform(b)` is the new
-    /// variance with which the argument appears.
-    ///
-    /// Example 1:
-    ///
-    ///     *mut Vec<i32>
-    ///
-    /// Here, the "ambient" variance starts as covariant. `*mut T` is
-    /// invariant with respect to `T`, so the variance in which the
-    /// `Vec<i32>` appears is `Covariant.xform(Invariant)`, which
-    /// yields `Invariant`. Now, the type `Vec<T>` is covariant with
-    /// respect to its type argument `T`, and hence the variance of
-    /// the `i32` here is `Invariant.xform(Covariant)`, which results
-    /// (again) in `Invariant`.
-    ///
-    /// Example 2:
-    ///
-    ///     fn(*const Vec<i32>, *mut Vec<i32)
-    ///
-    /// The ambient variance is covariant. A `fn` type is
-    /// contravariant with respect to its parameters, so the variance
-    /// within which both pointer types appear is
-    /// `Covariant.xform(Contravariant)`, or `Contravariant`. `*const
-    /// T` is covariant with respect to `T`, so the variance within
-    /// which the first `Vec<i32>` appears is
-    /// `Contravariant.xform(Covariant)` or `Contravariant`. The same
-    /// is true for its `i32` argument. In the `*mut T` case, the
-    /// variance of `Vec<i32>` is `Contravariant.xform(Invariant)`,
-    /// and hence the outermost type is `Invariant` with respect to
-    /// `Vec<i32>` (and its `i32` argument).
-    ///
-    /// Source: Figure 1 of "Taming the Wildcards:
-    /// Combining Definition- and Use-Site Variance" published in PLDI'11.
-    pub fn xform(self, v: ty::Variance) -> ty::Variance {
-        match (self, v) {
-            // Figure 1, column 1.
-            (ty::Covariant, ty::Covariant) => ty::Covariant,
-            (ty::Covariant, ty::Contravariant) => ty::Contravariant,
-            (ty::Covariant, ty::Invariant) => ty::Invariant,
-            (ty::Covariant, ty::Bivariant) => ty::Bivariant,
-
-            // Figure 1, column 2.
-            (ty::Contravariant, ty::Covariant) => ty::Contravariant,
-            (ty::Contravariant, ty::Contravariant) => ty::Covariant,
-            (ty::Contravariant, ty::Invariant) => ty::Invariant,
-            (ty::Contravariant, ty::Bivariant) => ty::Bivariant,
-
-            // Figure 1, column 3.
-            (ty::Invariant, _) => ty::Invariant,
-
-            // Figure 1, column 4.
-            (ty::Bivariant, _) => ty::Bivariant,
-        }
-    }
 }
 
 // Contains information needed to resolve types and (in the future) look up
@@ -729,11 +661,28 @@ pub type RootVariableMinCaptureList<'tcx> = FxIndexMap<hir::HirId, MinCaptureLis
 /// Part of `MinCaptureInformationMap`; List of `CapturePlace`s.
 pub type MinCaptureList<'tcx> = Vec<CapturedPlace<'tcx>>;
 
-/// A `Place` and the corresponding `CaptureInfo`.
+/// A composite describing a `Place` that is captured by a closure.
 #[derive(PartialEq, Clone, Debug, TyEncodable, TyDecodable, TypeFoldable, HashStable)]
 pub struct CapturedPlace<'tcx> {
+    /// The `Place` that is captured.
     pub place: HirPlace<'tcx>,
+
+    /// `CaptureKind` and expression(s) that resulted in such capture of `place`.
     pub info: CaptureInfo<'tcx>,
+
+    /// Represents if `place` can be mutated or not.
+    pub mutability: hir::Mutability,
+}
+
+impl CapturedPlace<'tcx> {
+    /// Returns the hir-id of the root variable for the captured place.
+    /// e.g., if `a.b.c` was captured, would return the hir-id for `a`.
+    pub fn get_root_variable(&self) -> hir::HirId {
+        match self.place.base {
+            HirPlaceBase::Upvar(upvar_id) => upvar_id.var_path.hir_id,
+            base => bug!("Expected upvar, found={:?}", base),
+        }
+    }
 }
 
 pub fn place_to_string_for_capture(tcx: TyCtxt<'tcx>, place: &HirPlace<'tcx>) -> String {
@@ -780,8 +729,20 @@ pub fn place_to_string_for_capture(tcx: TyCtxt<'tcx>, place: &HirPlace<'tcx>) ->
 pub struct CaptureInfo<'tcx> {
     /// Expr Id pointing to use that resulted in selecting the current capture kind
     ///
+    /// Eg:
+    /// ```rust,no_run
+    /// let mut t = (0,1);
+    ///
+    /// let c = || {
+    ///     println!("{}",t); // L1
+    ///     t.1 = 4; // L2
+    /// };
+    /// ```
+    /// `capture_kind_expr_id` will point to the use on L2 and `path_expr_id` will point to the
+    /// use on L1.
+    ///
     /// If the user doesn't enable feature `capture_disjoint_fields` (RFC 2229) then, it is
-    /// possible that we don't see the use of a particular place resulting in expr_id being
+    /// possible that we don't see the use of a particular place resulting in capture_kind_expr_id being
     /// None. In such case we fallback on uvpars_mentioned for span.
     ///
     /// Eg:
@@ -795,7 +756,12 @@ pub struct CaptureInfo<'tcx> {
     ///
     /// In this example, if `capture_disjoint_fields` is **not** set, then x will be captured,
     /// but we won't see it being used during capture analysis, since it's essentially a discard.
-    pub expr_id: Option<hir::HirId>,
+    pub capture_kind_expr_id: Option<hir::HirId>,
+    /// Expr Id pointing to use that resulted the corresponding place being captured
+    ///
+    /// See `capture_kind_expr_id` for example.
+    ///
+    pub path_expr_id: Option<hir::HirId>,
 
     /// Capture mode that was selected
     pub capture_kind: UpvarCapture<'tcx>,
@@ -803,15 +769,6 @@ pub struct CaptureInfo<'tcx> {
 
 pub type UpvarListMap = FxHashMap<DefId, FxIndexMap<hir::HirId, UpvarId>>;
 pub type UpvarCaptureMap<'tcx> = FxHashMap<UpvarId, UpvarCapture<'tcx>>;
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum IntVarValue {
-    IntType(ast::IntTy),
-    UintType(ast::UintTy),
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub struct FloatVarValue(pub ast::FloatTy);
 
 impl ty::EarlyBoundRegion {
     /// Does this early bound region have a name? Early bound regions normally
@@ -1174,7 +1131,7 @@ pub enum PredicateKind<'tcx> {
 /// HIR of every item in the local crate. Instead, use
 /// `tcx.inferred_outlives_of()` to get the outlives for a *particular*
 /// item.
-#[derive(HashStable)]
+#[derive(HashStable, Debug)]
 pub struct CratePredicatesMap<'tcx> {
     /// For each struct with outlive bounds, maps to a vector of the
     /// predicate of its outlive bounds. If an item has no outlives
@@ -1332,8 +1289,22 @@ impl<'tcx> PolyProjectionPredicate<'tcx> {
         self.skip_binder().projection_ty.item_def_id
     }
 
+    /// Returns the `DefId` of the trait of the associated item being projected.
     #[inline]
-    pub fn to_poly_trait_ref(&self, tcx: TyCtxt<'tcx>) -> PolyTraitRef<'tcx> {
+    pub fn trait_def_id(&self, tcx: TyCtxt<'tcx>) -> DefId {
+        self.skip_binder().projection_ty.trait_def_id(tcx)
+    }
+
+    #[inline]
+    pub fn projection_self_ty(&self) -> Binder<Ty<'tcx>> {
+        self.map_bound(|predicate| predicate.projection_ty.self_ty())
+    }
+
+    /// Get the [PolyTraitRef] required for this projection to be well formed.
+    /// Note that for generic associated types the predicates of the associated
+    /// type also need to be checked.
+    #[inline]
+    pub fn required_poly_trait_ref(&self, tcx: TyCtxt<'tcx>) -> PolyTraitRef<'tcx> {
         // Note: unlike with `TraitRef::to_poly_trait_ref()`,
         // `self.0.trait_ref` is permitted to have escaping regions.
         // This is because here `self` has a `Binder` and so does our
@@ -3107,7 +3078,7 @@ impl<'tcx> TyCtxt<'tcx> {
     }
 }
 
-#[derive(Clone, HashStable)]
+#[derive(Clone, HashStable, Debug)]
 pub struct AdtSizedConstraint<'tcx>(pub &'tcx [Ty<'tcx>]);
 
 /// Yields the parent function's `DefId` if `def_id` is an `impl Trait` definition.
@@ -3120,6 +3091,57 @@ pub fn is_impl_trait_defn(tcx: TyCtxt<'_>, def_id: DefId) -> Option<DefId> {
         }
     }
     None
+}
+
+pub fn int_ty(ity: ast::IntTy) -> IntTy {
+    match ity {
+        ast::IntTy::Isize => IntTy::Isize,
+        ast::IntTy::I8 => IntTy::I8,
+        ast::IntTy::I16 => IntTy::I16,
+        ast::IntTy::I32 => IntTy::I32,
+        ast::IntTy::I64 => IntTy::I64,
+        ast::IntTy::I128 => IntTy::I128,
+    }
+}
+
+pub fn uint_ty(uty: ast::UintTy) -> UintTy {
+    match uty {
+        ast::UintTy::Usize => UintTy::Usize,
+        ast::UintTy::U8 => UintTy::U8,
+        ast::UintTy::U16 => UintTy::U16,
+        ast::UintTy::U32 => UintTy::U32,
+        ast::UintTy::U64 => UintTy::U64,
+        ast::UintTy::U128 => UintTy::U128,
+    }
+}
+
+pub fn float_ty(fty: ast::FloatTy) -> FloatTy {
+    match fty {
+        ast::FloatTy::F32 => FloatTy::F32,
+        ast::FloatTy::F64 => FloatTy::F64,
+    }
+}
+
+pub fn ast_int_ty(ity: IntTy) -> ast::IntTy {
+    match ity {
+        IntTy::Isize => ast::IntTy::Isize,
+        IntTy::I8 => ast::IntTy::I8,
+        IntTy::I16 => ast::IntTy::I16,
+        IntTy::I32 => ast::IntTy::I32,
+        IntTy::I64 => ast::IntTy::I64,
+        IntTy::I128 => ast::IntTy::I128,
+    }
+}
+
+pub fn ast_uint_ty(uty: UintTy) -> ast::UintTy {
+    match uty {
+        UintTy::Usize => ast::UintTy::Usize,
+        UintTy::U8 => ast::UintTy::U8,
+        UintTy::U16 => ast::UintTy::U16,
+        UintTy::U32 => ast::UintTy::U32,
+        UintTy::U64 => ast::UintTy::U64,
+        UintTy::U128 => ast::UintTy::U128,
+    }
 }
 
 pub fn provide(providers: &mut ty::query::Providers) {

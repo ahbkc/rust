@@ -24,6 +24,7 @@ pub struct SpanlessEq<'a, 'tcx> {
     cx: &'a LateContext<'tcx>,
     maybe_typeck_results: Option<&'tcx TypeckResults<'tcx>>,
     allow_side_effects: bool,
+    expr_fallback: Option<Box<dyn Fn(&Expr<'_>, &Expr<'_>) -> bool + 'a>>,
 }
 
 impl<'a, 'tcx> SpanlessEq<'a, 'tcx> {
@@ -32,6 +33,7 @@ impl<'a, 'tcx> SpanlessEq<'a, 'tcx> {
             cx,
             maybe_typeck_results: cx.maybe_typeck_results(),
             allow_side_effects: true,
+            expr_fallback: None,
         }
     }
 
@@ -39,6 +41,13 @@ impl<'a, 'tcx> SpanlessEq<'a, 'tcx> {
     pub fn deny_side_effects(self) -> Self {
         Self {
             allow_side_effects: false,
+            ..self
+        }
+    }
+
+    pub fn expr_fallback(self, expr_fallback: impl Fn(&Expr<'_>, &Expr<'_>) -> bool + 'a) -> Self {
+        Self {
+            expr_fallback: Some(Box::new(expr_fallback)),
             ..self
         }
     }
@@ -81,7 +90,7 @@ impl<'a, 'tcx> SpanlessEq<'a, 'tcx> {
             }
         }
 
-        match (&reduce_exprkind(&left.kind), &reduce_exprkind(&right.kind)) {
+        let is_eq = match (&reduce_exprkind(&left.kind), &reduce_exprkind(&right.kind)) {
             (&ExprKind::AddrOf(lb, l_mut, ref le), &ExprKind::AddrOf(rb, r_mut, ref re)) => {
                 lb == rb && l_mut == r_mut && self.eq_expr(le, re)
             },
@@ -123,7 +132,7 @@ impl<'a, 'tcx> SpanlessEq<'a, 'tcx> {
                 self.eq_expr(lc, rc) && self.eq_expr(&**lt, &**rt) && both(le, re, |l, r| self.eq_expr(l, r))
             },
             (&ExprKind::Lit(ref l), &ExprKind::Lit(ref r)) => l.node == r.node,
-            (&ExprKind::Loop(ref lb, ref ll, ref lls), &ExprKind::Loop(ref rb, ref rl, ref rls)) => {
+            (&ExprKind::Loop(ref lb, ref ll, ref lls, _), &ExprKind::Loop(ref rb, ref rl, ref rls, _)) => {
                 lls == rls && self.eq_block(lb, rb) && both(ll, rl, |l, r| l.ident.name == r.ident.name)
             },
             (&ExprKind::Match(ref le, ref la, ref ls), &ExprKind::Match(ref re, ref ra, ref rs)) => {
@@ -158,7 +167,8 @@ impl<'a, 'tcx> SpanlessEq<'a, 'tcx> {
             (&ExprKind::Array(l), &ExprKind::Array(r)) => self.eq_exprs(l, r),
             (&ExprKind::DropTemps(ref le), &ExprKind::DropTemps(ref re)) => self.eq_expr(le, re),
             _ => false,
-        }
+        };
+        is_eq || self.expr_fallback.as_ref().map_or(false, |f| f(left, right))
     }
 
     fn eq_exprs(&mut self, left: &[Expr<'_>], right: &[Expr<'_>]) -> bool {
@@ -560,7 +570,7 @@ impl<'a, 'tcx> SpanlessHash<'a, 'tcx> {
             ExprKind::Lit(ref l) => {
                 l.node.hash(&mut self.s);
             },
-            ExprKind::Loop(ref b, ref i, _) => {
+            ExprKind::Loop(ref b, ref i, ..) => {
                 self.hash_block(b);
                 if let Some(i) = *i {
                     self.hash_name(i.ident.name);

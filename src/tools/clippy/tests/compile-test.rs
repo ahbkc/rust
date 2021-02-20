@@ -44,7 +44,9 @@ fn third_party_crates() -> String {
         };
         if let Some(name) = path.file_name().and_then(OsStr::to_str) {
             for dep in CRATES {
-                if name.starts_with(&format!("lib{}-", dep)) && name.ends_with(".rlib") {
+                if name.starts_with(&format!("lib{}-", dep))
+                    && name.rsplit('.').next().map(|ext| ext.eq_ignore_ascii_case("rlib")) == Some(true)
+                {
                     if let Some(old) = crates.insert(dep, path.clone()) {
                         panic!("Found multiple rlibs for crate `{}`: `{:?}` and `{:?}", dep, old, path);
                     }
@@ -212,6 +214,7 @@ fn run_ui_cargo(config: &mut compiletest::Config) {
                         Some("main.rs") => {},
                         _ => continue,
                     }
+                    set_var("CLIPPY_CONF_DIR", case.path());
                     let paths = compiletest::common::TestPaths {
                         file: file_path,
                         base: config.src_base.clone(),
@@ -239,9 +242,11 @@ fn run_ui_cargo(config: &mut compiletest::Config) {
     let tests = compiletest::make_tests(&config);
 
     let current_dir = env::current_dir().unwrap();
+    let conf_dir = var("CLIPPY_CONF_DIR").unwrap_or_default();
     let filter = env::var("TESTNAME").ok();
     let res = run_tests(&config, &filter, tests);
     env::set_current_dir(current_dir).unwrap();
+    set_var("CLIPPY_CONF_DIR", conf_dir);
 
     match res {
         Ok(true) => {},

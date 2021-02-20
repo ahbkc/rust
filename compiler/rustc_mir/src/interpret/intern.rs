@@ -292,7 +292,7 @@ pub enum InternKind {
 /// tracks where in the value we are and thus can show much better error messages.
 /// Any errors here would anyway be turned into `const_err` lints, whereas validation failures
 /// are hard errors.
-#[tracing::instrument(skip(ecx))]
+#[tracing::instrument(level = "debug", skip(ecx))]
 pub fn intern_const_alloc_recursive<M: CompileTimeMachine<'mir, 'tcx, const_eval::MemoryKind>>(
     ecx: &mut InterpCx<'mir, 'tcx, M>,
     intern_kind: InternKind,
@@ -356,7 +356,7 @@ where
                 // an allocation, which we should avoid. When that happens,
                 // dedicated error variants should be introduced instead.
                 assert!(
-                    !error.kind.allocates(),
+                    !error.kind().allocates(),
                     "interning encountered allocating error: {}",
                     error
                 );

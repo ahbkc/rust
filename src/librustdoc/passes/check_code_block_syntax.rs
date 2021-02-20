@@ -17,7 +17,7 @@ crate const CHECK_CODE_BLOCK_SYNTAX: Pass = Pass {
     description: "validates syntax inside Rust code blocks",
 };
 
-crate fn check_code_block_syntax(krate: clean::Crate, cx: &DocContext<'_>) -> clean::Crate {
+crate fn check_code_block_syntax(krate: clean::Crate, cx: &mut DocContext<'_>) -> clean::Crate {
     SyntaxChecker { cx }.fold_crate(krate)
 }
 
@@ -108,7 +108,7 @@ impl<'a, 'tcx> DocFolder for SyntaxChecker<'a, 'tcx> {
     fn fold_item(&mut self, item: clean::Item) -> Option<clean::Item> {
         if let Some(dox) = &item.attrs.collapsed_doc_value() {
             let sp = span_of_attrs(&item.attrs).unwrap_or(item.source.span());
-            let extra = crate::html::markdown::ExtraInfo::new_did(&self.cx.tcx, item.def_id, sp);
+            let extra = crate::html::markdown::ExtraInfo::new_did(self.cx.tcx, item.def_id, sp);
             for code_block in markdown::rust_code_blocks(&dox, &extra) {
                 self.check_rust_syntax(&item, &dox, code_block);
             }

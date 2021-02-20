@@ -1,4 +1,5 @@
 use rustc_ast as ast;
+use rustc_data_structures::fx::FxHashMap;
 use rustc_data_structures::sync::Lrc;
 use rustc_errors::{ColorConfig, ErrorReported};
 use rustc_hir as hir;
@@ -16,7 +17,6 @@ use rustc_span::{BytePos, FileName, Pos, Span, DUMMY_SP};
 use rustc_target::spec::TargetTriple;
 use tempfile::Builder as TempFileBuilder;
 
-use std::collections::HashMap;
 use std::env;
 use std::io::{self, Write};
 use std::panic;
@@ -296,7 +296,12 @@ fn run_test(
         }
     });
     if let ErrorOutputType::HumanReadable(kind) = options.error_format {
-        let (_, color_config) = kind.unzip();
+        let (short, color_config) = kind.unzip();
+
+        if short {
+            compiler.arg("--error-format").arg("short");
+        }
+
         match color_config {
             ColorConfig::Never => {
                 compiler.arg("--color").arg("never");
@@ -365,6 +370,9 @@ fn run_test(
     } else {
         cmd = Command::new(output_file);
     }
+    if let Some(run_directory) = options.test_run_directory {
+        cmd.current_dir(run_directory);
+    }
 
     match cmd.output() {
         Err(e) => return Err(TestFailure::ExecutionError(e)),
@@ -423,6 +431,7 @@ crate fn make_test(
             use rustc_errors::emitter::{Emitter, EmitterWriter};
             use rustc_errors::Handler;
             use rustc_parse::maybe_new_parser_from_source_str;
+            use rustc_parse::parser::ForceCollect;
             use rustc_session::parse::ParseSess;
             use rustc_span::source_map::FilePathMapping;
 
@@ -459,7 +468,7 @@ crate fn make_test(
             };
 
             loop {
-                match parser.parse_item() {
+                match parser.parse_item(ForceCollect::No) {
                     Ok(Some(item)) => {
                         if !found_main {
                             if let ast::ItemKind::Fn(..) = item.kind {
@@ -537,9 +546,12 @@ crate fn make_test(
     // compiler.
     if !already_has_extern_crate && !opts.no_crate_inject && cratename != Some("std") {
         if let Some(cratename) = cratename {
-            // Make sure its actually used if not included.
+            // Don't inject `extern crate` if the crate is never used.
+            // NOTE: this is terribly inaccurate because it doesn't actually
+            // parse the source, but only has false positives, not false
+            // negatives.
             if s.contains(cratename) {
-                prog.push_str(&format!("extern crate {};\n", cratename));
+                prog.push_str(&format!("extern crate r#{};\n", cratename));
                 line_offset += 1;
             }
         }
@@ -703,7 +715,7 @@ crate struct Collector {
     position: Span,
     source_map: Option<Lrc<SourceMap>>,
     filename: Option<PathBuf>,
-    visited_tests: HashMap<(String, usize), usize>,
+    visited_tests: FxHashMap<(String, usize), usize>,
 }
 
 impl Collector {
@@ -727,7 +739,7 @@ impl Collector {
             position: DUMMY_SP,
             source_map,
             filename,
-            visited_tests: HashMap::new(),
+            visited_tests: FxHashMap::default(),
         }
     }
 
@@ -1009,7 +1021,7 @@ impl<'a, 'hir, 'tcx> HirCollector<'a, 'hir, 'tcx> {
                 self.codes,
                 self.collector.enable_per_target_ignores,
                 Some(&crate::html::markdown::ExtraInfo::new(
-                    &self.tcx,
+                    self.tcx,
                     hir_id,
                     span_of_attrs(&attrs).unwrap_or(sp),
                 )),
@@ -1038,27 +1050,45 @@ impl<'a, 'hir, 'tcx> intravisit::Visitor<'hir> for HirCollector<'a, 'hir, 'tcx> 
             item.ident.to_string()
         };
 
-        self.visit_testable(name, &item.attrs, item.hir_id, item.span, |this| {
+        self.visit_testable(name, &item.attrs, item.hir_id(), item.span, |this| {
             intravisit::walk_item(this, item);
         });
     }
 
     fn visit_trait_item(&mut self, item: &'hir hir::TraitItem<'_>) {
-        self.visit_testable(item.ident.to_string(), &item.attrs, item.hir_id, item.span, |this| {
-            intravisit::walk_trait_item(this, item);
-        });
+        self.visit_testable(
+            item.ident.to_string(),
+            &item.attrs,
+            item.hir_id(),
+            item.span,
+            |this| {
+                intravisit::walk_trait_item(this, item);
+            },
+        );
     }
 
     fn visit_impl_item(&mut self, item: &'hir hir::ImplItem<'_>) {
-        self.visit_testable(item.ident.to_string(), &item.attrs, item.hir_id, item.span, |this| {
-            intravisit::walk_impl_item(this, item);
-        });
+        self.visit_testable(
+            item.ident.to_string(),
+            &item.attrs,
+            item.hir_id(),
+            item.span,
+            |this| {
+                intravisit::walk_impl_item(this, item);
+            },
+        );
     }
 
     fn visit_foreign_item(&mut self, item: &'hir hir::ForeignItem<'_>) {
-        self.visit_testable(item.ident.to_string(), &item.attrs, item.hir_id, item.span, |this| {
-            intravisit::walk_foreign_item(this, item);
-        });
+        self.visit_testable(
+            item.ident.to_string(),
+            &item.attrs,
+            item.hir_id(),
+            item.span,
+            |this| {
+                intravisit::walk_foreign_item(this, item);
+            },
+        );
     }
 
     fn visit_variant(
@@ -1082,7 +1112,7 @@ impl<'a, 'hir, 'tcx> intravisit::Visitor<'hir> for HirCollector<'a, 'hir, 'tcx> 
         self.visit_testable(
             macro_def.ident.to_string(),
             &macro_def.attrs,
-            macro_def.hir_id,
+            macro_def.hir_id(),
             macro_def.span,
             |_| (),
         );

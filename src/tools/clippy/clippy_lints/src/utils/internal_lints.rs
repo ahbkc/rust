@@ -1,7 +1,7 @@
 use crate::consts::{constant_simple, Constant};
 use crate::utils::{
-    is_expn_of, match_def_path, match_qpath, match_type, method_calls, path_to_res, paths, qpath_res, run_lints,
-    snippet, span_lint, span_lint_and_help, span_lint_and_sugg, SpanlessEq,
+    is_expn_of, match_def_path, match_qpath, match_type, method_calls, path_to_res, paths, run_lints, snippet,
+    span_lint, span_lint_and_help, span_lint_and_sugg, SpanlessEq,
 };
 use if_chain::if_chain;
 use rustc_ast::ast::{Crate as AstCrate, ItemKind, LitKind, NodeId};
@@ -760,7 +760,7 @@ impl<'tcx> LateLintPass<'tcx> for MatchTypeOnDiagItem {
             // Extract the path to the matched type
             if let Some(segments) = path_to_matched_type(cx, ty_path);
             let segments: Vec<&str> = segments.iter().map(|sym| &**sym).collect();
-            if let Some(ty_did) = path_to_res(cx, &segments[..]).and_then(|res| res.opt_def_id());
+            if let Some(ty_did) = path_to_res(cx, &segments[..]).opt_def_id();
             // Check if the matched type is a diagnostic item
             let diag_items = cx.tcx.diagnostic_items(ty_did.krate);
             if let Some(item_name) = diag_items.iter().find_map(|(k, v)| if *v == ty_did { Some(k) } else { None });
@@ -787,7 +787,7 @@ fn path_to_matched_type(cx: &LateContext<'_>, expr: &hir::Expr<'_>) -> Option<Ve
 
     match &expr.kind {
         ExprKind::AddrOf(.., expr) => return path_to_matched_type(cx, expr),
-        ExprKind::Path(qpath) => match qpath_res(cx, qpath, expr.hir_id) {
+        ExprKind::Path(qpath) => match cx.qpath_res(qpath, expr.hir_id) {
             Res::Local(hir_id) => {
                 let parent_id = cx.tcx.hir().get_parent_node(hir_id);
                 if let Some(Node::Local(local)) = cx.tcx.hir().find(parent_id) {
@@ -833,7 +833,7 @@ fn path_to_matched_type(cx: &LateContext<'_>, expr: &hir::Expr<'_>) -> Option<Ve
 // This is not a complete resolver for paths. It works on all the paths currently used in the paths
 // module.  That's all it does and all it needs to do.
 pub fn check_path(cx: &LateContext<'_>, path: &[&str]) -> bool {
-    if path_to_res(cx, path).is_some() {
+    if path_to_res(cx, path) != Res::Err {
         return true;
     }
 
@@ -841,15 +841,13 @@ pub fn check_path(cx: &LateContext<'_>, path: &[&str]) -> bool {
     // implementations of native types. Check lang items.
     let path_syms: Vec<_> = path.iter().map(|p| Symbol::intern(p)).collect();
     let lang_items = cx.tcx.lang_items();
-    for lang_item in lang_items.items() {
-        if let Some(def_id) = lang_item {
-            let lang_item_path = cx.get_def_path(*def_id);
-            if path_syms.starts_with(&lang_item_path) {
-                if let [item] = &path_syms[lang_item_path.len()..] {
-                    for child in cx.tcx.item_children(*def_id) {
-                        if child.ident.name == *item {
-                            return true;
-                        }
+    for item_def_id in lang_items.items().iter().flatten() {
+        let lang_item_path = cx.get_def_path(*item_def_id);
+        if path_syms.starts_with(&lang_item_path) {
+            if let [item] = &path_syms[lang_item_path.len()..] {
+                for child in cx.tcx.item_children(*item_def_id) {
+                    if child.ident.name == *item {
+                        return true;
                     }
                 }
             }
@@ -906,7 +904,7 @@ impl<'tcx> LateLintPass<'tcx> for InterningDefinedSymbol {
         }
 
         for &module in &[&paths::KW_MODULE, &paths::SYM_MODULE] {
-            if let Some(Res::Def(_, def_id)) = path_to_res(cx, module) {
+            if let Some(def_id) = path_to_res(cx, module).opt_def_id() {
                 for item in cx.tcx.item_children(def_id).iter() {
                     if_chain! {
                         if let Res::Def(DefKind::Const, item_def_id) = item.res;
@@ -1001,7 +999,7 @@ impl InterningDefinedSymbol {
         // SymbolStr might be de-referenced: `&*symbol.as_str()`
         let call = if_chain! {
             if let ExprKind::AddrOf(_, _, e) = expr.kind;
-            if let ExprKind::Unary(UnOp::UnDeref, e) = e.kind;
+            if let ExprKind::Unary(UnOp::Deref, e) = e.kind;
             then { e } else { expr }
         };
         if_chain! {
