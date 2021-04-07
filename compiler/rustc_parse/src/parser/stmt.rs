@@ -1,19 +1,20 @@
 use super::attr::DEFAULT_INNER_ATTR_FORBIDDEN;
 use super::diagnostics::{AttemptLocalParseRecovery, Error};
 use super::expr::LhsExpr;
-use super::pat::{GateOr, RecoverComma};
+use super::pat::RecoverComma;
 use super::path::PathStyle;
 use super::TrailingToken;
 use super::{AttrWrapper, BlockMode, ForceCollect, Parser, Restrictions, SemiColonMode};
 use crate::maybe_whole;
 
 use rustc_ast as ast;
-use rustc_ast::attr::HasAttrs;
 use rustc_ast::ptr::P;
 use rustc_ast::token::{self, TokenKind};
 use rustc_ast::util::classify;
+use rustc_ast::AstLike;
 use rustc_ast::{AttrStyle, AttrVec, Attribute, MacCall, MacCallStmt, MacStmtStyle};
-use rustc_ast::{Block, BlockCheckMode, Expr, ExprKind, Local, Stmt, StmtKind, DUMMY_NODE_ID};
+use rustc_ast::{Block, BlockCheckMode, Expr, ExprKind, Local, Stmt};
+use rustc_ast::{StmtKind, DUMMY_NODE_ID};
 use rustc_errors::{Applicability, PResult};
 use rustc_span::source_map::{BytePos, Span};
 use rustc_span::symbol::{kw, sym};
@@ -34,7 +35,7 @@ impl<'a> Parser<'a> {
 
     /// If `force_capture` is true, forces collection of tokens regardless of whether
     /// or not we have attributes
-    fn parse_stmt_without_recovery(
+    crate fn parse_stmt_without_recovery(
         &mut self,
         capture_semi: bool,
         force_collect: ForceCollect,
@@ -220,9 +221,9 @@ impl<'a> Parser<'a> {
     /// Parses a local variable declaration.
     fn parse_local(&mut self, attrs: AttrVec) -> PResult<'a, P<Local>> {
         let lo = self.prev_token.span;
-        let pat = self.parse_pat_allow_top_alt(None, GateOr::Yes, RecoverComma::Yes)?;
+        let (pat, colon) = self.parse_pat_before_ty(None, RecoverComma::Yes, "`let` bindings")?;
 
-        let (err, ty) = if self.eat(&token::Colon) {
+        let (err, ty) = if colon {
             // Save the state of the parser before parsing type normally, in case there is a `:`
             // instead of an `=` typo.
             let parser_snapshot_before_type = self.clone();
@@ -289,7 +290,7 @@ impl<'a> Parser<'a> {
         Ok(P(ast::Local { ty, pat, init, id: DUMMY_NODE_ID, span: lo.to(hi), attrs, tokens: None }))
     }
 
-    /// Parses the RHS of a local variable declaration (e.g., '= 14;').
+    /// Parses the RHS of a local variable declaration (e.g., `= 14;`).
     fn parse_initializer(&mut self, eq_optional: bool) -> PResult<'a, Option<P<Expr>>> {
         let eq_consumed = match self.token.kind {
             token::BinOpEq(..) => {
@@ -304,6 +305,7 @@ impl<'a> Parser<'a> {
                     "=".to_string(),
                     Applicability::MaybeIncorrect,
                 )
+                .help("if you meant to overwrite, remove the `let` binding")
                 .emit();
                 self.bump();
                 true

@@ -114,6 +114,11 @@ impl<'v> hir_visit::Visitor<'v> for StatCollector<'v> {
         self.visit_impl_item(nested_impl_item)
     }
 
+    fn visit_nested_foreign_item(&mut self, id: hir::ForeignItemId) {
+        let nested_foreign_item = self.krate.unwrap().foreign_item(id);
+        self.visit_foreign_item(nested_foreign_item);
+    }
+
     fn visit_nested_body(&mut self, body_id: hir::BodyId) {
         let nested_body = self.krate.unwrap().body(body_id);
         self.visit_body(nested_body)
@@ -196,9 +201,9 @@ impl<'v> hir_visit::Visitor<'v> for StatCollector<'v> {
         hir_visit::walk_param_bound(self, bounds)
     }
 
-    fn visit_struct_field(&mut self, s: &'v hir::StructField<'v>) {
-        self.record("StructField", Id::Node(s.hir_id), s);
-        hir_visit::walk_struct_field(self, s)
+    fn visit_field_def(&mut self, s: &'v hir::FieldDef<'v>) {
+        self.record("FieldDef", Id::Node(s.hir_id), s);
+        hir_visit::walk_field_def(self, s)
     }
 
     fn visit_variant(
@@ -236,7 +241,7 @@ impl<'v> hir_visit::Visitor<'v> for StatCollector<'v> {
         hir_visit::walk_assoc_type_binding(self, type_binding)
     }
 
-    fn visit_attribute(&mut self, attr: &'v ast::Attribute) {
+    fn visit_attribute(&mut self, _: hir::HirId, attr: &'v ast::Attribute) {
         self.record("Attribute", Id::Attr(attr.id), attr);
     }
 
@@ -311,9 +316,9 @@ impl<'v> ast_visit::Visitor<'v> for StatCollector<'v> {
         ast_visit::walk_param_bound(self, bounds)
     }
 
-    fn visit_struct_field(&mut self, s: &'v ast::StructField) {
-        self.record("StructField", Id::None, s);
-        ast_visit::walk_struct_field(self, s)
+    fn visit_field_def(&mut self, s: &'v ast::FieldDef) {
+        self.record("FieldDef", Id::None, s);
+        ast_visit::walk_field_def(self, s)
     }
 
     fn visit_variant(&mut self, v: &'v ast::Variant) {

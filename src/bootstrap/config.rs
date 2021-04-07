@@ -51,6 +51,7 @@ pub struct Config {
     pub submodules: bool,
     pub fast_submodules: bool,
     pub compiler_docs: bool,
+    pub docs_minification: bool,
     pub docs: bool,
     pub locked_deps: bool,
     pub vendor: bool,
@@ -161,6 +162,7 @@ pub struct Config {
     pub verbose_tests: bool,
     pub save_toolstates: Option<PathBuf>,
     pub print_step_timings: bool,
+    pub print_step_rusage: bool,
     pub missing_tools: bool,
 
     // Fallback musl-root for all targets
@@ -174,6 +176,7 @@ pub struct Config {
     pub mandir: Option<PathBuf>,
     pub codegen_tests: bool,
     pub nodejs: Option<PathBuf>,
+    pub npm: Option<PathBuf>,
     pub gdb: Option<PathBuf>,
     pub python: Option<PathBuf>,
     pub cargo_native_static: bool,
@@ -360,10 +363,12 @@ struct Build {
     rustfmt: Option<PathBuf>,
     docs: Option<bool>,
     compiler_docs: Option<bool>,
+    docs_minification: Option<bool>,
     submodules: Option<bool>,
     fast_submodules: Option<bool>,
     gdb: Option<String>,
     nodejs: Option<String>,
+    npm: Option<String>,
     python: Option<String>,
     locked_deps: Option<bool>,
     vendor: Option<bool>,
@@ -378,6 +383,7 @@ struct Build {
     configure_args: Option<Vec<String>>,
     local_rebuild: Option<bool>,
     print_step_timings: Option<bool>,
+    print_step_rusage: Option<bool>,
     check_stage: Option<u32>,
     doc_stage: Option<u32>,
     build_stage: Option<u32>,
@@ -504,7 +510,8 @@ struct Rust {
     new_symbol_mangling: Option<bool>,
     profile_generate: Option<String>,
     profile_use: Option<String>,
-    download_rustc: Option<bool>,
+    // ignored; this is set from an env var set by bootstrap.py
+    download_rustc: Option<StringOrBool>,
 }
 
 /// TOML representation of how each build target is configured.
@@ -553,6 +560,7 @@ impl Config {
         config.submodules = true;
         config.fast_submodules = true;
         config.docs = true;
+        config.docs_minification = true;
         config.rust_rpath = true;
         config.channel = "dev".to_string();
         config.codegen_tests = true;
@@ -654,10 +662,12 @@ impl Config {
         };
 
         config.nodejs = build.nodejs.map(PathBuf::from);
+        config.npm = build.npm.map(PathBuf::from);
         config.gdb = build.gdb.map(PathBuf::from);
         config.python = build.python.map(PathBuf::from);
         set(&mut config.low_priority, build.low_priority);
         set(&mut config.compiler_docs, build.compiler_docs);
+        set(&mut config.docs_minification, build.docs_minification);
         set(&mut config.docs, build.docs);
         set(&mut config.submodules, build.submodules);
         set(&mut config.fast_submodules, build.fast_submodules);
@@ -676,51 +686,7 @@ impl Config {
         set(&mut config.configure_args, build.configure_args);
         set(&mut config.local_rebuild, build.local_rebuild);
         set(&mut config.print_step_timings, build.print_step_timings);
-
-        // See https://github.com/rust-lang/compiler-team/issues/326
-        config.stage = match config.cmd {
-            Subcommand::Check { .. } => flags.stage.or(build.check_stage).unwrap_or(0),
-            Subcommand::Doc { .. } => flags.stage.or(build.doc_stage).unwrap_or(0),
-            Subcommand::Build { .. } => flags.stage.or(build.build_stage).unwrap_or(1),
-            Subcommand::Test { .. } => flags.stage.or(build.test_stage).unwrap_or(1),
-            Subcommand::Bench { .. } => flags.stage.or(build.bench_stage).unwrap_or(2),
-            Subcommand::Dist { .. } => flags.stage.or(build.dist_stage).unwrap_or(2),
-            Subcommand::Install { .. } => flags.stage.or(build.install_stage).unwrap_or(2),
-            // These are all bootstrap tools, which don't depend on the compiler.
-            // The stage we pass shouldn't matter, but use 0 just in case.
-            Subcommand::Clean { .. }
-            | Subcommand::Clippy { .. }
-            | Subcommand::Fix { .. }
-            | Subcommand::Run { .. }
-            | Subcommand::Setup { .. }
-            | Subcommand::Format { .. } => flags.stage.unwrap_or(0),
-        };
-
-        // CI should always run stage 2 builds, unless it specifically states otherwise
-        #[cfg(not(test))]
-        if flags.stage.is_none() && crate::CiEnv::current() != crate::CiEnv::None {
-            match config.cmd {
-                Subcommand::Test { .. }
-                | Subcommand::Doc { .. }
-                | Subcommand::Build { .. }
-                | Subcommand::Bench { .. }
-                | Subcommand::Dist { .. }
-                | Subcommand::Install { .. } => {
-                    assert_eq!(
-                        config.stage, 2,
-                        "x.py should be run with `--stage 2` on CI, but was run with `--stage {}`",
-                        config.stage,
-                    );
-                }
-                Subcommand::Clean { .. }
-                | Subcommand::Check { .. }
-                | Subcommand::Clippy { .. }
-                | Subcommand::Fix { .. }
-                | Subcommand::Run { .. }
-                | Subcommand::Setup { .. }
-                | Subcommand::Format { .. } => {}
-            }
-        }
+        set(&mut config.print_step_rusage, build.print_step_rusage);
 
         config.verbose = cmp::max(config.verbose, flags.verbose);
 
@@ -887,7 +853,7 @@ impl Config {
             config.rust_codegen_units_std = rust.codegen_units_std.map(threads_from_config);
             config.rust_profile_use = flags.rust_profile_use.or(rust.profile_use);
             config.rust_profile_generate = flags.rust_profile_generate.or(rust.profile_generate);
-            config.download_rustc = rust.download_rustc.unwrap_or(false);
+            config.download_rustc = env::var("BOOTSTRAP_DOWNLOAD_RUSTC").as_deref() == Ok("1");
         } else {
             config.rust_profile_use = flags.rust_profile_use;
             config.rust_profile_generate = flags.rust_profile_generate;
@@ -994,6 +960,59 @@ impl Config {
 
         let default = config.channel == "dev";
         config.ignore_git = ignore_git.unwrap_or(default);
+
+        let download_rustc = config.download_rustc;
+        // See https://github.com/rust-lang/compiler-team/issues/326
+        config.stage = match config.cmd {
+            Subcommand::Check { .. } => flags.stage.or(build.check_stage).unwrap_or(0),
+            // `download-rustc` only has a speed-up for stage2 builds. Default to stage2 unless explicitly overridden.
+            Subcommand::Doc { .. } => {
+                flags.stage.or(build.doc_stage).unwrap_or(if download_rustc { 2 } else { 0 })
+            }
+            Subcommand::Build { .. } => {
+                flags.stage.or(build.build_stage).unwrap_or(if download_rustc { 2 } else { 1 })
+            }
+            Subcommand::Test { .. } => {
+                flags.stage.or(build.test_stage).unwrap_or(if download_rustc { 2 } else { 1 })
+            }
+            Subcommand::Bench { .. } => flags.stage.or(build.bench_stage).unwrap_or(2),
+            Subcommand::Dist { .. } => flags.stage.or(build.dist_stage).unwrap_or(2),
+            Subcommand::Install { .. } => flags.stage.or(build.install_stage).unwrap_or(2),
+            // These are all bootstrap tools, which don't depend on the compiler.
+            // The stage we pass shouldn't matter, but use 0 just in case.
+            Subcommand::Clean { .. }
+            | Subcommand::Clippy { .. }
+            | Subcommand::Fix { .. }
+            | Subcommand::Run { .. }
+            | Subcommand::Setup { .. }
+            | Subcommand::Format { .. } => flags.stage.unwrap_or(0),
+        };
+
+        // CI should always run stage 2 builds, unless it specifically states otherwise
+        #[cfg(not(test))]
+        if flags.stage.is_none() && crate::CiEnv::current() != crate::CiEnv::None {
+            match config.cmd {
+                Subcommand::Test { .. }
+                | Subcommand::Doc { .. }
+                | Subcommand::Build { .. }
+                | Subcommand::Bench { .. }
+                | Subcommand::Dist { .. }
+                | Subcommand::Install { .. } => {
+                    assert_eq!(
+                        config.stage, 2,
+                        "x.py should be run with `--stage 2` on CI, but was run with `--stage {}`",
+                        config.stage,
+                    );
+                }
+                Subcommand::Clean { .. }
+                | Subcommand::Check { .. }
+                | Subcommand::Clippy { .. }
+                | Subcommand::Fix { .. }
+                | Subcommand::Run { .. }
+                | Subcommand::Setup { .. }
+                | Subcommand::Format { .. } => {}
+            }
+        }
 
         config
     }

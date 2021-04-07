@@ -9,7 +9,7 @@ use rustc_ast::tokenstream::{DelimSpan, TokenStream, TokenTree};
 use rustc_ast::{self as ast, AttrVec, Attribute, DUMMY_NODE_ID};
 use rustc_ast::{Async, Const, Defaultness, IsAuto, Mutability, Unsafe, UseTree, UseTreeKind};
 use rustc_ast::{BindingMode, Block, FnDecl, FnSig, Param, SelfKind};
-use rustc_ast::{EnumDef, Generics, StructField, TraitRef, Ty, TyKind, Variant, VariantData};
+use rustc_ast::{EnumDef, FieldDef, Generics, TraitRef, Ty, TyKind, Variant, VariantData};
 use rustc_ast::{FnHeader, ForeignItem, Path, PathSegment, Visibility, VisibilityKind};
 use rustc_ast::{MacArgs, MacCall, MacDelimiter};
 use rustc_ast_pretty::pprust;
@@ -204,6 +204,7 @@ impl<'a> Parser<'a> {
         def: &mut Defaultness,
         req_name: ReqName,
     ) -> PResult<'a, Option<ItemInfo>> {
+        let def_final = def == &Defaultness::Final;
         let mut def = || mem::replace(def, Defaultness::Final);
 
         let info = if self.eat_keyword(kw::Use) {
@@ -225,8 +226,8 @@ impl<'a> Parser<'a> {
                 return Err(e);
             }
 
-            (Ident::invalid(), ItemKind::Use(P(tree)))
-        } else if self.check_fn_front_matter() {
+            (Ident::invalid(), ItemKind::Use(tree))
+        } else if self.check_fn_front_matter(def_final) {
             // FUNCTION ITEM
             let (ident, sig, generics, body) = self.parse_fn(attrs, req_name, lo)?;
             (ident, ItemKind::Fn(box FnKind(def(), sig, generics, body)))
@@ -1231,14 +1232,12 @@ impl<'a> Parser<'a> {
         Ok((class_name, ItemKind::Union(vdata, generics)))
     }
 
-    fn parse_record_struct_body(
-        &mut self,
-    ) -> PResult<'a, (Vec<StructField>, /* recovered */ bool)> {
+    fn parse_record_struct_body(&mut self) -> PResult<'a, (Vec<FieldDef>, /* recovered */ bool)> {
         let mut fields = Vec::new();
         let mut recovered = false;
         if self.eat(&token::OpenDelim(token::Brace)) {
             while self.token != token::CloseDelim(token::Brace) {
-                let field = self.parse_struct_decl_field().map_err(|e| {
+                let field = self.parse_field_def().map_err(|e| {
                     self.consume_block(token::Brace, ConsumeClosingDelim::No);
                     recovered = true;
                     e
@@ -1263,7 +1262,7 @@ impl<'a> Parser<'a> {
         Ok((fields, recovered))
     }
 
-    fn parse_tuple_struct_body(&mut self) -> PResult<'a, Vec<StructField>> {
+    fn parse_tuple_struct_body(&mut self) -> PResult<'a, Vec<FieldDef>> {
         // This is the case where we find `struct Foo<T>(T) where T: Copy;`
         // Unit like structs are handled in parse_item_struct function
         self.parse_paren_comma_seq(|p| {
@@ -1274,7 +1273,7 @@ impl<'a> Parser<'a> {
                 let ty = p.parse_ty()?;
 
                 Ok((
-                    StructField {
+                    FieldDef {
                         span: lo.to(ty.span),
                         vis,
                         ident: None,
@@ -1291,7 +1290,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Parses an element of a struct declaration.
-    fn parse_struct_decl_field(&mut self) -> PResult<'a, StructField> {
+    fn parse_field_def(&mut self) -> PResult<'a, FieldDef> {
         let attrs = self.parse_outer_attributes()?;
         self.collect_tokens_trailing_token(attrs, ForceCollect::No, |this, attrs| {
             let lo = this.token.span;
@@ -1306,7 +1305,7 @@ impl<'a> Parser<'a> {
         lo: Span,
         vis: Visibility,
         attrs: Vec<Attribute>,
-    ) -> PResult<'a, StructField> {
+    ) -> PResult<'a, FieldDef> {
         let mut seen_comma: bool = false;
         let a_var = self.parse_name_and_ty(lo, vis, attrs)?;
         if self.token == token::Comma {
@@ -1398,11 +1397,11 @@ impl<'a> Parser<'a> {
         lo: Span,
         vis: Visibility,
         attrs: Vec<Attribute>,
-    ) -> PResult<'a, StructField> {
+    ) -> PResult<'a, FieldDef> {
         let name = self.parse_ident_common(false)?;
         self.expect(&token::Colon)?;
         let ty = self.parse_ty()?;
-        Ok(StructField {
+        Ok(FieldDef {
             span: lo.to(self.prev_token.span),
             ident: Some(name),
             vis,
@@ -1475,15 +1474,7 @@ impl<'a> Parser<'a> {
         let vstr = pprust::vis_to_string(vis);
         let vstr = vstr.trim_end();
         if macro_rules {
-            let msg = format!("can't qualify macro_rules invocation with `{}`", vstr);
-            self.struct_span_err(vis.span, &msg)
-                .span_suggestion(
-                    vis.span,
-                    "try exporting the macro",
-                    "#[macro_export]".to_owned(),
-                    Applicability::MaybeIncorrect, // speculative
-                )
-                .emit();
+            self.sess.gated_spans.gate(sym::pub_macro_rules, vis.span);
         } else {
             self.struct_span_err(vis.span, "can't qualify macro invocation with `pub`")
                 .span_suggestion(
@@ -1644,18 +1635,27 @@ impl<'a> Parser<'a> {
     }
 
     /// Is the current token the start of an `FnHeader` / not a valid parse?
-    pub(super) fn check_fn_front_matter(&mut self) -> bool {
+    ///
+    /// `check_pub` adds additional `pub` to the checks in case users place it
+    /// wrongly, can be used to ensure `pub` never comes after `default`.
+    pub(super) fn check_fn_front_matter(&mut self, check_pub: bool) -> bool {
         // We use an over-approximation here.
         // `const const`, `fn const` won't parse, but we're not stepping over other syntax either.
-        const QUALS: [Symbol; 4] = [kw::Const, kw::Async, kw::Unsafe, kw::Extern];
+        // `pub` is added in case users got confused with the ordering like `async pub fn`,
+        // only if it wasn't preceeded by `default` as `default pub` is invalid.
+        let quals: &[Symbol] = if check_pub {
+            &[kw::Pub, kw::Const, kw::Async, kw::Unsafe, kw::Extern]
+        } else {
+            &[kw::Const, kw::Async, kw::Unsafe, kw::Extern]
+        };
         self.check_keyword(kw::Fn) // Definitely an `fn`.
             // `$qual fn` or `$qual $qual`:
-            || QUALS.iter().any(|&kw| self.check_keyword(kw))
+            || quals.iter().any(|&kw| self.check_keyword(kw))
                 && self.look_ahead(1, |t| {
                     // `$qual fn`, e.g. `const fn` or `async fn`.
                     t.is_keyword(kw::Fn)
                     // Two qualifiers `$qual $qual` is enough, e.g. `async unsafe`.
-                    || t.is_non_raw_ident_where(|i| QUALS.contains(&i.name)
+                    || t.is_non_raw_ident_where(|i| quals.contains(&i.name)
                         // Rule out 2015 `const async: T = val`.
                         && i.is_reserved()
                         // Rule out unsafe extern block.
@@ -1676,10 +1676,11 @@ impl<'a> Parser<'a> {
     /// FnFrontMatter = FnQual "fn" ;
     /// ```
     pub(super) fn parse_fn_front_matter(&mut self) -> PResult<'a, FnHeader> {
+        let sp_start = self.token.span;
         let constness = self.parse_constness();
         let asyncness = self.parse_asyncness();
         let unsafety = self.parse_unsafety();
-        let ext = self.parse_extern()?;
+        let ext = self.parse_extern();
 
         if let Async::Yes { span, .. } = asyncness {
             self.ban_async_in_2015(span);
@@ -1689,8 +1690,27 @@ impl<'a> Parser<'a> {
             // It is possible for `expect_one_of` to recover given the contents of
             // `self.expected_tokens`, therefore, do not use `self.unexpected()` which doesn't
             // account for this.
-            if !self.expect_one_of(&[], &[])? {
-                unreachable!()
+            match self.expect_one_of(&[], &[]) {
+                Ok(true) => {}
+                Ok(false) => unreachable!(),
+                Err(mut err) => {
+                    // Recover incorrect visibility order such as `async pub`.
+                    if self.check_keyword(kw::Pub) {
+                        let sp = sp_start.to(self.prev_token.span);
+                        if let Ok(snippet) = self.span_to_snippet(sp) {
+                            let vis = self.parse_visibility(FollowedByType::No)?;
+                            let vs = pprust::vis_to_string(&vis);
+                            let vs = vs.trim_end();
+                            err.span_suggestion(
+                                sp_start.to(self.prev_token.span),
+                                &format!("visibility `{}` must come before `{}`", vs, snippet),
+                                format!("{} {}", vs, snippet),
+                                Applicability::MachineApplicable,
+                            );
+                        }
+                    }
+                    return Err(err);
+                }
             }
         }
 
@@ -1765,8 +1785,9 @@ impl<'a> Parser<'a> {
             let (pat, ty) = if is_name_required || this.is_named_param() {
                 debug!("parse_param_general parse_pat (is_name_required:{})", is_name_required);
 
-                let pat = this.parse_fn_param_pat()?;
-                if let Err(mut err) = this.expect(&token::Colon) {
+                let (pat, colon) = this.parse_fn_param_pat_colon()?;
+                if !colon {
+                    let mut err = this.unexpected::<()>().unwrap_err();
                     return if let Some(ident) =
                         this.parameter_without_type(&mut err, pat, is_name_required, first_param)
                     {

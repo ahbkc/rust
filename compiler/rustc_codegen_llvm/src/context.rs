@@ -1,4 +1,5 @@
 use crate::attributes;
+use crate::back::write::to_llvm_code_model;
 use crate::callee::get_fn;
 use crate::coverageinfo;
 use crate::debuginfo;
@@ -7,10 +8,10 @@ use crate::llvm_util;
 use crate::type_::Type;
 use crate::value::Value;
 
+use cstr::cstr;
 use rustc_codegen_ssa::base::wants_msvc_seh;
 use rustc_codegen_ssa::traits::*;
 use rustc_data_structures::base_n;
-use rustc_data_structures::const_cstr;
 use rustc_data_structures::fx::FxHashMap;
 use rustc_data_structures::small_c_str::SmallCStr;
 use rustc_middle::bug;
@@ -78,7 +79,7 @@ pub struct CodegenCx<'ll, 'tcx> {
     pub pointee_infos: RefCell<FxHashMap<(Ty<'tcx>, Size), Option<PointeeInfo>>>,
     pub isize_ty: &'ll Type,
 
-    pub coverage_cx: Option<coverageinfo::CrateCoverageContext<'tcx>>,
+    pub coverage_cx: Option<coverageinfo::CrateCoverageContext<'ll, 'tcx>>,
     pub dbg_cx: Option<debuginfo::CrateDebugContext<'ll, 'tcx>>,
 
     eh_personality: Cell<Option<&'ll Value>>,
@@ -100,8 +101,8 @@ fn to_llvm_tls_model(tls_model: TlsModel) -> llvm::ThreadLocalMode {
     }
 }
 
-fn strip_x86_address_spaces(data_layout: String) -> String {
-    data_layout.replace("-p270:32:32-p271:32:32-p272:64:64-", "-")
+fn strip_powerpc64_vectors(data_layout: String) -> String {
+    data_layout.replace("-v256:256:256-v512:512:512", "")
 }
 
 pub unsafe fn create_module(
@@ -114,10 +115,8 @@ pub unsafe fn create_module(
     let llmod = llvm::LLVMModuleCreateWithNameInContext(mod_name.as_ptr(), llcx);
 
     let mut target_data_layout = sess.target.data_layout.clone();
-    if llvm_util::get_version() < (10, 0, 0)
-        && (sess.target.arch == "x86" || sess.target.arch == "x86_64")
-    {
-        target_data_layout = strip_x86_address_spaces(target_data_layout);
+    if llvm_util::get_version() < (12, 0, 0) && sess.target.arch == "powerpc64" {
+        target_data_layout = strip_powerpc64_vectors(target_data_layout);
     }
 
     // Ensure the data-layout values hardcoded remain the defaults.
@@ -173,6 +172,13 @@ pub unsafe fn create_module(
             llvm::LLVMRustSetModulePIELevel(llmod);
         }
     }
+
+    // Linking object files with different code models is undefined behavior
+    // because the compiler would have to generate additional code (to span
+    // longer jumps) if a larger code model is used with a smaller one.
+    //
+    // See https://reviews.llvm.org/D52322 and https://reviews.llvm.org/D52323.
+    llvm::LLVMRustSetModuleCodeModel(llmod, to_llvm_code_model(sess.code_model()));
 
     // If skipping the PLT is enabled, we need to add some module metadata
     // to ensure intrinsic calls don't use it.
@@ -265,7 +271,7 @@ impl<'ll, 'tcx> CodegenCx<'ll, 'tcx> {
 
         let (llcx, llmod) = (&*llvm_module.llcx, llvm_module.llmod());
 
-        let coverage_cx = if tcx.sess.opts.debugging_opts.instrument_coverage {
+        let coverage_cx = if tcx.sess.instrument_coverage() {
             let covctx = coverageinfo::CrateCoverageContext::new();
             Some(covctx)
         } else {
@@ -316,7 +322,7 @@ impl<'ll, 'tcx> CodegenCx<'ll, 'tcx> {
     }
 
     #[inline]
-    pub fn coverage_context(&'a self) -> Option<&'a coverageinfo::CrateCoverageContext<'tcx>> {
+    pub fn coverage_context(&'a self) -> Option<&'a coverageinfo::CrateCoverageContext<'ll, 'tcx>> {
         self.coverage_cx.as_ref()
     }
 }
@@ -414,8 +420,8 @@ impl MiscMethods<'tcx> for CodegenCx<'ll, 'tcx> {
     }
 
     fn create_used_variable(&self) {
-        let name = const_cstr!("llvm.used");
-        let section = const_cstr!("llvm.metadata");
+        let name = cstr!("llvm.used");
+        let section = cstr!("llvm.metadata");
         let array =
             self.const_array(&self.type_ptr_to(self.type_i8()), &*self.used_statics.borrow());
 
@@ -697,7 +703,7 @@ impl CodegenCx<'b, 'tcx> {
         ifn!("llvm.va_end", fn(i8p) -> void);
         ifn!("llvm.va_copy", fn(i8p, i8p) -> void);
 
-        if self.sess().opts.debugging_opts.instrument_coverage {
+        if self.sess().instrument_coverage() {
             ifn!("llvm.instrprof.increment", fn(i8p, t_i64, t_i32, t_i32) -> void);
         }
 

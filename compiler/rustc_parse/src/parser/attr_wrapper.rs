@@ -3,7 +3,7 @@ use super::{ForceCollect, Parser, TokenCursor, TrailingToken};
 use rustc_ast::token::{self, Token, TokenKind};
 use rustc_ast::tokenstream::{CreateTokenStream, TokenStream, TokenTree, TreeAndSpacing};
 use rustc_ast::tokenstream::{DelimSpan, LazyTokenStream, Spacing};
-use rustc_ast::HasTokens;
+use rustc_ast::AstLike;
 use rustc_ast::{self as ast};
 use rustc_errors::PResult;
 use rustc_span::{Span, DUMMY_SP};
@@ -59,7 +59,7 @@ impl<'a> Parser<'a> {
     /// This restriction shouldn't be an issue in practice,
     /// since this function is used to record the tokens for
     /// a parsed AST item, which always has matching delimiters.
-    pub fn collect_tokens_trailing_token<R: HasTokens>(
+    pub fn collect_tokens_trailing_token<R: AstLike>(
         &mut self,
         attrs: AttrWrapper,
         force_collect: ForceCollect,
@@ -72,6 +72,10 @@ impl<'a> Parser<'a> {
         let cursor_snapshot = self.token_cursor.clone();
 
         let (mut ret, trailing_token) = f(self, attrs.attrs)?;
+        let tokens = match ret.tokens_mut() {
+            Some(tokens) if tokens.is_none() => tokens,
+            _ => return Ok(ret),
+        };
 
         // Produces a `TokenStream` on-demand. Using `cursor_snapshot`
         // and `num_calls`, we can reconstruct the `TokenStream` seen
@@ -94,21 +98,46 @@ impl<'a> Parser<'a> {
         }
         impl CreateTokenStream for LazyTokenStreamImpl {
             fn create_token_stream(&self) -> TokenStream {
-                // The token produced by the final call to `next` or `next_desugared`
-                // was not actually consumed by the callback. The combination
-                // of chaining the initial token and using `take` produces the desired
-                // result - we produce an empty `TokenStream` if no calls were made,
-                // and omit the final token otherwise.
+                if self.num_calls == 0 {
+                    return TokenStream::new(vec![]);
+                }
+
                 let mut cursor_snapshot = self.cursor_snapshot.clone();
-                let tokens = std::iter::once(self.start_token.clone())
-                    .chain((0..self.num_calls).map(|_| {
-                        if self.desugar_doc_comments {
+                // Don't skip `None` delimiters, since we want to pass them to
+                // proc macros. Normally, we'll end up capturing `TokenKind::Interpolated`,
+                // which gets converted to a `None`-delimited group when we invoke
+                // a proc-macro. However, it's possible to already have a `None`-delimited
+                // group in the stream (such as when parsing the output of a proc-macro,
+                // or in certain unusual cases with cross-crate `macro_rules!` macros).
+                cursor_snapshot.skip_none_delims = false;
+
+                // The token produced by the final call to `next` or `next_desugared`
+                // was not actually consumed by the callback.
+                let num_calls = self.num_calls - 1;
+                let mut i = 0;
+                let tokens =
+                    std::iter::once(self.start_token.clone()).chain(std::iter::from_fn(|| {
+                        if i >= num_calls {
+                            return None;
+                        }
+
+                        let token = if self.desugar_doc_comments {
                             cursor_snapshot.next_desugared()
                         } else {
                             cursor_snapshot.next()
+                        };
+
+                        // When the `LazyTokenStreamImpl` was original produced, we did *not*
+                        // include `NoDelim` tokens in `num_calls`, since they are normally ignored
+                        // by the parser. Therefore, we only increment our counter for other types of tokens.
+                        if !matches!(
+                            token.0.kind,
+                            token::OpenDelim(token::NoDelim) | token::CloseDelim(token::NoDelim)
+                        ) {
+                            i += 1;
                         }
-                    }))
-                    .take(self.num_calls);
+                        Some(token)
+                    }));
 
                 make_token_stream(tokens, self.append_unglued_token.clone())
             }
@@ -128,14 +157,14 @@ impl<'a> Parser<'a> {
             }
         }
 
-        let lazy_impl = LazyTokenStreamImpl {
+        *tokens = Some(LazyTokenStream::new(LazyTokenStreamImpl {
             start_token,
             num_calls,
             cursor_snapshot,
             desugar_doc_comments: self.desugar_doc_comments,
             append_unglued_token: self.token_cursor.append_unglued_token.clone(),
-        };
-        ret.finalize_tokens(LazyTokenStream::new(lazy_impl));
+        }));
+
         Ok(ret)
     }
 }

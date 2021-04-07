@@ -3,10 +3,9 @@ use std::convert::TryFrom;
 use std::ffi::OsStr;
 use std::fmt;
 use std::path::PathBuf;
+use std::str::FromStr;
 
-use rustc_data_structures::fx::{FxHashMap, FxHashSet};
-use rustc_hir::def_id::DefId;
-use rustc_middle::middle::privacy::AccessLevels;
+use rustc_data_structures::fx::FxHashMap;
 use rustc_session::config::{self, parse_crate_types_from_list, parse_externs, CrateType};
 use rustc_session::config::{
     build_codegen_options, build_debugging_options, get_cmd_lint_options, host_triple,
@@ -98,8 +97,7 @@ crate struct Options {
     crate maybe_sysroot: Option<PathBuf>,
     /// Lint information passed over the command-line.
     crate lint_opts: Vec<(String, Level)>,
-    /// Whether to ask rustc to describe the lints it knows. Practically speaking, this will not be
-    /// used, since we abort if we have no input file, but it's included for completeness.
+    /// Whether to ask rustc to describe the lints it knows.
     crate describe_lints: bool,
     /// What level to cap lints at.
     crate lint_cap: Option<Level>,
@@ -155,6 +153,8 @@ crate struct Options {
     /// If this option is set to `true`, rustdoc will only run checks and not generate
     /// documentation.
     crate run_check: bool,
+    /// Whether doctests should emit unused externs
+    crate json_unused_externs: bool,
 }
 
 impl fmt::Debug for Options {
@@ -265,21 +265,37 @@ crate struct RenderOptions {
     crate document_private: bool,
     /// Document items that have `doc(hidden)`.
     crate document_hidden: bool,
+    /// If `true`, generate a JSON file in the crate folder instead of HTML redirection files.
+    crate generate_redirect_map: bool,
     crate unstable_features: rustc_feature::UnstableFeatures,
+    crate emit: Vec<EmitType>,
 }
 
-/// Temporary storage for data obtained during `RustdocVisitor::clean()`.
-/// Later on moved into `cache`.
-#[derive(Default, Clone)]
-crate struct RenderInfo {
-    crate inlined: FxHashSet<DefId>,
-    crate external_paths: crate::core::ExternalPaths,
-    crate exact_paths: FxHashMap<DefId, Vec<String>>,
-    crate access_levels: AccessLevels<DefId>,
-    crate deref_trait_did: Option<DefId>,
-    crate deref_mut_trait_did: Option<DefId>,
-    crate owned_box_did: Option<DefId>,
-    crate output_format: OutputFormat,
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+crate enum EmitType {
+    Unversioned,
+    Toolchain,
+    InvocationSpecific,
+}
+
+impl FromStr for EmitType {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        use EmitType::*;
+        match s {
+            "unversioned-shared-resources" => Ok(Unversioned),
+            "toolchain-shared-resources" => Ok(Toolchain),
+            "invocation-specific" => Ok(InvocationSpecific),
+            _ => Err(()),
+        }
+    }
+}
+
+impl RenderOptions {
+    crate fn should_emit_crate(&self) -> bool {
+        self.emit.is_empty() || self.emit.contains(&EmitType::InvocationSpecific)
+    }
 }
 
 impl Options {
@@ -329,8 +345,16 @@ impl Options {
             return Err(0);
         }
 
+        if matches.opt_strs("print").iter().any(|opt| opt == "unversioned-files") {
+            for file in crate::html::render::FILES_UNVERSIONED.keys() {
+                println!("{}", file);
+            }
+            return Err(0);
+        }
+
         let color = config::parse_color(&matches);
-        let (json_rendered, _artifacts) = config::parse_json(&matches);
+        let config::JsonConfig { json_rendered, json_unused_externs, .. } =
+            config::parse_json(&matches);
         let error_format = config::parse_error_format(&matches, color, json_rendered);
 
         let codegen_options = build_codegen_options(matches, error_format);
@@ -340,6 +364,19 @@ impl Options {
 
         // check for deprecated options
         check_deprecated_options(&matches, &diag);
+
+        let mut emit = Vec::new();
+        for list in matches.opt_strs("emit") {
+            for kind in list.split(',') {
+                match kind.parse() {
+                    Ok(kind) => emit.push(kind),
+                    Err(()) => {
+                        diag.err(&format!("unrecognized emission type: {}", kind));
+                        return Err(1);
+                    }
+                }
+            }
+        }
 
         let to_check = matches.opt_strs("check-theme");
         if !to_check.is_empty() {
@@ -446,7 +483,9 @@ impl Options {
                     return Err(1);
                 }
                 if theme_file.extension() != Some(OsStr::new("css")) {
-                    diag.struct_err(&format!("invalid argument: \"{}\"", theme_s)).emit();
+                    diag.struct_err(&format!("invalid argument: \"{}\"", theme_s))
+                        .help("arguments to --theme must have a .css extension")
+                        .emit();
                     return Err(1);
                 }
                 let (success, ret) = theme::test_theme_against(&theme_file, &paths, &diag);
@@ -472,7 +511,6 @@ impl Options {
         let edition = config::parse_crate_edition(&matches);
 
         let mut id_map = html::markdown::IdMap::new();
-        id_map.populate(&html::render::INITIAL_IDS);
         let external_html = match ExternalHtml::load(
             &matches.opt_strs("html-in-header"),
             &matches.opt_strs("html-before-content"),
@@ -586,6 +624,7 @@ impl Options {
         let document_private = matches.opt_present("document-private-items");
         let document_hidden = matches.opt_present("document-hidden-items");
         let run_check = matches.opt_present("check");
+        let generate_redirect_map = matches.opt_present("generate-redirect-map");
 
         let (lint_opts, describe_lints, lint_cap) = get_cmd_lint_options(matches, error_format);
 
@@ -643,12 +682,15 @@ impl Options {
                 generate_search_filter,
                 document_private,
                 document_hidden,
+                generate_redirect_map,
                 unstable_features: rustc_feature::UnstableFeatures::from_environment(
                     crate_name.as_deref(),
                 ),
+                emit,
             },
             crate_name,
             output_format,
+            json_unused_externs,
         })
     }
 
@@ -670,9 +712,8 @@ fn check_deprecated_options(matches: &getopts::Matches, diag: &rustc_errors::Han
             {
                 continue;
             }
-            let mut err =
-                diag.struct_warn(&format!("the '{}' flag is considered deprecated", flag));
-            err.warn(
+            let mut err = diag.struct_warn(&format!("the `{}` flag is deprecated", flag));
+            err.note(
                 "see issue #44136 <https://github.com/rust-lang/rust/issues/44136> \
                  for more information",
             );

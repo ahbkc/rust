@@ -1,4 +1,6 @@
-use crate::utils::{is_type_diagnostic_item, snippet_with_applicability, span_lint_and_sugg};
+use clippy_utils::diagnostics::span_lint_and_sugg;
+use clippy_utils::source::snippet_with_applicability;
+use clippy_utils::ty::is_type_diagnostic_item;
 use if_chain::if_chain;
 use rustc_errors::Applicability;
 use rustc_hir::{Expr, ExprKind};
@@ -7,7 +9,7 @@ use rustc_span::sym;
 
 use super::BYTES_NTH;
 
-pub(super) fn lints<'tcx>(cx: &LateContext<'tcx>, expr: &Expr<'_>, iter_args: &'tcx [Expr<'tcx>]) {
+pub(super) fn check<'tcx>(cx: &LateContext<'tcx>, expr: &Expr<'_>, iter_args: &'tcx [Expr<'tcx>]) {
     if_chain! {
         if let ExprKind::MethodCall(_, _, ref args, _) = expr.kind;
         let ty = cx.typeck_results().expr_ty(&iter_args[0]).peel_refs();

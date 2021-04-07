@@ -14,9 +14,11 @@
 #![feature(control_flow_enum)]
 #![feature(crate_visibility_modifier)]
 #![feature(format_args_capture)]
+#![feature(iter_zip)]
 #![feature(nll)]
-#![feature(or_patterns)]
+#![cfg_attr(bootstrap, feature(or_patterns))]
 #![recursion_limit = "256"]
+#![allow(rustdoc::private_intra_doc_links)]
 
 pub use rustc_hir::def::{Namespace, PerNS};
 
@@ -25,10 +27,10 @@ use Determinacy::*;
 use rustc_arena::{DroplessArena, TypedArena};
 use rustc_ast::node_id::NodeMap;
 use rustc_ast::ptr::P;
-use rustc_ast::unwrap_or;
 use rustc_ast::visit::{self, Visitor};
 use rustc_ast::{self as ast, NodeId};
 use rustc_ast::{Crate, CRATE_NODE_ID};
+use rustc_ast::{Expr, ExprKind, LitKind};
 use rustc_ast::{ItemKind, ModKind, Path};
 use rustc_ast_lowering::ResolverAstLowering;
 use rustc_ast_pretty::pprust;
@@ -36,12 +38,12 @@ use rustc_data_structures::fx::{FxHashMap, FxHashSet, FxIndexMap};
 use rustc_data_structures::ptr_key::PtrKey;
 use rustc_data_structures::sync::Lrc;
 use rustc_errors::{struct_span_err, Applicability, DiagnosticBuilder};
-use rustc_expand::base::{SyntaxExtension, SyntaxExtensionKind};
+use rustc_expand::base::{DeriveResolutions, SyntaxExtension, SyntaxExtensionKind};
 use rustc_hir::def::Namespace::*;
 use rustc_hir::def::{self, CtorOf, DefKind, NonMacroAttrKind, PartialRes};
 use rustc_hir::def_id::{CrateNum, DefId, DefIdMap, LocalDefId, CRATE_DEF_INDEX};
 use rustc_hir::definitions::{DefKey, DefPathData, Definitions};
-use rustc_hir::{PrimTy, TraitCandidate};
+use rustc_hir::TraitCandidate;
 use rustc_index::vec::IndexVec;
 use rustc_metadata::creader::{CStore, CrateLoader};
 use rustc_middle::hir::exports::ExportMap;
@@ -107,7 +109,9 @@ enum Scope<'a> {
     DeriveHelpersCompat,
     MacroRules(MacroRulesScopeRef<'a>),
     CrateRoot,
-    Module(Module<'a>),
+    // The node ID is for reporting the `PROC_MACRO_DERIVE_RESOLUTION_FALLBACK`
+    // lint if it should be reported.
+    Module(Module<'a>, Option<NodeId>),
     RegisteredAttrs,
     MacroUsePrelude,
     BuiltinAttrs,
@@ -121,13 +125,17 @@ enum Scope<'a> {
 /// with different restrictions when looking up the resolution.
 /// This enum is currently used only for early resolution (imports and macros),
 /// but not for late resolution yet.
-enum ScopeSet {
+#[derive(Clone, Copy)]
+enum ScopeSet<'a> {
     /// All scopes with the given namespace.
     All(Namespace, /*is_import*/ bool),
     /// Crate root, then extern prelude (used for mixed 2015-2018 mode in macros).
     AbsolutePath(Namespace),
     /// All scopes with macro namespace and the given macro kind restriction.
     Macro(MacroKind),
+    /// All scopes with the given namespace, used for partially performing late resolution.
+    /// The node id enables lints and is used for reporting them.
+    Late(Namespace, Module<'a>, Option<NodeId>),
 }
 
 /// Everything you need to know about a name's location to resolve it.
@@ -153,6 +161,12 @@ impl<'a> ParentScope<'a> {
             derives: &[],
         }
     }
+}
+
+#[derive(Copy, Debug, Clone)]
+enum ImplTraitContext {
+    Existential,
+    Universal(LocalDefId),
 }
 
 #[derive(Eq)]
@@ -221,7 +235,7 @@ enum ResolutionError<'a> {
     ),
     /// Error E0530: `X` bindings cannot shadow `Y`s.
     BindingShadowsSomethingUnacceptable(&'static str, Symbol, &'a NameBinding<'a>),
-    /// Error E0128: type parameters with a default cannot use forward-declared identifiers.
+    /// Error E0128: generic parameters with a default cannot use forward-declared identifiers.
     ForwardDeclaredTyParam, // FIXME(const_generics_defaults)
     /// ERROR E0770: the type of const parameters must not depend on other generic parameters.
     ParamInTyOfConstParam(Symbol),
@@ -231,7 +245,7 @@ enum ResolutionError<'a> {
     ///
     /// This error is only emitted when using `min_const_generics`.
     ParamInNonTrivialAnonConst { name: Symbol, is_type: bool },
-    /// Error E0735: type parameters with a default cannot use `Self`
+    /// Error E0735: generic parameters with a default cannot use `Self`
     SelfInTyParamDefault,
     /// Error E0767: use of unreachable label
     UnreachableLabel { name: Symbol, definition_span: Span, suggestion: Option<LabelSuggestion> },
@@ -838,6 +852,12 @@ enum BuiltinMacroState {
     AlreadySeen(Span),
 }
 
+struct DeriveData {
+    resolutions: DeriveResolutions,
+    helper_attrs: Vec<(usize, Ident)>,
+    has_derive_copy: bool,
+}
+
 /// The main resolver class.
 ///
 /// This is the visitor that walks the whole crate.
@@ -960,8 +980,9 @@ pub struct Resolver<'a> {
     output_macro_rules_scopes: FxHashMap<ExpnId, MacroRulesScopeRef<'a>>,
     /// Helper attributes that are in scope for the given expansion.
     helper_attrs: FxHashMap<ExpnId, Vec<Ident>>,
-    /// Resolutions for paths inside the `#[derive(...)]` attribute with the given `ExpnId`.
-    derive_resolutions: FxHashMap<ExpnId, Vec<(Lrc<SyntaxExtension>, ast::Path)>>,
+    /// Ready or in-progress results of resolving paths inside the `#[derive(...)]` attribute
+    /// with the given `ExpnId`.
+    derive_data: FxHashMap<ExpnId, DeriveData>,
 
     /// Avoid duplicated errors for "name already defined".
     name_already_seen: FxHashMap<Symbol, Span>,
@@ -988,13 +1009,16 @@ pub struct Resolver<'a> {
     /// Indices of unnamed struct or variant fields with unresolved attributes.
     placeholder_field_indices: FxHashMap<NodeId, usize>,
     /// When collecting definitions from an AST fragment produced by a macro invocation `ExpnId`
-    /// we know what parent node that fragment should be attached to thanks to this table.
-    invocation_parents: FxHashMap<ExpnId, LocalDefId>,
+    /// we know what parent node that fragment should be attached to thanks to this table,
+    /// and how the `impl Trait` fragments were introduced.
+    invocation_parents: FxHashMap<ExpnId, (LocalDefId, ImplTraitContext)>,
 
     next_disambiguator: FxHashMap<(LocalDefId, DefPathData), u32>,
     /// Some way to know that we are in a *trait* impl in `visit_assoc_item`.
     /// FIXME: Replace with a more general AST map (together with some other fields).
     trait_impl_items: FxHashSet<LocalDefId>,
+
+    legacy_const_generic_args: FxHashMap<DefId, Option<Vec<usize>>>,
 }
 
 /// Nothing really interesting here; it just provides memory for the rest of the crate.
@@ -1074,6 +1098,10 @@ impl ResolverAstLowering for Resolver<'_> {
 
     fn item_generics_num_lifetimes(&self, def_id: DefId, sess: &Session) -> usize {
         self.cstore().item_generics_num_lifetimes(def_id, sess)
+    }
+
+    fn legacy_const_generic_args(&mut self, expr: &Expr) -> Option<Vec<usize>> {
+        self.legacy_const_generic_args(expr)
     }
 
     fn get_partial_res(&mut self, id: NodeId) -> Option<PartialRes> {
@@ -1198,7 +1226,7 @@ impl<'a> Resolver<'a> {
         node_id_to_def_id.insert(CRATE_NODE_ID, root);
 
         let mut invocation_parents = FxHashMap::default();
-        invocation_parents.insert(ExpnId::root(), root);
+        invocation_parents.insert(ExpnId::root(), (root, ImplTraitContext::Existential));
 
         let mut extern_prelude: FxHashMap<Ident, ExternPreludeEntry<'_>> = session
             .opts
@@ -1290,7 +1318,7 @@ impl<'a> Resolver<'a> {
             invocation_parent_scopes: Default::default(),
             output_macro_rules_scopes: Default::default(),
             helper_attrs: Default::default(),
-            derive_resolutions: Default::default(),
+            derive_data: Default::default(),
             local_macro_def_scopes: FxHashMap::default(),
             name_already_seen: FxHashMap::default(),
             potentially_unused_imports: Vec::new(),
@@ -1316,6 +1344,7 @@ impl<'a> Resolver<'a> {
             invocation_parents,
             next_disambiguator: Default::default(),
             trait_impl_items: Default::default(),
+            legacy_const_generic_args: Default::default(),
         };
 
         let root_parent_scope = ParentScope::module(graph_root, &resolver);
@@ -1414,7 +1443,7 @@ impl<'a> Resolver<'a> {
 
     fn macro_def(&self, mut ctxt: SyntaxContext) -> DefId {
         loop {
-            match ctxt.outer_expn().expn_data().macro_def_id {
+            match ctxt.outer_expn_data().macro_def_id {
                 Some(def_id) => return def_id,
                 None => ctxt.remove_mark(),
             };
@@ -1451,7 +1480,7 @@ impl<'a> Resolver<'a> {
 
         self.visit_scopes(ScopeSet::All(TypeNS, false), parent_scope, ctxt, |this, scope, _, _| {
             match scope {
-                Scope::Module(module) => {
+                Scope::Module(module, _) => {
                     this.traits_in_module(module, assoc_item, &mut found_traits);
                 }
                 Scope::StdLibPrelude => {
@@ -1615,7 +1644,7 @@ impl<'a> Resolver<'a> {
     /// If the callback returns `Some` result, we stop visiting scopes and return it.
     fn visit_scopes<T>(
         &mut self,
-        scope_set: ScopeSet,
+        scope_set: ScopeSet<'a>,
         parent_scope: &ParentScope<'a>,
         ctxt: SyntaxContext,
         mut visitor: impl FnMut(
@@ -1671,12 +1700,17 @@ impl<'a> Resolver<'a> {
             ScopeSet::All(ns, _) => (ns, None, false),
             ScopeSet::AbsolutePath(ns) => (ns, None, true),
             ScopeSet::Macro(macro_kind) => (MacroNS, Some(macro_kind), false),
+            ScopeSet::Late(ns, ..) => (ns, None, false),
         };
-        // Jump out of trait or enum modules, they do not act as scopes.
-        let module = parent_scope.module.nearest_item_scope();
+        let module = match scope_set {
+            // Start with the specified module.
+            ScopeSet::Late(_, module, _) => module,
+            // Jump out of trait or enum modules, they do not act as scopes.
+            _ => parent_scope.module.nearest_item_scope(),
+        };
         let mut scope = match ns {
             _ if is_absolute_path => Scope::CrateRoot,
-            TypeNS | ValueNS => Scope::Module(module),
+            TypeNS | ValueNS => Scope::Module(module, None),
             MacroNS => Scope::DeriveHelpers(parent_scope.expansion),
         };
         let mut ctxt = ctxt.normalize_to_macros_2_0();
@@ -1741,7 +1775,7 @@ impl<'a> Resolver<'a> {
                     MacroRulesScope::Invocation(invoc_id) => {
                         Scope::MacroRules(self.invocation_parent_scopes[&invoc_id].macro_rules)
                     }
-                    MacroRulesScope::Empty => Scope::Module(module),
+                    MacroRulesScope::Empty => Scope::Module(module, None),
                 },
                 Scope::CrateRoot => match ns {
                     TypeNS => {
@@ -1750,10 +1784,16 @@ impl<'a> Resolver<'a> {
                     }
                     ValueNS | MacroNS => break,
                 },
-                Scope::Module(module) => {
+                Scope::Module(module, prev_lint_id) => {
                     use_prelude = !module.no_implicit_prelude;
-                    match self.hygienic_lexical_parent(module, &mut ctxt) {
-                        Some(parent_module) => Scope::Module(parent_module),
+                    let derive_fallback_lint_id = match scope_set {
+                        ScopeSet::Late(.., lint_id) => lint_id,
+                        _ => None,
+                    };
+                    match self.hygienic_lexical_parent(module, &mut ctxt, derive_fallback_lint_id) {
+                        Some((parent_module, lint_id)) => {
+                            Scope::Module(parent_module, lint_id.or(prev_lint_id))
+                        }
                         None => {
                             ctxt.adjust(ExpnId::root());
                             match ns {
@@ -1809,6 +1849,7 @@ impl<'a> Resolver<'a> {
         ribs: &[Rib<'a>],
     ) -> Option<LexicalScopeBinding<'a>> {
         assert!(ns == TypeNS || ns == ValueNS);
+        let orig_ident = ident;
         if ident.name == kw::Empty {
             return Some(LexicalScopeBinding::Res(Res::Err));
         }
@@ -1858,6 +1899,11 @@ impl<'a> Resolver<'a> {
                 _ => continue,
             };
 
+            match module.kind {
+                ModuleKind::Block(..) => {} // We can see through blocks
+                _ => break,
+            }
+
             let item = self.resolve_ident_in_module_unadjusted(
                 ModuleOrUniformRoot::Module(module),
                 ident,
@@ -1870,123 +1916,32 @@ impl<'a> Resolver<'a> {
                 // The ident resolves to an item.
                 return Some(LexicalScopeBinding::Item(binding));
             }
-
-            match module.kind {
-                ModuleKind::Block(..) => {} // We can see through blocks
-                _ => break,
-            }
         }
 
-        ident = normalized_ident;
-        let mut poisoned = None;
-        loop {
-            let mut span_data = ident.span.data();
-            let opt_module = if let Some(node_id) = record_used_id {
-                self.hygienic_lexical_parent_with_compatibility_fallback(
-                    module,
-                    &mut span_data.ctxt,
-                    node_id,
-                    &mut poisoned,
-                )
-            } else {
-                self.hygienic_lexical_parent(module, &mut span_data.ctxt)
-            };
-            ident.span = span_data.span();
-            module = unwrap_or!(opt_module, break);
-            let adjusted_parent_scope = &ParentScope { module, ..*parent_scope };
-            let result = self.resolve_ident_in_module_unadjusted(
-                ModuleOrUniformRoot::Module(module),
-                ident,
-                ns,
-                adjusted_parent_scope,
-                record_used,
-                path_span,
-            );
-
-            match result {
-                Ok(binding) => {
-                    if let Some(node_id) = poisoned {
-                        self.lint_buffer.buffer_lint_with_diagnostic(
-                            lint::builtin::PROC_MACRO_DERIVE_RESOLUTION_FALLBACK,
-                            node_id,
-                            ident.span,
-                            &format!("cannot find {} `{}` in this scope", ns.descr(), ident),
-                            BuiltinLintDiagnostics::ProcMacroDeriveResolutionFallback(ident.span),
-                        );
-                    }
-                    return Some(LexicalScopeBinding::Item(binding));
-                }
-                Err(Determined) => continue,
-                Err(Undetermined) => {
-                    span_bug!(ident.span, "undetermined resolution during main resolution pass")
-                }
-            }
-        }
-
-        if !module.no_implicit_prelude {
-            ident.span.adjust(ExpnId::root());
-            if ns == TypeNS {
-                if let Some(binding) = self.extern_prelude_get(ident, !record_used) {
-                    return Some(LexicalScopeBinding::Item(binding));
-                }
-                if let Some(ident) = self.registered_tools.get(&ident) {
-                    let binding =
-                        (Res::ToolMod, ty::Visibility::Public, ident.span, ExpnId::root())
-                            .to_name_binding(self.arenas);
-                    return Some(LexicalScopeBinding::Item(binding));
-                }
-            }
-            if let Some(prelude) = self.prelude {
-                if let Ok(binding) = self.resolve_ident_in_module_unadjusted(
-                    ModuleOrUniformRoot::Module(prelude),
-                    ident,
-                    ns,
-                    parent_scope,
-                    false,
-                    path_span,
-                ) {
-                    return Some(LexicalScopeBinding::Item(binding));
-                }
-            }
-        }
-
-        if ns == TypeNS {
-            if let Some(prim_ty) = PrimTy::from_name(ident.name) {
-                let binding =
-                    (Res::PrimTy(prim_ty), ty::Visibility::Public, DUMMY_SP, ExpnId::root())
-                        .to_name_binding(self.arenas);
-                return Some(LexicalScopeBinding::Item(binding));
-            }
-        }
-
-        None
+        self.early_resolve_ident_in_lexical_scope(
+            orig_ident,
+            ScopeSet::Late(ns, module, record_used_id),
+            parent_scope,
+            record_used,
+            record_used,
+            path_span,
+        )
+        .ok()
+        .map(LexicalScopeBinding::Item)
     }
 
     fn hygienic_lexical_parent(
         &mut self,
         module: Module<'a>,
         ctxt: &mut SyntaxContext,
-    ) -> Option<Module<'a>> {
+        derive_fallback_lint_id: Option<NodeId>,
+    ) -> Option<(Module<'a>, Option<NodeId>)> {
         if !module.expansion.outer_expn_is_descendant_of(*ctxt) {
-            return Some(self.macro_def_scope(ctxt.remove_mark()));
+            return Some((self.macro_def_scope(ctxt.remove_mark()), None));
         }
 
         if let ModuleKind::Block(..) = module.kind {
-            return Some(module.parent.unwrap().nearest_item_scope());
-        }
-
-        None
-    }
-
-    fn hygienic_lexical_parent_with_compatibility_fallback(
-        &mut self,
-        module: Module<'a>,
-        ctxt: &mut SyntaxContext,
-        node_id: NodeId,
-        poisoned: &mut Option<NodeId>,
-    ) -> Option<Module<'a>> {
-        if let module @ Some(..) = self.hygienic_lexical_parent(module, ctxt) {
-            return module;
+            return Some((module.parent.unwrap().nearest_item_scope(), None));
         }
 
         // We need to support the next case under a deprecation warning
@@ -2000,20 +1955,21 @@ impl<'a> Resolver<'a> {
         // ---- end
         // ```
         // So we have to fall back to the module's parent during lexical resolution in this case.
-        if let Some(parent) = module.parent {
-            // Inner module is inside the macro, parent module is outside of the macro.
-            if module.expansion != parent.expansion
-                && module.expansion.is_descendant_of(parent.expansion)
-            {
-                // The macro is a proc macro derive
-                if let Some(def_id) = module.expansion.expn_data().macro_def_id {
-                    let ext = self.get_macro_by_def_id(def_id);
-                    if ext.builtin_name.is_none()
-                        && ext.macro_kind() == MacroKind::Derive
-                        && parent.expansion.outer_expn_is_descendant_of(*ctxt)
-                    {
-                        *poisoned = Some(node_id);
-                        return module.parent;
+        if derive_fallback_lint_id.is_some() {
+            if let Some(parent) = module.parent {
+                // Inner module is inside the macro, parent module is outside of the macro.
+                if module.expansion != parent.expansion
+                    && module.expansion.is_descendant_of(parent.expansion)
+                {
+                    // The macro is a proc macro derive
+                    if let Some(def_id) = module.expansion.expn_data().macro_def_id {
+                        let ext = self.get_macro_by_def_id(def_id);
+                        if ext.builtin_name.is_none()
+                            && ext.macro_kind() == MacroKind::Derive
+                            && parent.expansion.outer_expn_is_descendant_of(*ctxt)
+                        {
+                            return Some((parent, derive_fallback_lint_id));
+                        }
                     }
                 }
             }
@@ -2425,8 +2381,10 @@ impl<'a> Resolver<'a> {
                                     Applicability::MaybeIncorrect,
                                 )),
                             )
-                        } else {
+                        } else if self.session.edition() == Edition::Edition2015 {
                             (format!("maybe a missing crate `{}`?", ident), None)
+                        } else {
+                            (format!("could not find `{}` in the crate root", ident), None)
                         }
                     } else if i == 0 {
                         if ident
@@ -2442,10 +2400,16 @@ impl<'a> Resolver<'a> {
                         }
                     } else {
                         let parent = path[i - 1].ident.name;
-                        let parent = if parent == kw::PathRoot {
-                            "crate root".to_owned()
-                        } else {
-                            format!("`{}`", parent)
+                        let parent = match parent {
+                            // ::foo is mounted at the crate root for 2015, and is the extern
+                            // prelude for 2018+
+                            kw::PathRoot if self.session.edition() > Edition::Edition2015 => {
+                                "the list of imported crates".to_owned()
+                            }
+                            kw::PathRoot | kw::Crate => "the crate root".to_owned(),
+                            _ => {
+                                format!("`{}`", parent)
+                            }
                         };
 
                         let mut msg = format!("could not find `{}` in {}", ident, parent);
@@ -2569,8 +2533,8 @@ impl<'a> Resolver<'a> {
         debug!("validate_res_from_ribs({:?})", res);
         let ribs = &all_ribs[rib_index + 1..];
 
-        // An invalid forward use of a type parameter from a previous default.
-        if let ForwardTyParamBanRibKind = all_ribs[rib_index].kind {
+        // An invalid forward use of a generic parameter from a previous default.
+        if let ForwardGenericParamBanRibKind = all_ribs[rib_index].kind {
             if record_used {
                 let res_error = if rib_ident.name == kw::SelfUpper {
                     ResolutionError::SelfInTyParamDefault
@@ -2594,7 +2558,7 @@ impl<'a> Resolver<'a> {
                         | ClosureOrAsyncRibKind
                         | ModuleRibKind(..)
                         | MacroDefinition(..)
-                        | ForwardTyParamBanRibKind => {
+                        | ForwardGenericParamBanRibKind => {
                             // Nothing to do. Continue.
                         }
                         ItemRibKind(_) | FnItemRibKind | AssocItemRibKind => {
@@ -2666,7 +2630,9 @@ impl<'a> Resolver<'a> {
 
                         // We only forbid constant items if we are inside of type defaults,
                         // for example `struct Foo<T, U = [u8; std::mem::size_of::<T>()]>`
-                        ForwardTyParamBanRibKind => {
+                        ForwardGenericParamBanRibKind => {
+                            // FIXME(const_generic_defaults): we may need to distinguish between
+                            // being in type parameter defaults and const parameter defaults
                             in_ty_param_default = true;
                             continue;
                         }
@@ -2759,7 +2725,9 @@ impl<'a> Resolver<'a> {
 
                         // We only forbid constant items if we are inside of type defaults,
                         // for example `struct Foo<T, U = [u8; std::mem::size_of::<T>()]>`
-                        ForwardTyParamBanRibKind => {
+                        ForwardGenericParamBanRibKind => {
+                            // FIXME(const_generic_defaults): we may need to distinguish between
+                            // being in type parameter defaults and const parameter defaults
                             in_ty_param_default = true;
                             continue;
                         }
@@ -3307,6 +3275,61 @@ impl<'a> Resolver<'a> {
     #[inline]
     pub fn opt_span(&self, def_id: DefId) -> Option<Span> {
         if let Some(def_id) = def_id.as_local() { Some(self.def_id_to_span[def_id]) } else { None }
+    }
+
+    /// Checks if an expression refers to a function marked with
+    /// `#[rustc_legacy_const_generics]` and returns the argument index list
+    /// from the attribute.
+    pub fn legacy_const_generic_args(&mut self, expr: &Expr) -> Option<Vec<usize>> {
+        if let ExprKind::Path(None, path) = &expr.kind {
+            // Don't perform legacy const generics rewriting if the path already
+            // has generic arguments.
+            if path.segments.last().unwrap().args.is_some() {
+                return None;
+            }
+
+            let partial_res = self.partial_res_map.get(&expr.id)?;
+            if partial_res.unresolved_segments() != 0 {
+                return None;
+            }
+
+            if let Res::Def(def::DefKind::Fn, def_id) = partial_res.base_res() {
+                // We only support cross-crate argument rewriting. Uses
+                // within the same crate should be updated to use the new
+                // const generics style.
+                if def_id.is_local() {
+                    return None;
+                }
+
+                if let Some(v) = self.legacy_const_generic_args.get(&def_id) {
+                    return v.clone();
+                }
+
+                let parse_attrs = || {
+                    let attrs = self.cstore().item_attrs(def_id, self.session);
+                    let attr = attrs
+                        .iter()
+                        .find(|a| self.session.check_name(a, sym::rustc_legacy_const_generics))?;
+                    let mut ret = vec![];
+                    for meta in attr.meta_item_list()? {
+                        match meta.literal()?.kind {
+                            LitKind::Int(a, _) => {
+                                ret.push(a as usize);
+                            }
+                            _ => panic!("invalid arg index"),
+                        }
+                    }
+                    Some(ret)
+                };
+
+                // Cache the lookup to avoid parsing attributes for an iterm
+                // multiple times.
+                let ret = parse_attrs();
+                self.legacy_const_generic_args.insert(def_id, ret.clone());
+                return ret;
+            }
+        }
+        None
     }
 }
 

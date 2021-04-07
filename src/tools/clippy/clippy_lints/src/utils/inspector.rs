@@ -1,6 +1,6 @@
 //! checks for attributes
 
-use crate::utils::get_attr;
+use clippy_utils::get_attr;
 use rustc_ast::ast::{Attribute, InlineAsmTemplatePiece};
 use rustc_hir as hir;
 use rustc_lint::{LateContext, LateLintPass, LintContext};
@@ -33,14 +33,14 @@ declare_lint_pass!(DeepCodeInspector => [DEEP_CODE_INSPECTION]);
 
 impl<'tcx> LateLintPass<'tcx> for DeepCodeInspector {
     fn check_item(&mut self, cx: &LateContext<'tcx>, item: &'tcx hir::Item<'_>) {
-        if !has_attr(cx.sess(), &item.attrs) {
+        if !has_attr(cx.sess(), cx.tcx.hir().attrs(item.hir_id())) {
             return;
         }
         print_item(cx, item);
     }
 
     fn check_impl_item(&mut self, cx: &LateContext<'tcx>, item: &'tcx hir::ImplItem<'_>) {
-        if !has_attr(cx.sess(), &item.attrs) {
+        if !has_attr(cx.sess(), cx.tcx.hir().attrs(item.hir_id())) {
             return;
         }
         println!("impl item `{}`", item.ident.name);
@@ -80,8 +80,8 @@ impl<'tcx> LateLintPass<'tcx> for DeepCodeInspector {
     // }
     // }
     //
-    // fn check_struct_field(&mut self, cx: &LateContext<'tcx>, field: &'tcx
-    // hir::StructField) {
+    // fn check_field_def(&mut self, cx: &LateContext<'tcx>, field: &'tcx
+    // hir::FieldDef) {
     // if !has_attr(&field.attrs) {
     // return;
     // }
@@ -89,14 +89,14 @@ impl<'tcx> LateLintPass<'tcx> for DeepCodeInspector {
     //
 
     fn check_expr(&mut self, cx: &LateContext<'tcx>, expr: &'tcx hir::Expr<'_>) {
-        if !has_attr(cx.sess(), &expr.attrs) {
+        if !has_attr(cx.sess(), cx.tcx.hir().attrs(expr.hir_id)) {
             return;
         }
         print_expr(cx, expr, 0);
     }
 
     fn check_arm(&mut self, cx: &LateContext<'tcx>, arm: &'tcx hir::Arm<'_>) {
-        if !has_attr(cx.sess(), &arm.attrs) {
+        if !has_attr(cx.sess(), cx.tcx.hir().attrs(arm.hir_id)) {
             return;
         }
         print_pat(cx, &arm.pat, 1);
@@ -109,7 +109,7 @@ impl<'tcx> LateLintPass<'tcx> for DeepCodeInspector {
     }
 
     fn check_stmt(&mut self, cx: &LateContext<'tcx>, stmt: &'tcx hir::Stmt<'_>) {
-        if !has_attr(cx.sess(), stmt.kind.attrs(|id| cx.tcx.hir().item(id))) {
+        if !has_attr(cx.sess(), cx.tcx.hir().attrs(stmt.hir_id)) {
             return;
         }
         match stmt.kind {

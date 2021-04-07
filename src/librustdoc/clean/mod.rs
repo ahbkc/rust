@@ -129,7 +129,6 @@ impl Clean<ExternalCrate> for CrateNum {
             tcx.hir()
                 .krate()
                 .item
-                .module
                 .item_ids
                 .iter()
                 .filter_map(|&id| {
@@ -174,7 +173,6 @@ impl Clean<ExternalCrate> for CrateNum {
             tcx.hir()
                 .krate()
                 .item
-                .module
                 .item_ids
                 .iter()
                 .filter_map(|&id| {
@@ -231,11 +229,11 @@ impl Clean<Item> for doctree::Module<'_> {
 
         let what_rustc_thinks = Item::from_hir_id_and_parts(
             self.id,
-            self.name,
+            Some(self.name),
             ModuleItem(Module { is_crate: self.is_crate, items }),
             cx,
         );
-        Item { source: span.clean(cx), ..what_rustc_thinks }
+        Item { span: span.clean(cx), ..what_rustc_thinks }
     }
 }
 
@@ -354,10 +352,10 @@ impl Clean<Lifetime> for hir::Lifetime {
         match def {
             Some(
                 rl::Region::EarlyBound(_, node_id, _)
-                | rl::Region::LateBound(_, node_id, _)
+                | rl::Region::LateBound(_, _, node_id, _)
                 | rl::Region::Free(_, node_id),
             ) => {
-                if let Some(lt) = cx.lt_substs.borrow().get(&node_id).cloned() {
+                if let Some(lt) = cx.lt_substs.get(&node_id).cloned() {
                     return lt;
                 }
             }
@@ -398,9 +396,7 @@ impl Clean<Constant> for hir::ConstArg {
                 .tcx
                 .type_of(cx.tcx.hir().body_owner_def_id(self.value.body).to_def_id())
                 .clean(cx),
-            expr: print_const_expr(cx.tcx, self.value.body),
-            value: None,
-            is_literal: is_literal_expr(cx, self.value.body.hir_id),
+            kind: ConstantKind::Anonymous { body: self.value.body },
         }
     }
 }
@@ -415,7 +411,7 @@ impl Clean<Option<Lifetime>> for ty::RegionKind {
     fn clean(&self, _cx: &mut DocContext<'_>) -> Option<Lifetime> {
         match *self {
             ty::ReStatic => Some(Lifetime::statik()),
-            ty::ReLateBound(_, ty::BoundRegion { kind: ty::BrNamed(_, name) }) => {
+            ty::ReLateBound(_, ty::BoundRegion { kind: ty::BrNamed(_, name), .. }) => {
                 Some(Lifetime(name))
             }
             ty::ReEarlyBound(ref data) => Some(Lifetime(data.name)),
@@ -644,7 +640,7 @@ impl Clean<Generics> for hir::Generics<'_> {
                 match param.kind {
                     GenericParamDefKind::Lifetime => unreachable!(),
                     GenericParamDefKind::Type { did, ref bounds, .. } => {
-                        cx.impl_trait_bounds.borrow_mut().insert(did.into(), bounds.clone());
+                        cx.impl_trait_bounds.insert(did.into(), bounds.clone());
                     }
                     GenericParamDefKind::Const { .. } => unreachable!(),
                 }
@@ -803,7 +799,7 @@ impl<'a, 'tcx> Clean<Generics> for (&'a ty::Generics, ty::GenericPredicates<'tcx
                 unreachable!();
             }
 
-            cx.impl_trait_bounds.borrow_mut().insert(param, bounds);
+            cx.impl_trait_bounds.insert(param, bounds);
         }
 
         // Now that `cx.impl_trait_bounds` is populated, we can process
@@ -863,7 +859,8 @@ fn clean_fn_or_proc_macro(
     name: &mut Symbol,
     cx: &mut DocContext<'_>,
 ) -> ItemKind {
-    let macro_kind = item.attrs.iter().find_map(|a| {
+    let attrs = cx.tcx.hir().attrs(item.hir_id());
+    let macro_kind = attrs.iter().find_map(|a| {
         if a.has_name(sym::proc_macro) {
             Some(MacroKind::Bang)
         } else if a.has_name(sym::proc_macro_derive) {
@@ -877,8 +874,7 @@ fn clean_fn_or_proc_macro(
     match macro_kind {
         Some(kind) => {
             if kind == MacroKind::Derive {
-                *name = item
-                    .attrs
+                *name = attrs
                     .lists(sym::proc_macro_derive)
                     .find_map(|mi| mi.ident())
                     .expect("proc-macro derives require a name")
@@ -886,7 +882,7 @@ fn clean_fn_or_proc_macro(
             }
 
             let mut helpers = Vec::new();
-            for mi in item.attrs.lists(sym::proc_macro_derive) {
+            for mi in attrs.lists(sym::proc_macro_derive) {
                 if !mi.has_name(sym::attributes) {
                     continue;
                 }
@@ -1135,7 +1131,7 @@ impl Clean<Item> for ty::AssocItem {
             ty::AssocKind::Const => {
                 let ty = tcx.type_of(self.def_id);
                 let default = if self.defaultness.has_value() {
-                    Some(inline::print_inlined_const(cx, self.def_id))
+                    Some(inline::print_inlined_const(tcx, self.def_id))
                 } else {
                     None
                 };
@@ -1291,10 +1287,10 @@ fn clean_qpath(hir_ty: &hir::Ty<'_>, cx: &mut DocContext<'_>) -> Type {
     match qpath {
         hir::QPath::Resolved(None, ref path) => {
             if let Res::Def(DefKind::TyParam, did) = path.res {
-                if let Some(new_ty) = cx.ty_substs.borrow().get(&did).cloned() {
+                if let Some(new_ty) = cx.ty_substs.get(&did).cloned() {
                     return new_ty;
                 }
-                if let Some(bounds) = cx.impl_trait_bounds.borrow_mut().remove(&did.into()) {
+                if let Some(bounds) = cx.impl_trait_bounds.remove(&did.into()) {
                     return ImplTrait(bounds);
                 }
             }
@@ -1304,7 +1300,7 @@ fn clean_qpath(hir_ty: &hir::Ty<'_>, cx: &mut DocContext<'_>) -> Type {
                 // Substitute private type aliases
                 if let Some(def_id) = def_id.as_local() {
                     let hir_id = cx.tcx.hir().local_def_id_to_hir_id(def_id);
-                    if !cx.renderinfo.borrow().access_levels.is_exported(def_id.to_def_id()) {
+                    if !cx.cache.access_levels.is_exported(def_id.to_def_id()) {
                         alias = Some(&cx.tcx.hir().expect_item(hir_id).kind);
                     }
                 }
@@ -1477,7 +1473,7 @@ impl Clean<Type> for hir::Ty<'_> {
                 }
             }
             TyKind::Path(_) => clean_qpath(&self, cx),
-            TyKind::TraitObject(ref bounds, ref lifetime) => {
+            TyKind::TraitObject(ref bounds, ref lifetime, _) => {
                 match bounds[0].clean(cx).trait_ {
                     ResolvedPath { path, param_names: None, did, is_generic } => {
                         let mut bounds: Vec<self::GenericBound> = bounds[1..]
@@ -1519,7 +1515,7 @@ fn normalize(cx: &mut DocContext<'tcx>, ty: Ty<'_>) -> Option<Ty<'tcx>> {
     let lifted = ty.lift_to_tcx(cx.tcx).unwrap();
     let normalized = cx.tcx.infer_ctxt().enter(|infcx| {
         infcx
-            .at(&ObligationCause::dummy(), cx.param_env.get())
+            .at(&ObligationCause::dummy(), cx.param_env)
             .normalize(lifted)
             .map(|resolved| infcx.resolve_vars_if_possible(resolved.value))
     });
@@ -1651,7 +1647,7 @@ impl<'tcx> Clean<Type> for Ty<'tcx> {
             ty::Projection(ref data) => data.clean(cx),
 
             ty::Param(ref p) => {
-                if let Some(bounds) = cx.impl_trait_bounds.borrow_mut().remove(&p.index.into()) {
+                if let Some(bounds) = cx.impl_trait_bounds.remove(&p.index.into()) {
                     ImplTrait(bounds)
                 } else {
                     Generic(p.name)
@@ -1745,16 +1741,15 @@ impl<'tcx> Clean<Type> for Ty<'tcx> {
 
 impl<'tcx> Clean<Constant> for ty::Const<'tcx> {
     fn clean(&self, cx: &mut DocContext<'_>) -> Constant {
+        // FIXME: instead of storing the stringified expression, store `self` directly instead.
         Constant {
             type_: self.ty.clean(cx),
-            expr: format!("{}", self),
-            value: None,
-            is_literal: false,
+            kind: ConstantKind::TyConst { expr: self.to_string() },
         }
     }
 }
 
-impl Clean<Item> for hir::StructField<'_> {
+impl Clean<Item> for hir::FieldDef<'_> {
     fn clean(&self, cx: &mut DocContext<'_>) -> Item {
         let what_rustc_thinks = Item::from_hir_id_and_parts(
             self.hir_id,
@@ -1953,9 +1948,7 @@ impl Clean<Vec<Item>> for (&hir::Item<'_>, Option<Symbol>) {
                 }
                 ItemKind::Const(ty, body_id) => ConstantItem(Constant {
                     type_: ty.clean(cx),
-                    expr: print_const_expr(cx.tcx, body_id),
-                    value: print_evaluated_const(cx, def_id),
-                    is_literal: is_literal_expr(cx, body_id.hir_id),
+                    kind: ConstantKind::Local { body: body_id, def_id },
                 }),
                 ItemKind::OpaqueTy(ref ty) => OpaqueTyItem(OpaqueTy {
                     bounds: ty.bounds.clean(cx),
@@ -2003,14 +1996,11 @@ impl Clean<Vec<Item>> for (&hir::Item<'_>, Option<Symbol>) {
                         .iter()
                         .map(|ti| cx.tcx.hir().trait_item(ti.id).clean(cx))
                         .collect();
-                    let attrs = item.attrs.clean(cx);
-                    let is_spotlight = attrs.has_doc_flag(sym::spotlight);
                     TraitItem(Trait {
                         unsafety,
                         items,
                         generics: generics.clean(cx),
                         bounds: bounds.clean(cx),
-                        is_spotlight,
                         is_auto: is_auto.clean(cx),
                     })
                 }
@@ -2105,8 +2095,9 @@ fn clean_extern_crate(
     let cnum = cx.tcx.extern_mod_stmt_cnum(krate.def_id).unwrap_or(LOCAL_CRATE);
     // this is the ID of the crate itself
     let crate_def_id = DefId { krate: cnum, index: CRATE_DEF_INDEX };
+    let attrs = cx.tcx.hir().attrs(krate.hir_id());
     let please_inline = krate.vis.node.is_pub()
-        && krate.attrs.iter().any(|a| {
+        && attrs.iter().any(|a| {
             a.has_name(sym::doc)
                 && match a.meta_item_list() {
                     Some(l) => attr::list_contains_name(&l, sym::inline),
@@ -2124,7 +2115,7 @@ fn clean_extern_crate(
             cx.tcx.parent_module(krate.hir_id()).to_def_id(),
             res,
             name,
-            Some(krate.attrs),
+            Some(attrs),
             &mut visited,
         ) {
             return items;
@@ -2132,12 +2123,12 @@ fn clean_extern_crate(
     }
     // FIXME: using `from_def_id_and_kind` breaks `rustdoc/masked` for some reason
     vec![Item {
-        name: None,
-        attrs: box krate.attrs.clean(cx),
-        source: krate.span.clean(cx),
+        name: Some(name),
+        attrs: box attrs.clean(cx),
+        span: krate.span.clean(cx),
         def_id: crate_def_id,
         visibility: krate.vis.clean(cx),
-        kind: box ExternCrateItem(name, orig_name),
+        kind: box ExternCrateItem { src: orig_name },
     }]
 }
 
@@ -2155,7 +2146,8 @@ fn clean_use_statement(
         return Vec::new();
     }
 
-    let inline_attr = import.attrs.lists(sym::doc).get_word_attr(sym::inline);
+    let attrs = cx.tcx.hir().attrs(import.hir_id());
+    let inline_attr = attrs.lists(sym::doc).get_word_attr(sym::inline);
     let pub_underscore = import.vis.node.is_pub() && name == kw::Underscore;
 
     if pub_underscore {
@@ -2177,7 +2169,7 @@ fn clean_use_statement(
     // Don't inline doc(hidden) imports so they can be stripped at a later stage.
     let mut denied = !import.vis.node.is_pub()
         || pub_underscore
-        || import.attrs.iter().any(|a| {
+        || attrs.iter().any(|a| {
             a.has_name(sym::doc)
                 && match a.meta_item_list() {
                     Some(l) => {
@@ -2217,7 +2209,7 @@ fn clean_use_statement(
                 cx.tcx.parent_module(import.hir_id()).to_def_id(),
                 path.res,
                 name,
-                Some(import.attrs),
+                Some(attrs),
                 &mut visited,
             ) {
                 items.push(Item::from_def_id_and_parts(

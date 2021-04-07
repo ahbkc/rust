@@ -1,4 +1,3 @@
-use crate::errors::AssocTypeOnInherentImpl;
 use rustc_data_structures::fx::FxHashSet;
 use rustc_errors::{Applicability, ErrorReported, StashKey};
 use rustc_hir as hir;
@@ -84,7 +83,7 @@ pub(super) fn opt_const_param_of(tcx: TyCtxt<'_>, def_id: LocalDefId) -> Option<
                     return generics
                         .params
                         .iter()
-                        .filter(|param| matches!(param.kind, ty::GenericParamDefKind::Const))
+                        .filter(|param| matches!(param.kind, ty::GenericParamDefKind::Const { .. }))
                         .nth(arg_index)
                         .map(|param| param.def_id);
                 }
@@ -122,7 +121,7 @@ pub(super) fn opt_const_param_of(tcx: TyCtxt<'_>, def_id: LocalDefId) -> Option<
                 tcx.generics_of(type_dependent_def)
                     .params
                     .iter()
-                    .filter(|param| matches!(param.kind, ty::GenericParamDefKind::Const))
+                    .filter(|param| matches!(param.kind, ty::GenericParamDefKind::Const { .. }))
                     .nth(idx)
                     .map(|param| param.def_id)
             }
@@ -212,7 +211,7 @@ pub(super) fn opt_const_param_of(tcx: TyCtxt<'_>, def_id: LocalDefId) -> Option<
                 generics
                     .params
                     .iter()
-                    .filter(|param| matches!(param.kind, ty::GenericParamDefKind::Const))
+                    .filter(|param| matches!(param.kind, ty::GenericParamDefKind::Const { .. }))
                     .nth(arg_index)
                     .map(|param| param.def_id)
             }
@@ -294,7 +293,7 @@ pub(super) fn type_of(tcx: TyCtxt<'_>, def_id: DefId) -> Ty<'_> {
             }
             ImplItemKind::TyAlias(ref ty) => {
                 if tcx.impl_trait_ref(tcx.hir().get_parent_did(hir_id).to_def_id()).is_none() {
-                    report_assoc_ty_on_inherent_impl(tcx, item.span);
+                    check_feature_inherent_assoc_ty(tcx, item.span);
                 }
 
                 icx.to_ty(ty)
@@ -436,6 +435,12 @@ pub(super) fn type_of(tcx: TyCtxt<'_>, def_id: DefId) -> Ty<'_> {
                     .repr
                     .discr_type()
                     .to_ty(tcx),
+
+                Node::GenericParam(&GenericParam {
+                    hir_id: param_hir_id,
+                    kind: GenericParamKind::Const { default: Some(ct), .. },
+                    ..
+                }) if ct.hir_id == hir_id => tcx.type_of(tcx.hir().local_def_id(param_hir_id)),
 
                 x => tcx.ty_error_with_message(
                     DUMMY_SP,
@@ -723,11 +728,12 @@ fn infer_placeholder_type(
                 format!("{}: {}", item_ident, ty),
                 Applicability::MachineApplicable,
             )
-            .emit();
+            .emit_unless(ty.references_error());
         }
         None => {
             let mut diag = bad_placeholder_type(tcx, vec![span]);
-            if !matches!(ty.kind(), ty::Error(_)) {
+
+            if !ty.references_error() {
                 diag.span_suggestion(
                     span,
                     "replace `_` with the correct type",
@@ -735,6 +741,7 @@ fn infer_placeholder_type(
                     Applicability::MaybeIncorrect,
                 );
             }
+
             diag.emit();
         }
     }
@@ -746,6 +753,16 @@ fn infer_placeholder_type(
     })
 }
 
-fn report_assoc_ty_on_inherent_impl(tcx: TyCtxt<'_>, span: Span) {
-    tcx.sess.emit_err(AssocTypeOnInherentImpl { span });
+fn check_feature_inherent_assoc_ty(tcx: TyCtxt<'_>, span: Span) {
+    if !tcx.features().inherent_associated_types {
+        use rustc_session::parse::feature_err;
+        use rustc_span::symbol::sym;
+        feature_err(
+            &tcx.sess.parse_sess,
+            sym::inherent_associated_types,
+            span,
+            "inherent associated types are unstable",
+        )
+        .emit();
+    }
 }

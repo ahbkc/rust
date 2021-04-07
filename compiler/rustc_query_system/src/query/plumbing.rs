@@ -2,12 +2,14 @@
 //! generate the actual methods on tcx which find and execute the provider,
 //! manage the caches, and so forth.
 
-use crate::dep_graph::{DepKind, DepNode};
+use crate::dep_graph::{DepContext, DepKind, DepNode};
 use crate::dep_graph::{DepNodeIndex, SerializedDepNodeIndex};
 use crate::query::caches::QueryCache;
 use crate::query::config::{QueryDescription, QueryVtable, QueryVtableExt};
-use crate::query::job::{QueryInfo, QueryJob, QueryJobId, QueryJobInfo, QueryShardJobId};
-use crate::query::{QueryContext, QueryMap};
+use crate::query::job::{
+    report_cycle, QueryInfo, QueryJob, QueryJobId, QueryJobInfo, QueryShardJobId,
+};
+use crate::query::{QueryContext, QueryMap, QueryStackFrame};
 
 #[cfg(not(parallel_compiler))]
 use rustc_data_structures::cold_path;
@@ -74,44 +76,43 @@ impl<C: QueryCache> QueryCacheStore<C> {
     pub fn iter_results<R>(
         &self,
         f: impl for<'a> FnOnce(
-            Box<dyn Iterator<Item = (&'a C::Key, &'a C::Value, DepNodeIndex)> + 'a>,
+            &'a mut dyn Iterator<Item = (&'a C::Key, &'a C::Value, DepNodeIndex)>,
         ) -> R,
     ) -> R {
-        self.cache.iter(&self.shards, |shard| &mut *shard, f)
+        self.cache.iter(&self.shards, f)
     }
 }
 
-struct QueryStateShard<D, Q, K> {
-    active: FxHashMap<K, QueryResult<D, Q>>,
+struct QueryStateShard<D, K> {
+    active: FxHashMap<K, QueryResult<D>>,
 
     /// Used to generate unique ids for active jobs.
     jobs: u32,
 }
 
-impl<D, Q, K> Default for QueryStateShard<D, Q, K> {
-    fn default() -> QueryStateShard<D, Q, K> {
+impl<D, K> Default for QueryStateShard<D, K> {
+    fn default() -> QueryStateShard<D, K> {
         QueryStateShard { active: Default::default(), jobs: 0 }
     }
 }
 
-pub struct QueryState<D, Q, K> {
-    shards: Sharded<QueryStateShard<D, Q, K>>,
+pub struct QueryState<D, K> {
+    shards: Sharded<QueryStateShard<D, K>>,
 }
 
 /// Indicates the state of a query for a given key in a query map.
-enum QueryResult<D, Q> {
+enum QueryResult<D> {
     /// An already executing query. The query job can be used to await for its completion.
-    Started(QueryJob<D, Q>),
+    Started(QueryJob<D>),
 
     /// The query panicked. Queries trying to wait on this will raise a fatal error which will
     /// silently panic.
     Poisoned,
 }
 
-impl<D, Q, K> QueryState<D, Q, K>
+impl<D, K> QueryState<D, K>
 where
     D: Copy + Clone + Eq + Hash,
-    Q: Clone,
     K: Eq + Hash + Clone + Debug,
 {
     pub fn all_inactive(&self) -> bool {
@@ -119,11 +120,12 @@ where
         shards.iter().all(|shard| shard.active.is_empty())
     }
 
-    pub fn try_collect_active_jobs(
+    pub fn try_collect_active_jobs<CTX: Copy>(
         &self,
+        tcx: CTX,
         kind: D,
-        make_query: fn(K) -> Q,
-        jobs: &mut QueryMap<D, Q>,
+        make_query: fn(CTX, K) -> QueryStackFrame,
+        jobs: &mut QueryMap<D>,
     ) -> Option<()> {
         // We use try_lock_shards here since we are called from the
         // deadlock handler, and this shouldn't be locked.
@@ -133,7 +135,7 @@ where
             shard.active.iter().filter_map(move |(k, v)| {
                 if let QueryResult::Started(ref job) = *v {
                     let id = QueryJobId::new(job.id, shard_id, kind);
-                    let info = QueryInfo { span: job.span, query: make_query(k.clone()) };
+                    let info = QueryInfo { span: job.span, query: make_query(tcx, k.clone()) };
                     Some((id, QueryJobInfo { info, job: job.clone() }))
                 } else {
                     None
@@ -145,30 +147,28 @@ where
     }
 }
 
-impl<D, Q, K> Default for QueryState<D, Q, K> {
-    fn default() -> QueryState<D, Q, K> {
+impl<D, K> Default for QueryState<D, K> {
+    fn default() -> QueryState<D, K> {
         QueryState { shards: Default::default() }
     }
 }
 
 /// A type representing the responsibility to execute the job in the `job` field.
 /// This will poison the relevant query if dropped.
-struct JobOwner<'tcx, D, Q, C>
+struct JobOwner<'tcx, D, C>
 where
     D: Copy + Clone + Eq + Hash,
-    Q: Clone,
     C: QueryCache,
 {
-    state: &'tcx QueryState<D, Q, C::Key>,
+    state: &'tcx QueryState<D, C::Key>,
     cache: &'tcx QueryCacheStore<C>,
     key: C::Key,
     id: QueryJobId<D>,
 }
 
-impl<'tcx, D, Q, C> JobOwner<'tcx, D, Q, C>
+impl<'tcx, D, C> JobOwner<'tcx, D, C>
 where
     D: Copy + Clone + Eq + Hash,
-    Q: Clone,
     C: QueryCache,
 {
     /// Either gets a `JobOwner` corresponding the query, allowing us to
@@ -182,13 +182,13 @@ where
     #[inline(always)]
     fn try_start<'b, CTX>(
         tcx: CTX,
-        state: &'b QueryState<CTX::DepKind, CTX::Query, C::Key>,
+        state: &'b QueryState<CTX::DepKind, C::Key>,
         cache: &'b QueryCacheStore<C>,
         span: Span,
         key: &C::Key,
         lookup: QueryLookup,
         query: &QueryVtable<CTX, C::Key, C::Value>,
-    ) -> TryGetJob<'b, CTX::DepKind, CTX::Query, C>
+    ) -> TryGetJob<'b, CTX::DepKind, C>
     where
         CTX: QueryContext,
     {
@@ -204,7 +204,7 @@ where
                         // in another thread has completed. Record how long we wait in the
                         // self-profiler.
                         let _query_blocked_prof_timer = if cfg!(parallel_compiler) {
-                            Some(tcx.profiler().query_blocked())
+                            Some(tcx.dep_context().profiler().query_blocked())
                         } else {
                             None
                         };
@@ -242,11 +242,12 @@ where
         // so we just return the error.
         #[cfg(not(parallel_compiler))]
         return TryGetJob::Cycle(cold_path(|| {
-            let error: CycleError<CTX::Query> = latch.find_cycle_in_stack(
+            let error: CycleError = latch.find_cycle_in_stack(
                 tcx.try_collect_active_jobs().unwrap(),
                 &tcx.current_query_job(),
                 span,
             );
+            let error = report_cycle(tcx.dep_context().sess(), error);
             let value = query.handle_cycle_error(tcx, error);
             cache.cache.store_nocache(value)
         }));
@@ -258,6 +259,7 @@ where
             let result = latch.wait_on(tcx.current_query_job(), span);
 
             if let Err(cycle) = result {
+                let cycle = report_cycle(tcx.dep_context().sess(), cycle);
                 let value = query.handle_cycle_error(tcx, cycle);
                 let value = cache.cache.store_nocache(value);
                 return TryGetJob::Cycle(value);
@@ -266,8 +268,8 @@ where
             let cached = cache
                 .cache
                 .lookup(cache, &key, |value, index| {
-                    if unlikely!(tcx.profiler().enabled()) {
-                        tcx.profiler().query_cache_hit(index.into());
+                    if unlikely!(tcx.dep_context().profiler().enabled()) {
+                        tcx.dep_context().profiler().query_cache_hit(index.into());
                     }
                     #[cfg(debug_assertions)]
                     {
@@ -327,10 +329,9 @@ where
     (result, diagnostics.into_inner())
 }
 
-impl<'tcx, D, Q, C> Drop for JobOwner<'tcx, D, Q, C>
+impl<'tcx, D, C> Drop for JobOwner<'tcx, D, C>
 where
     D: Copy + Clone + Eq + Hash,
-    Q: Clone,
     C: QueryCache,
 {
     #[inline(never)]
@@ -355,21 +356,20 @@ where
 }
 
 #[derive(Clone)]
-pub struct CycleError<Q> {
+pub(crate) struct CycleError {
     /// The query and related span that uses the cycle.
-    pub usage: Option<(Span, Q)>,
-    pub cycle: Vec<QueryInfo<Q>>,
+    pub usage: Option<(Span, QueryStackFrame)>,
+    pub cycle: Vec<QueryInfo>,
 }
 
 /// The result of `try_start`.
-enum TryGetJob<'tcx, D, Q, C>
+enum TryGetJob<'tcx, D, C>
 where
     D: Copy + Clone + Eq + Hash,
-    Q: Clone,
     C: QueryCache,
 {
     /// The query is not yet started. Contains a guard to the cache eventually used to start it.
-    NotYetStarted(JobOwner<'tcx, D, Q, C>),
+    NotYetStarted(JobOwner<'tcx, D, C>),
 
     /// The query was already completed.
     /// Returns the result of the query and its dep-node index
@@ -395,7 +395,7 @@ pub fn try_get_cached<'a, CTX, C, R, OnHit>(
 ) -> Result<R, QueryLookup>
 where
     C: QueryCache,
-    CTX: QueryContext,
+    CTX: DepContext,
     OnHit: FnOnce(&C::Stored) -> R,
 {
     cache.cache.lookup(cache, &key, |value, index| {
@@ -413,7 +413,7 @@ where
 
 fn try_execute_query<CTX, C>(
     tcx: CTX,
-    state: &QueryState<CTX::DepKind, CTX::Query, C::Key>,
+    state: &QueryState<CTX::DepKind, C::Key>,
     cache: &QueryCacheStore<C>,
     span: Span,
     key: C::Key,
@@ -422,40 +422,44 @@ fn try_execute_query<CTX, C>(
 ) -> C::Stored
 where
     C: QueryCache,
-    C::Key: crate::dep_graph::DepNodeParams<CTX>,
+    C::Key: crate::dep_graph::DepNodeParams<CTX::DepContext>,
     CTX: QueryContext,
 {
-    let job = match JobOwner::<'_, CTX::DepKind, CTX::Query, C>::try_start(
+    let job = match JobOwner::<'_, CTX::DepKind, C>::try_start(
         tcx, state, cache, span, &key, lookup, query,
     ) {
         TryGetJob::NotYetStarted(job) => job,
         TryGetJob::Cycle(result) => return result,
         #[cfg(parallel_compiler)]
         TryGetJob::JobCompleted((v, index)) => {
-            tcx.dep_graph().read_index(index);
+            tcx.dep_context().dep_graph().read_index(index);
             return v;
         }
     };
 
     // Fast path for when incr. comp. is off. `to_dep_node` is
     // expensive for some `DepKind`s.
-    if !tcx.dep_graph().is_fully_enabled() {
+    if !tcx.dep_context().dep_graph().is_fully_enabled() {
         let null_dep_node = DepNode::new_no_params(DepKind::NULL);
         return force_query_with_job(tcx, key, job, null_dep_node, query).0;
     }
 
     if query.anon {
-        let prof_timer = tcx.profiler().query_provider();
+        let prof_timer = tcx.dep_context().profiler().query_provider();
 
         let ((result, dep_node_index), diagnostics) = with_diagnostics(|diagnostics| {
-            tcx.start_query(job.id, diagnostics, |tcx| {
-                tcx.dep_graph().with_anon_task(query.dep_kind, || query.compute(tcx, key))
+            tcx.start_query(job.id, diagnostics, || {
+                tcx.dep_context().dep_graph().with_anon_task(
+                    *tcx.dep_context(),
+                    query.dep_kind,
+                    || query.compute(tcx, key),
+                )
             })
         });
 
         prof_timer.finish_with_query_invocation_id(dep_node_index.into());
 
-        tcx.dep_graph().read_index(dep_node_index);
+        tcx.dep_context().dep_graph().read_index(dep_node_index);
 
         if unlikely!(!diagnostics.is_empty()) {
             tcx.store_diagnostics_for_anon_node(dep_node_index, diagnostics);
@@ -464,14 +468,14 @@ where
         return job.complete(result, dep_node_index);
     }
 
-    let dep_node = query.to_dep_node(tcx, &key);
+    let dep_node = query.to_dep_node(*tcx.dep_context(), &key);
 
     if !query.eval_always {
         // The diagnostics for this query will be
         // promoted to the current session during
         // `try_mark_green()`, so we can ignore them here.
-        let loaded = tcx.start_query(job.id, None, |tcx| {
-            let marked = tcx.dep_graph().try_mark_green_and_read(tcx, &dep_node);
+        let loaded = tcx.start_query(job.id, None, || {
+            let marked = tcx.dep_context().dep_graph().try_mark_green_and_read(tcx, &dep_node);
             marked.map(|(prev_dep_node_index, dep_node_index)| {
                 (
                     load_from_disk_and_cache_in_memory(
@@ -492,7 +496,7 @@ where
     }
 
     let (result, dep_node_index) = force_query_with_job(tcx, key, job, dep_node, query);
-    tcx.dep_graph().read_index(dep_node_index);
+    tcx.dep_context().dep_graph().read_index(dep_node_index);
     result
 }
 
@@ -510,11 +514,11 @@ where
     // Note this function can be called concurrently from the same query
     // We must ensure that this is handled correctly.
 
-    debug_assert!(tcx.dep_graph().is_green(dep_node));
+    debug_assert!(tcx.dep_context().dep_graph().is_green(dep_node));
 
     // First we try to load the result from the on-disk cache.
     let result = if query.cache_on_disk(tcx, &key, None) {
-        let prof_timer = tcx.profiler().incr_cache_loading();
+        let prof_timer = tcx.dep_context().profiler().incr_cache_loading();
         let result = query.try_load_from_disk(tcx, prev_dep_node_index);
         prof_timer.finish_with_query_invocation_id(dep_node_index.into());
 
@@ -531,44 +535,49 @@ where
         None
     };
 
-    let result = if let Some(result) = result {
+    if let Some(result) = result {
+        // If `-Zincremental-verify-ich` is specified, re-hash results from
+        // the cache and make sure that they have the expected fingerprint.
+        if unlikely!(tcx.dep_context().sess().opts.debugging_opts.incremental_verify_ich) {
+            incremental_verify_ich(*tcx.dep_context(), &result, dep_node, query);
+        }
+
         result
     } else {
         // We could not load a result from the on-disk cache, so
         // recompute.
-        let prof_timer = tcx.profiler().query_provider();
+        let prof_timer = tcx.dep_context().profiler().query_provider();
 
         // The dep-graph for this computation is already in-place.
-        let result = tcx.dep_graph().with_ignore(|| query.compute(tcx, key));
+        let result = tcx.dep_context().dep_graph().with_ignore(|| query.compute(tcx, key));
 
         prof_timer.finish_with_query_invocation_id(dep_node_index.into());
 
+        // Verify that re-running the query produced a result with the expected hash
+        // This catches bugs in query implementations, turning them into ICEs.
+        // For example, a query might sort its result by `DefId` - since `DefId`s are
+        // not stable across compilation sessions, the result could get up getting sorted
+        // in a different order when the query is re-run, even though all of the inputs
+        // (e.g. `DefPathHash` values) were green.
+        //
+        // See issue #82920 for an example of a miscompilation that would get turned into
+        // an ICE by this check
+        incremental_verify_ich(*tcx.dep_context(), &result, dep_node, query);
+
         result
-    };
-
-    // If `-Zincremental-verify-ich` is specified, re-hash results from
-    // the cache and make sure that they have the expected fingerprint.
-    if unlikely!(tcx.incremental_verify_ich()) {
-        incremental_verify_ich(tcx, &result, dep_node, dep_node_index, query);
     }
-
-    result
 }
 
-#[inline(never)]
-#[cold]
 fn incremental_verify_ich<CTX, K, V: Debug>(
-    tcx: CTX,
+    tcx: CTX::DepContext,
     result: &V,
     dep_node: &DepNode<CTX::DepKind>,
-    dep_node_index: DepNodeIndex,
     query: &QueryVtable<CTX, K, V>,
 ) where
     CTX: QueryContext,
 {
     assert!(
-        Some(tcx.dep_graph().fingerprint_of(dep_node_index))
-            == tcx.dep_graph().prev_fingerprint_of(dep_node),
+        tcx.dep_graph().is_green(dep_node),
         "fingerprint for green query instance not loaded from cache: {:?}",
         dep_node,
     );
@@ -579,15 +588,21 @@ fn incremental_verify_ich<CTX, K, V: Debug>(
     let new_hash = query.hash_result(&mut hcx, result).unwrap_or(Fingerprint::ZERO);
     debug!("END verify_ich({:?})", dep_node);
 
-    let old_hash = tcx.dep_graph().fingerprint_of(dep_node_index);
+    let old_hash = tcx.dep_graph().prev_fingerprint_of(dep_node);
 
-    assert!(new_hash == old_hash, "found unstable fingerprints for {:?}", dep_node,);
+    assert_eq!(
+        Some(new_hash),
+        old_hash,
+        "found unstable fingerprints for {:?}: {:?}",
+        dep_node,
+        result
+    );
 }
 
 fn force_query_with_job<C, CTX>(
     tcx: CTX,
     key: C::Key,
-    job: JobOwner<'_, CTX::DepKind, CTX::Query, C>,
+    job: JobOwner<'_, CTX::DepKind, C>,
     dep_node: DepNode<CTX::DepKind>,
     query: &QueryVtable<CTX, C::Key, C::Value>,
 ) -> (C::Stored, DepNodeIndex)
@@ -601,7 +616,7 @@ where
     // 2. Two distinct query keys get mapped to the same `DepNode`
     //    (see for example #48923).
     assert!(
-        !tcx.dep_graph().dep_node_exists(&dep_node),
+        !tcx.dep_context().dep_graph().dep_node_exists(&dep_node),
         "forcing query with already existing `DepNode`\n\
                  - query-key: {:?}\n\
                  - dep-node: {:?}",
@@ -609,12 +624,12 @@ where
         dep_node
     );
 
-    let prof_timer = tcx.profiler().query_provider();
+    let prof_timer = tcx.dep_context().profiler().query_provider();
 
     let ((result, dep_node_index), diagnostics) = with_diagnostics(|diagnostics| {
-        tcx.start_query(job.id, diagnostics, |tcx| {
+        tcx.start_query(job.id, diagnostics, || {
             if query.eval_always {
-                tcx.dep_graph().with_eval_always_task(
+                tcx.dep_context().dep_graph().with_eval_always_task(
                     dep_node,
                     tcx,
                     key,
@@ -622,7 +637,13 @@ where
                     query.hash_result,
                 )
             } else {
-                tcx.dep_graph().with_task(dep_node, tcx, key, query.compute, query.hash_result)
+                tcx.dep_context().dep_graph().with_task(
+                    dep_node,
+                    tcx,
+                    key,
+                    query.compute,
+                    query.hash_result,
+                )
             }
         })
     });
@@ -641,7 +662,7 @@ where
 #[inline(never)]
 fn get_query_impl<CTX, C>(
     tcx: CTX,
-    state: &QueryState<CTX::DepKind, CTX::Query, C::Key>,
+    state: &QueryState<CTX::DepKind, C::Key>,
     cache: &QueryCacheStore<C>,
     span: Span,
     key: C::Key,
@@ -651,7 +672,7 @@ fn get_query_impl<CTX, C>(
 where
     CTX: QueryContext,
     C: QueryCache,
-    C::Key: crate::dep_graph::DepNodeParams<CTX>,
+    C::Key: crate::dep_graph::DepNodeParams<CTX::DepContext>,
 {
     try_execute_query(tcx, state, cache, span, key, lookup, query)
 }
@@ -667,7 +688,7 @@ where
 #[inline(never)]
 fn ensure_must_run<CTX, K, V>(tcx: CTX, key: &K, query: &QueryVtable<CTX, K, V>) -> bool
 where
-    K: crate::dep_graph::DepNodeParams<CTX>,
+    K: crate::dep_graph::DepNodeParams<CTX::DepContext>,
     CTX: QueryContext,
 {
     if query.eval_always {
@@ -677,9 +698,9 @@ where
     // Ensuring an anonymous query makes no sense
     assert!(!query.anon);
 
-    let dep_node = query.to_dep_node(tcx, key);
+    let dep_node = query.to_dep_node(*tcx.dep_context(), key);
 
-    match tcx.dep_graph().try_mark_green_and_read(tcx, &dep_node) {
+    match tcx.dep_context().dep_graph().try_mark_green_and_read(tcx, &dep_node) {
         None => {
             // A None return from `try_mark_green_and_read` means that this is either
             // a new dep node or that the dep node has already been marked red.
@@ -690,7 +711,7 @@ where
             true
         }
         Some((_, dep_node_index)) => {
-            tcx.profiler().query_cache_hit(dep_node_index.into());
+            tcx.dep_context().profiler().query_cache_hit(dep_node_index.into());
             false
         }
     }
@@ -699,7 +720,7 @@ where
 #[inline(never)]
 fn force_query_impl<CTX, C>(
     tcx: CTX,
-    state: &QueryState<CTX::DepKind, CTX::Query, C::Key>,
+    state: &QueryState<CTX::DepKind, C::Key>,
     cache: &QueryCacheStore<C>,
     key: C::Key,
     span: Span,
@@ -707,14 +728,14 @@ fn force_query_impl<CTX, C>(
     query: &QueryVtable<CTX, C::Key, C::Value>,
 ) where
     C: QueryCache,
-    C::Key: crate::dep_graph::DepNodeParams<CTX>,
+    C::Key: crate::dep_graph::DepNodeParams<CTX::DepContext>,
     CTX: QueryContext,
 {
     // We may be concurrently trying both execute and force a query.
     // Ensure that only one of them runs the query.
     let cached = cache.cache.lookup(cache, &key, |_, index| {
-        if unlikely!(tcx.profiler().enabled()) {
-            tcx.profiler().query_cache_hit(index.into());
+        if unlikely!(tcx.dep_context().profiler().enabled()) {
+            tcx.dep_context().profiler().query_cache_hit(index.into());
         }
         #[cfg(debug_assertions)]
         {
@@ -727,7 +748,7 @@ fn force_query_impl<CTX, C>(
         Err(lookup) => lookup,
     };
 
-    let job = match JobOwner::<'_, CTX::DepKind, CTX::Query, C>::try_start(
+    let job = match JobOwner::<'_, CTX::DepKind, C>::try_start(
         tcx, state, cache, span, &key, lookup, query,
     ) {
         TryGetJob::NotYetStarted(job) => job,
@@ -752,7 +773,7 @@ pub fn get_query<Q, CTX>(
 ) -> Option<Q::Stored>
 where
     Q: QueryDescription<CTX>,
-    Q::Key: crate::dep_graph::DepNodeParams<CTX>,
+    Q::Key: crate::dep_graph::DepNodeParams<CTX::DepContext>,
     CTX: QueryContext,
 {
     let query = &Q::VTABLE;
@@ -771,7 +792,7 @@ where
 pub fn force_query<Q, CTX>(tcx: CTX, key: Q::Key, span: Span, dep_node: DepNode<CTX::DepKind>)
 where
     Q: QueryDescription<CTX>,
-    Q::Key: crate::dep_graph::DepNodeParams<CTX>,
+    Q::Key: crate::dep_graph::DepNodeParams<CTX::DepContext>,
     CTX: QueryContext,
 {
     force_query_impl(tcx, Q::query_state(tcx), Q::query_cache(tcx), key, span, dep_node, &Q::VTABLE)

@@ -25,13 +25,11 @@
 #![feature(nll)]
 #![feature(available_concurrency)]
 #![feature(internal_output_capture)]
-#![feature(option_unwrap_none)]
 #![feature(panic_unwind)]
 #![feature(staged_api)]
 #![feature(termination_trait_lib)]
 #![feature(test)]
 #![feature(total_cmp)]
-#![feature(str_split_once)]
 
 // Public reexports
 pub use self::bench::{black_box, Bencher};
@@ -299,8 +297,9 @@ where
             let test = remaining.pop().unwrap();
             let event = TestEvent::TeWait(test.desc.clone());
             notify_about_test_event(event)?;
-            run_test(opts, !opts.run_tests, test, run_strategy, tx.clone(), Concurrent::No)
-                .unwrap_none();
+            let join_handle =
+                run_test(opts, !opts.run_tests, test, run_strategy, tx.clone(), Concurrent::No);
+            assert!(join_handle.is_none());
             let completed_test = rx.recv().unwrap();
 
             let event = TestEvent::TeResult(completed_test);

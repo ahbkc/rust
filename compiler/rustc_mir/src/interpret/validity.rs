@@ -77,7 +77,7 @@ macro_rules! throw_validation_failure {
 ///
 macro_rules! try_validation {
     ($e:expr, $where:expr,
-     $( $( $p:pat )|+ => { $( $what_fmt:expr ),+ } $( expected { $( $expected_fmt:expr ),+ } )? ),+ $(,)?
+    $( $( $p:pat )|+ => { $( $what_fmt:expr ),+ } $( expected { $( $expected_fmt:expr ),+ } )? ),+ $(,)?
     ) => {{
         match $e {
             Ok(x) => x,
@@ -244,17 +244,20 @@ impl<'rt, 'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> ValidityVisitor<'rt, 'mir, '
             // generators and closures.
             ty::Closure(def_id, _) | ty::Generator(def_id, _, _) => {
                 let mut name = None;
-                if let Some(def_id) = def_id.as_local() {
-                    let tables = self.ecx.tcx.typeck(def_id);
-                    if let Some(upvars) = tables.closure_captures.get(&def_id.to_def_id()) {
+                // FIXME this should be more descriptive i.e. CapturePlace instead of CapturedVar
+                // https://github.com/rust-lang/project-rfc-2229/issues/46
+                if let Some(local_def_id) = def_id.as_local() {
+                    let tables = self.ecx.tcx.typeck(local_def_id);
+                    if let Some(captured_place) =
+                        tables.closure_min_captures_flattened(*def_id).nth(field)
+                    {
                         // Sometimes the index is beyond the number of upvars (seen
                         // for a generator).
-                        if let Some((&var_hir_id, _)) = upvars.get_index(field) {
-                            let node = self.ecx.tcx.hir().get(var_hir_id);
-                            if let hir::Node::Binding(pat) = node {
-                                if let hir::PatKind::Binding(_, _, ident, _) = pat.kind {
-                                    name = Some(ident.name);
-                                }
+                        let var_hir_id = captured_place.get_root_variable();
+                        let node = self.ecx.tcx.hir().get(var_hir_id);
+                        if let hir::Node::Binding(pat) = node {
+                            if let hir::PatKind::Binding(_, _, ident, _) = pat.kind {
+                                name = Some(ident.name);
                             }
                         }
                     }
@@ -378,7 +381,7 @@ impl<'rt, 'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> ValidityVisitor<'rt, 'mir, '
     /// Check a reference or `Box`.
     fn check_safe_pointer(
         &mut self,
-        value: OpTy<'tcx, M::PointerTag>,
+        value: &OpTy<'tcx, M::PointerTag>,
         kind: &str,
     ) -> InterpResult<'tcx> {
         let value = try_validation!(
@@ -389,7 +392,7 @@ impl<'rt, 'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> ValidityVisitor<'rt, 'mir, '
         // Handle wide pointers.
         // Check metadata early, for better diagnostics
         let place = try_validation!(
-            self.ecx.ref_to_mplace(value),
+            self.ecx.ref_to_mplace(&value),
             self.path,
             err_ub!(InvalidUninitBytes(None)) => { "uninitialized {}", kind },
         );
@@ -398,7 +401,7 @@ impl<'rt, 'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> ValidityVisitor<'rt, 'mir, '
         }
         // Make sure this is dereferenceable and all.
         let size_and_align = try_validation!(
-            self.ecx.size_and_align_of_mplace(place),
+            self.ecx.size_and_align_of_mplace(&place),
             self.path,
             err_ub!(InvalidMeta(msg)) => { "invalid {} metadata: {}", kind, msg },
         );
@@ -494,7 +497,7 @@ impl<'rt, 'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> ValidityVisitor<'rt, 'mir, '
 
     fn read_scalar(
         &self,
-        op: OpTy<'tcx, M::PointerTag>,
+        op: &OpTy<'tcx, M::PointerTag>,
     ) -> InterpResult<'tcx, ScalarMaybeUninit<M::PointerTag>> {
         Ok(try_validation!(
             self.ecx.read_scalar(op),
@@ -507,7 +510,7 @@ impl<'rt, 'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> ValidityVisitor<'rt, 'mir, '
     /// at that type.  Return `true` if the type is indeed primitive.
     fn try_visit_primitive(
         &mut self,
-        value: OpTy<'tcx, M::PointerTag>,
+        value: &OpTy<'tcx, M::PointerTag>,
     ) -> InterpResult<'tcx, bool> {
         // Go over all the primitive types
         let ty = value.layout.ty;
@@ -555,7 +558,7 @@ impl<'rt, 'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> ValidityVisitor<'rt, 'mir, '
                 // actually enforce the strict rules for raw pointers (mostly because
                 // that lets us re-use `ref_to_mplace`).
                 let place = try_validation!(
-                    self.ecx.read_immediate(value).and_then(|i| self.ecx.ref_to_mplace(i)),
+                    self.ecx.read_immediate(value).and_then(|ref i| self.ecx.ref_to_mplace(i)),
                     self.path,
                     err_ub!(InvalidUninitBytes(None)) => { "uninitialized raw pointer" },
                     err_unsup!(ReadPointerAsBytes) => { "part of a pointer" } expected { "a proper pointer or integer value" },
@@ -634,7 +637,7 @@ impl<'rt, 'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> ValidityVisitor<'rt, 'mir, '
 
     fn visit_scalar(
         &mut self,
-        op: OpTy<'tcx, M::PointerTag>,
+        op: &OpTy<'tcx, M::PointerTag>,
         scalar_layout: &Scalar,
     ) -> InterpResult<'tcx> {
         let value = self.read_scalar(op)?;
@@ -708,7 +711,7 @@ impl<'rt, 'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> ValueVisitor<'mir, 'tcx, M>
 
     fn read_discriminant(
         &mut self,
-        op: OpTy<'tcx, M::PointerTag>,
+        op: &OpTy<'tcx, M::PointerTag>,
     ) -> InterpResult<'tcx, VariantIdx> {
         self.with_elem(PathElem::EnumTag, move |this| {
             Ok(try_validation!(
@@ -728,9 +731,9 @@ impl<'rt, 'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> ValueVisitor<'mir, 'tcx, M>
     #[inline]
     fn visit_field(
         &mut self,
-        old_op: OpTy<'tcx, M::PointerTag>,
+        old_op: &OpTy<'tcx, M::PointerTag>,
         field: usize,
-        new_op: OpTy<'tcx, M::PointerTag>,
+        new_op: &OpTy<'tcx, M::PointerTag>,
     ) -> InterpResult<'tcx> {
         let elem = self.aggregate_field_path_elem(old_op.layout, field);
         self.with_elem(elem, move |this| this.visit_value(new_op))
@@ -739,9 +742,9 @@ impl<'rt, 'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> ValueVisitor<'mir, 'tcx, M>
     #[inline]
     fn visit_variant(
         &mut self,
-        old_op: OpTy<'tcx, M::PointerTag>,
+        old_op: &OpTy<'tcx, M::PointerTag>,
         variant_id: VariantIdx,
-        new_op: OpTy<'tcx, M::PointerTag>,
+        new_op: &OpTy<'tcx, M::PointerTag>,
     ) -> InterpResult<'tcx> {
         let name = match old_op.layout.ty.kind() {
             ty::Adt(adt, _) => PathElem::Variant(adt.variants[variant_id].ident.name),
@@ -755,14 +758,14 @@ impl<'rt, 'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> ValueVisitor<'mir, 'tcx, M>
     #[inline(always)]
     fn visit_union(
         &mut self,
-        _op: OpTy<'tcx, M::PointerTag>,
+        _op: &OpTy<'tcx, M::PointerTag>,
         _fields: NonZeroUsize,
     ) -> InterpResult<'tcx> {
         Ok(())
     }
 
     #[inline]
-    fn visit_value(&mut self, op: OpTy<'tcx, M::PointerTag>) -> InterpResult<'tcx> {
+    fn visit_value(&mut self, op: &OpTy<'tcx, M::PointerTag>) -> InterpResult<'tcx> {
         trace!("visit_value: {:?}, {:?}", *op, op.layout);
 
         // Check primitive types -- the leafs of our recursive descend.
@@ -819,7 +822,7 @@ impl<'rt, 'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> ValueVisitor<'mir, 'tcx, M>
 
     fn visit_aggregate(
         &mut self,
-        op: OpTy<'tcx, M::PointerTag>,
+        op: &OpTy<'tcx, M::PointerTag>,
         fields: impl Iterator<Item = InterpResult<'tcx, Self::V>>,
     ) -> InterpResult<'tcx> {
         match op.layout.ty.kind() {
@@ -921,7 +924,7 @@ impl<'rt, 'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> ValueVisitor<'mir, 'tcx, M>
 impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
     fn validate_operand_internal(
         &self,
-        op: OpTy<'tcx, M::PointerTag>,
+        op: &OpTy<'tcx, M::PointerTag>,
         path: Vec<PathElem>,
         ref_tracking: Option<&mut RefTracking<MPlaceTy<'tcx, M::PointerTag>, Vec<PathElem>>>,
         ctfe_mode: Option<CtfeValidationMode>,
@@ -932,10 +935,10 @@ impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
         let mut visitor = ValidityVisitor { path, ref_tracking, ctfe_mode, ecx: self };
 
         // Try to cast to ptr *once* instead of all the time.
-        let op = self.force_op_ptr(op).unwrap_or(op);
+        let op = self.force_op_ptr(&op).unwrap_or(*op);
 
         // Run it.
-        match visitor.visit_value(op) {
+        match visitor.visit_value(&op) {
             Ok(()) => Ok(()),
             // Pass through validation failures.
             Err(err) if matches!(err.kind(), err_ub!(ValidationFailure { .. })) => Err(err),
@@ -963,7 +966,7 @@ impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
     #[inline(always)]
     pub fn const_validate_operand(
         &self,
-        op: OpTy<'tcx, M::PointerTag>,
+        op: &OpTy<'tcx, M::PointerTag>,
         path: Vec<PathElem>,
         ref_tracking: &mut RefTracking<MPlaceTy<'tcx, M::PointerTag>, Vec<PathElem>>,
         ctfe_mode: CtfeValidationMode,
@@ -975,7 +978,7 @@ impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
     /// `op` is assumed to cover valid memory if it is an indirect operand.
     /// It will error if the bits at the destination do not match the ones described by the layout.
     #[inline(always)]
-    pub fn validate_operand(&self, op: OpTy<'tcx, M::PointerTag>) -> InterpResult<'tcx> {
+    pub fn validate_operand(&self, op: &OpTy<'tcx, M::PointerTag>) -> InterpResult<'tcx> {
         self.validate_operand_internal(op, vec![], None, None)
     }
 }

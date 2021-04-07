@@ -12,9 +12,8 @@ use walkdir::WalkDir;
 
 pub mod bless;
 pub mod fmt;
-pub mod lintcheck;
+pub mod ide_setup;
 pub mod new_lint;
-pub mod ra_setup;
 pub mod serve;
 pub mod stderr_length_check;
 pub mod update_lints;
@@ -530,7 +529,7 @@ fn test_gen_deprecated() {
 #[should_panic]
 fn test_gen_deprecated_fail() {
     let lints = vec![Lint::new("should_assert_eq2", "group2", "abc", None, "module_name")];
-    let _ = gen_deprecated(lints.iter());
+    let _deprecated_lints = gen_deprecated(lints.iter());
 }
 
 #[test]

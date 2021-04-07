@@ -1,11 +1,11 @@
 #![warn(clippy::upper_case_acronyms)]
 
-struct HTTPResponse; // linted
+struct HTTPResponse; // not linted by default, but with cfg option
 
 struct CString; // not linted
 
 enum Flags {
-    NS, // linted
+    NS, // not linted
     CWR,
     ECE,
     URG,
@@ -16,6 +16,12 @@ enum Flags {
     FIN,
 }
 
-struct GCCLLVMSomething; // linted, beware that lint suggests `GccllvmSomething` instead of `GccLlvmSomething`
+// linted with cfg option, beware that lint suggests `GccllvmSomething` instead of
+// `GccLlvmSomething`
+struct GCCLLVMSomething;
+
+// public items must not be linted
+pub struct NOWARNINGHERE;
+pub struct ALSONoWarningHERE;
 
 fn main() {}

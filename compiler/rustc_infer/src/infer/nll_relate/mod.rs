@@ -44,7 +44,7 @@ where
 {
     infcx: &'me InferCtxt<'me, 'tcx>,
 
-    /// Callback to use when we deduce an outlives relationship
+    /// Callback to use when we deduce an outlives relationship.
     delegate: D,
 
     /// How are we relating `a` and `b`?
@@ -157,7 +157,7 @@ where
 
     fn create_scope(
         &mut self,
-        value: ty::Binder<impl Relate<'tcx>>,
+        value: ty::Binder<'tcx, impl Relate<'tcx>>,
         universally_quantified: UniversallyQuantified,
     ) -> BoundRegionScope<'tcx> {
         let mut scope = BoundRegionScope::default();
@@ -608,9 +608,9 @@ where
 
     fn binders<T>(
         &mut self,
-        a: ty::Binder<T>,
-        b: ty::Binder<T>,
-    ) -> RelateResult<'tcx, ty::Binder<T>>
+        a: ty::Binder<'tcx, T>,
+        b: ty::Binder<'tcx, T>,
+    ) -> RelateResult<'tcx, ty::Binder<'tcx, T>>
     where
         T: Relate<'tcx>,
     {
@@ -744,7 +744,7 @@ struct ScopeInstantiator<'me, 'tcx> {
 impl<'me, 'tcx> TypeVisitor<'tcx> for ScopeInstantiator<'me, 'tcx> {
     fn visit_binder<T: TypeFoldable<'tcx>>(
         &mut self,
-        t: &ty::Binder<T>,
+        t: &ty::Binder<'tcx, T>,
     ) -> ControlFlow<Self::BreakTy> {
         self.target_index.shift_in(1);
         t.super_visit_with(self);
@@ -768,7 +768,7 @@ impl<'me, 'tcx> TypeVisitor<'tcx> for ScopeInstantiator<'me, 'tcx> {
     }
 }
 
-/// The "type generalize" is used when handling inference variables.
+/// The "type generalizer" is used when handling inference variables.
 ///
 /// The basic strategy for handling a constraint like `?A <: B` is to
 /// apply a "generalization strategy" to the type `B` -- this replaces
@@ -997,9 +997,9 @@ where
 
     fn binders<T>(
         &mut self,
-        a: ty::Binder<T>,
-        _: ty::Binder<T>,
-    ) -> RelateResult<'tcx, ty::Binder<T>>
+        a: ty::Binder<'tcx, T>,
+        _: ty::Binder<'tcx, T>,
+    ) -> RelateResult<'tcx, ty::Binder<'tcx, T>>
     where
         T: Relate<'tcx>,
     {

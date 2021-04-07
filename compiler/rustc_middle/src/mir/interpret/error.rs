@@ -9,7 +9,7 @@ use rustc_macros::HashStable;
 use rustc_session::CtfeBacktrace;
 use rustc_span::def_id::DefId;
 use rustc_target::abi::{Align, Size};
-use std::{any::Any, backtrace::Backtrace, fmt, mem};
+use std::{any::Any, backtrace::Backtrace, fmt};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, HashStable, TyEncodable, TyDecodable)]
 pub enum ErrorHandled {
@@ -40,7 +40,7 @@ pub fn struct_error<'tcx>(tcx: TyCtxtAt<'tcx>, msg: &str) -> DiagnosticBuilder<'
     struct_span_err!(tcx.sess, tcx.span, E0080, "{}", msg)
 }
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", target_pointer_width = "64"))]
 static_assert_size!(InterpErrorInfo<'_>, 8);
 
 /// Packages the kind of error we got from the const code interpreter
@@ -263,7 +263,7 @@ pub enum UndefinedBehaviorInfo<'tcx> {
     /// Using a string that is not valid UTF-8,
     InvalidStr(std::str::Utf8Error),
     /// Using uninitialized data where it is not allowed.
-    InvalidUninitBytes(Option<Box<UninitBytesAccess>>),
+    InvalidUninitBytes(Option<UninitBytesAccess>),
     /// Working with a local that is not currently live.
     DeadLocal,
     /// Data size is not equal to target size.
@@ -444,8 +444,8 @@ impl dyn MachineStopType {
     }
 }
 
-#[cfg(target_arch = "x86_64")]
-static_assert_size!(InterpError<'_>, 40);
+#[cfg(all(target_arch = "x86_64", target_pointer_width = "64"))]
+static_assert_size!(InterpError<'_>, 72);
 
 pub enum InterpError<'tcx> {
     /// The program caused undefined behavior.
@@ -486,19 +486,14 @@ impl fmt::Debug for InterpError<'_> {
 }
 
 impl InterpError<'_> {
-    /// Some errors allocate to be created as they contain free-form strings.
-    /// And sometimes we want to be sure that did not happen as it is a
-    /// waste of resources.
-    pub fn allocates(&self) -> bool {
+    /// Some errors to string formatting even if the error is never printed.
+    /// To avoid performance issues, there are places where we want to be sure to never raise these formatting errors,
+    /// so this method lets us detect them and `bug!` on unexpected errors.
+    pub fn formatted_string(&self) -> bool {
         match self {
-            // Zero-sized boxes do not allocate.
-            InterpError::MachineStop(b) => mem::size_of_val::<dyn MachineStopType>(&**b) > 0,
             InterpError::Unsupported(UnsupportedOpInfo::Unsupported(_))
             | InterpError::UndefinedBehavior(UndefinedBehaviorInfo::ValidationFailure(_))
-            | InterpError::UndefinedBehavior(UndefinedBehaviorInfo::Ub(_))
-            | InterpError::UndefinedBehavior(UndefinedBehaviorInfo::InvalidUninitBytes(Some(_))) => {
-                true
-            }
+            | InterpError::UndefinedBehavior(UndefinedBehaviorInfo::Ub(_)) => true,
             _ => false,
         }
     }
