@@ -1600,7 +1600,7 @@ impl<'test> TestCx<'test> {
             .args(&self.props.compile_flags);
 
         if self.config.mode == RustdocJson {
-            rustdoc.arg("--output-format").arg("json");
+            rustdoc.arg("--output-format").arg("json").arg("-Zunstable-options");
         }
 
         if let Some(ref linker) = self.config.linker {
@@ -1951,6 +1951,7 @@ impl<'test> TestCx<'test> {
                 if !self.props.compile_flags.iter().any(|s| s.starts_with("--error-format")) {
                     rustc.args(&["--error-format", "json"]);
                 }
+                rustc.arg("-Ccodegen-units=1");
                 rustc.arg("-Zui-testing");
                 rustc.arg("-Zdeduplicate-diagnostics=no");
                 rustc.arg("-Zemit-future-incompat-report");

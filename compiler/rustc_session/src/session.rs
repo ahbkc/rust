@@ -83,6 +83,12 @@ impl Limit {
     }
 }
 
+impl From<usize> for Limit {
+    fn from(value: usize) -> Self {
+        Self::new(value)
+    }
+}
+
 impl fmt::Display for Limit {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0)
@@ -142,6 +148,10 @@ pub struct Session {
     /// The maximum recursion limit for potentially infinitely recursive
     /// operations such as auto-dereference and monomorphization.
     pub recursion_limit: OnceCell<Limit>,
+
+    /// The size at which the `large_assignments` lint starts
+    /// being emitted.
+    pub move_size_limit: OnceCell<usize>,
 
     /// The maximum length of types during monomorphization.
     pub type_length_limit: OnceCell<Limit>,
@@ -203,15 +213,6 @@ pub struct Session {
     /// warn about unleashing, but with a single diagnostic instead of dozens that
     /// drown everything else in noise.
     miri_unleashed_features: Lock<Vec<(Span, Option<Symbol>)>>,
-
-    /// Base directory containing the `src/` for the Rust standard library, and
-    /// potentially `rustc` as well, if we can can find it. Right now it's always
-    /// `$sysroot/lib/rustlib/src/rust` (i.e. the `rustup` `rust-src` component).
-    ///
-    /// This directory is what the virtual `/rustc/$hash` is translated back to,
-    /// if Rust was built with path remapping to `/rustc/$hash` enabled
-    /// (the `rust.remap-debuginfo` option in `config.toml`).
-    pub real_rust_source_base_dir: Option<PathBuf>,
 
     /// Architecture to use for interpreting asm!.
     pub asm_arch: Option<InlineAsmArch>,
@@ -350,6 +351,11 @@ impl Session {
     #[inline]
     pub fn recursion_limit(&self) -> Limit {
         self.recursion_limit.get().copied().unwrap()
+    }
+
+    #[inline]
+    pub fn move_size_limit(&self) -> usize {
+        self.move_size_limit.get().copied().unwrap()
     }
 
     #[inline]
@@ -807,8 +813,11 @@ impl Session {
         // This is used to control the emission of the `uwtable` attribute on
         // LLVM functions.
         //
-        // At the very least, unwind tables are needed when compiling with
-        // `-C panic=unwind`.
+        // Unwind tables are needed when compiling with `-C panic=unwind`, but
+        // LLVM won't omit unwind tables unless the function is also marked as
+        // `nounwind`, so users are allowed to disable `uwtable` emission.
+        // Historically rustc always emits `uwtable` attributes by default, so
+        // even they can be disabled, they're still emitted by default.
         //
         // On some targets (including windows), however, exceptions include
         // other events such as illegal instructions, segfaults, etc. This means
@@ -821,13 +830,10 @@ impl Session {
         // If a target requires unwind tables, then they must be emitted.
         // Otherwise, we can defer to the `-C force-unwind-tables=<yes/no>`
         // value, if it is provided, or disable them, if not.
-        if self.panic_strategy() == PanicStrategy::Unwind {
-            true
-        } else if self.target.requires_uwtable {
-            true
-        } else {
-            self.opts.cg.force_unwind_tables.unwrap_or(self.target.default_uwtable)
-        }
+        self.target.requires_uwtable
+            || self.opts.cg.force_unwind_tables.unwrap_or(
+                self.panic_strategy() == PanicStrategy::Unwind || self.target.default_uwtable,
+            )
     }
 
     /// Returns the symbol name for the registrar function,
@@ -1375,26 +1381,6 @@ pub fn build_session(
         _ => CtfeBacktrace::Disabled,
     });
 
-    // Try to find a directory containing the Rust `src`, for more details see
-    // the doc comment on the `real_rust_source_base_dir` field.
-    let real_rust_source_base_dir = {
-        // This is the location used by the `rust-src` `rustup` component.
-        let mut candidate = sysroot.join("lib/rustlib/src/rust");
-        if let Ok(metadata) = candidate.symlink_metadata() {
-            // Replace the symlink rustbuild creates, with its destination.
-            // We could try to use `fs::canonicalize` instead, but that might
-            // produce unnecessarily verbose path.
-            if metadata.file_type().is_symlink() {
-                if let Ok(symlink_dest) = std::fs::read_link(&candidate) {
-                    candidate = symlink_dest;
-                }
-            }
-        }
-
-        // Only use this directory if it has a file we can expect to always find.
-        if candidate.join("library/std/src/lib.rs").is_file() { Some(candidate) } else { None }
-    };
-
     let asm_arch =
         if target_cfg.allow_asm { InlineAsmArch::from_str(&target_cfg.arch).ok() } else { None };
 
@@ -1414,6 +1400,7 @@ pub fn build_session(
         features: OnceCell::new(),
         lint_store: OnceCell::new(),
         recursion_limit: OnceCell::new(),
+        move_size_limit: OnceCell::new(),
         type_length_limit: OnceCell::new(),
         const_eval_limit: OnceCell::new(),
         incr_comp_session: OneThread::new(RefCell::new(IncrCompSession::NotInitialized)),
@@ -1437,7 +1424,6 @@ pub fn build_session(
         system_library_path: OneThread::new(RefCell::new(Default::default())),
         ctfe_backtrace,
         miri_unleashed_features: Lock::new(Default::default()),
-        real_rust_source_base_dir,
         asm_arch,
         target_features: FxHashSet::default(),
         known_attrs: Lock::new(MarkedAttrs::new()),
@@ -1483,13 +1469,6 @@ fn validate_commandline_args_with_session_available(sess: &Session) {
 
     // Unwind tables cannot be disabled if the target requires them.
     if let Some(include_uwtables) = sess.opts.cg.force_unwind_tables {
-        if sess.panic_strategy() == PanicStrategy::Unwind && !include_uwtables {
-            sess.err(
-                "panic=unwind requires unwind tables, they cannot be disabled \
-                     with `-C force-unwind-tables=no`.",
-            );
-        }
-
         if sess.target.requires_uwtable && !include_uwtables {
             sess.err(
                 "target requires unwind tables, they cannot be disabled with \

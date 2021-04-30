@@ -231,7 +231,7 @@ impl<T: ?Sized> *mut T {
     #[stable(feature = "rust1", since = "1.0.0")]
     #[must_use = "returns a new pointer rather than modifying its argument"]
     #[rustc_const_unstable(feature = "const_ptr_offset", issue = "71499")]
-    #[inline]
+    #[inline(always)]
     pub const unsafe fn offset(self, count: isize) -> *mut T
     where
         T: Sized,
@@ -294,7 +294,7 @@ impl<T: ?Sized> *mut T {
     #[stable(feature = "ptr_wrapping_offset", since = "1.16.0")]
     #[must_use = "returns a new pointer rather than modifying its argument"]
     #[rustc_const_unstable(feature = "const_ptr_offset", issue = "71499")]
-    #[inline]
+    #[inline(always)]
     pub const fn wrapping_offset(self, count: isize) -> *mut T
     where
         T: Sized,
@@ -613,7 +613,7 @@ impl<T: ?Sized> *mut T {
     #[stable(feature = "pointer_methods", since = "1.26.0")]
     #[must_use = "returns a new pointer rather than modifying its argument"]
     #[rustc_const_unstable(feature = "const_ptr_offset", issue = "71499")]
-    #[inline]
+    #[inline(always)]
     pub const unsafe fn add(self, count: usize) -> Self
     where
         T: Sized,
@@ -740,7 +740,7 @@ impl<T: ?Sized> *mut T {
     #[stable(feature = "pointer_methods", since = "1.26.0")]
     #[must_use = "returns a new pointer rather than modifying its argument"]
     #[rustc_const_unstable(feature = "const_ptr_offset", issue = "71499")]
-    #[inline]
+    #[inline(always)]
     pub const fn wrapping_add(self, count: usize) -> Self
     where
         T: Sized,
@@ -830,7 +830,7 @@ impl<T: ?Sized> *mut T {
     /// #![feature(set_ptr_value)]
     /// # use core::fmt::Debug;
     /// let mut arr: [i32; 3] = [1, 2, 3];
-    /// let mut ptr = &mut arr[0] as *mut dyn Debug;
+    /// let mut ptr = arr.as_mut_ptr() as *mut dyn Debug;
     /// let thin = ptr as *mut u8;
     /// unsafe {
     ///     ptr = ptr.set_ptr_value(thin.add(8));

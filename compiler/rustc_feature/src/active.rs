@@ -63,6 +63,10 @@ macro_rules! declare_features {
                     _ => panic!("`{}` was not listed in `declare_features`", feature),
                 }
             }
+
+            pub fn unordered_const_ty_params(&self) -> bool {
+                self.const_generics || self.const_generics_defaults
+            }
         }
     };
 }
@@ -133,9 +137,6 @@ declare_features! (
 
     /// Allows using the `box $expr` syntax.
     (active, box_syntax, "1.0.0", Some(49733), None),
-
-    /// Allows using `#[main]` to replace the entrypoint `#[lang = "start"]` calls.
-    (active, main, "1.0.0", Some(29634), None),
 
     /// Allows using `#[start]` on a function indicating that it is the program entrypoint.
     (active, start, "1.0.0", Some(29633), None),
@@ -257,9 +258,6 @@ declare_features! (
     // -------------------------------------------------------------------------
     // feature-group-start: actual feature gates
     // -------------------------------------------------------------------------
-
-    /// Allows defining identifiers beyond ASCII.
-    (active, non_ascii_idents, "1.0.0", Some(55467), None),
 
     /// Allows using `#[plugin_registrar]` on functions.
     (active, plugin_registrar, "1.0.0", Some(29597), None),
@@ -609,9 +607,6 @@ declare_features! (
     /// Allows arbitrary expressions in key-value attributes at parse time.
     (active, extended_key_value_attributes, "1.50.0", Some(78835), None),
 
-    /// `:pat2015` and `:pat2021` macro matchers.
-    (active, edition_macro_pats, "1.51.0", Some(54883), None),
-
     /// Allows const generics to have default values (e.g. `struct Foo<const N: usize = 3>(...);`).
     (active, const_generics_defaults, "1.51.0", Some(44580), None),
 
@@ -630,20 +625,33 @@ declare_features! (
     /// Allows macro attributes to observe output of `#[derive]`.
     (active, macro_attributes_in_derive_output, "1.51.0", Some(81119), None),
 
-    /// Allows `pub` on `macro_rules` items.
-    (active, pub_macro_rules, "1.52.0", Some(78855), None),
-
     /// Allows the use of type alias impl trait in function return positions
     (active, min_type_alias_impl_trait, "1.52.0", Some(63063), None),
 
     /// Allows associated types in inherent impls.
     (active, inherent_associated_types, "1.52.0", Some(8995), None),
 
+    // Allows setting the threshold for the `large_assignments` lint.
+    (active, large_assignments, "1.52.0", Some(83518), None),
+
     /// Allows `extern "C-unwind" fn` to enable unwinding across ABI boundaries.
     (active, c_unwind, "1.52.0", Some(74990), None),
 
     /// Allows using `#[repr(align(...))]` on function items
     (active, fn_align, "1.53.0", Some(82232), None),
+
+    /// Allows `extern "wasm" fn`
+    (active, wasm_abi, "1.53.0", Some(83788), None),
+
+    /// Allows function attribute `#[no_coverage]`, to bypass coverage
+    /// instrumentation of that function.
+    (active, no_coverage, "1.53.0", Some(84605), None),
+
+    /// Allows trait bounds in `const fn`.
+    (active, const_fn_trait_bound, "1.53.0", Some(57563), None),
+
+    /// Allows unsizing coercions in `const fn`.
+    (active, const_fn_unsize, "1.53.0", Some(64992), None),
 
     // -------------------------------------------------------------------------
     // feature-group-end: actual feature gates

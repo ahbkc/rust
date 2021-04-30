@@ -197,7 +197,11 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
                                 );
                             }
                         }
-                        FnSelfUseKind::Normal { self_arg, implicit_into_iter } => {
+                        FnSelfUseKind::Normal {
+                            self_arg,
+                            implicit_into_iter,
+                            is_option_or_result,
+                        } => {
                             if implicit_into_iter {
                                 err.span_label(
                                     fn_call_span,
@@ -213,6 +217,14 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
                                         "{} {}moved due to this method call{}",
                                         place_name, partially_str, loop_message
                                     ),
+                                );
+                            }
+                            if is_option_or_result {
+                                err.span_suggestion_verbose(
+                                    fn_call_span.shrink_to_lo(),
+                                    "consider calling `.as_ref()` to borrow the type's contents",
+                                    "as_ref().".to_string(),
+                                    Applicability::MachineApplicable,
                                 );
                             }
                             // Avoid pointing to the same function in multiple different
@@ -264,7 +276,24 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
 
                 if let Some(DesugaringKind::ForLoop(_)) = move_span.desugaring_kind() {
                     let sess = self.infcx.tcx.sess;
-                    if let Ok(snippet) = sess.source_map().span_to_snippet(move_span) {
+                    let ty = used_place.ty(self.body, self.infcx.tcx).ty;
+                    // If we have a `&mut` ref, we need to reborrow.
+                    if let ty::Ref(_, _, hir::Mutability::Mut) = ty.kind() {
+                        // If we are in a loop this will be suggested later.
+                        if !is_loop_move {
+                            err.span_suggestion_verbose(
+                                move_span.shrink_to_lo(),
+                                &format!(
+                                    "consider creating a fresh reborrow of {} here",
+                                    self.describe_place(moved_place.as_ref())
+                                        .map(|n| format!("`{}`", n))
+                                        .unwrap_or_else(|| "the mutable reference".to_string()),
+                                ),
+                                format!("&mut *"),
+                                Applicability::MachineApplicable,
+                            );
+                        }
+                    } else if let Ok(snippet) = sess.source_map().span_to_snippet(move_span) {
                         err.span_suggestion(
                             move_span,
                             "consider borrowing to avoid moving into the for loop",
@@ -1664,7 +1693,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
                 if decl.can_be_made_mutable() {
                     err.span_suggestion(
                         decl.source_info.span,
-                        "make this binding mutable",
+                        "consider making this binding mutable",
                         format!("mut {}", name),
                         Applicability::MachineApplicable,
                     );

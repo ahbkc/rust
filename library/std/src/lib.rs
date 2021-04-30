@@ -208,13 +208,15 @@
 // std may use features in a platform-specific way
 #![allow(unused_features)]
 #![feature(rustc_allow_const_fn_unstable)]
-#![cfg_attr(test, feature(internal_output_capture, print_internals, update_panic_count))]
+#![cfg_attr(
+    test,
+    feature(internal_output_capture, print_internals, update_panic_count, thread_local_const_init)
+)]
 #![cfg_attr(
     all(target_vendor = "fortanix", target_env = "sgx"),
     feature(slice_index_methods, coerce_unsized, sgx_platform)
 )]
 #![deny(rustc::existing_doc_keyword)]
-#![cfg_attr(all(test, target_vendor = "fortanix", target_env = "sgx"), feature(fixed_size_array))]
 // std is implemented with unstable features, many of which are internal
 // compiler details that will never be stable
 // NB: the following list is sorted to minimize merge conflicts.
@@ -231,6 +233,7 @@
 #![feature(assert_matches)]
 #![feature(associated_type_bounds)]
 #![feature(atomic_mut_ptr)]
+#![feature(bench_black_box)]
 #![feature(box_syntax)]
 #![feature(c_variadic)]
 #![feature(cfg_accessible)]
@@ -262,7 +265,6 @@
 #![cfg_attr(not(bootstrap), feature(doc_notable_trait))]
 #![feature(dropck_eyepatch)]
 #![feature(duration_constants)]
-#![feature(duration_zero)]
 #![feature(edition_panic)]
 #![feature(exact_size_is_empty)]
 #![feature(exhaustive_patterns)]
@@ -458,6 +460,7 @@ pub use core::pin;
 #[stable(feature = "rust1", since = "1.0.0")]
 pub use core::ptr;
 #[stable(feature = "rust1", since = "1.0.0")]
+#[allow(deprecated, deprecated_in_future)]
 pub use core::raw;
 #[stable(feature = "rust1", since = "1.0.0")]
 pub use core::result;
@@ -539,22 +542,16 @@ pub mod rt;
 #[allow(dead_code, unused_attributes)]
 mod backtrace_rs;
 
-// Pull in the `std_detect` crate directly into libstd. The contents of
-// `std_detect` are in a different repository: rust-lang/stdarch.
-//
-// `std_detect` depends on libstd, but the contents of this module are
-// set up in such a way that directly pulling it here works such that the
-// crate uses the this crate as its libstd.
-#[path = "../../stdarch/crates/std_detect/src/mod.rs"]
-#[allow(missing_debug_implementations, missing_docs, dead_code)]
-#[unstable(feature = "stdsimd", issue = "48556")]
-#[cfg(not(test))]
-mod std_detect;
-
+#[stable(feature = "simd_x86", since = "1.27.0")]
+pub use std_detect::is_x86_feature_detected;
 #[doc(hidden)]
 #[unstable(feature = "stdsimd", issue = "48556")]
-#[cfg(not(test))]
-pub use std_detect::detect;
+pub use std_detect::*;
+#[unstable(feature = "stdsimd", issue = "48556")]
+pub use std_detect::{
+    is_aarch64_feature_detected, is_arm_feature_detected, is_mips64_feature_detected,
+    is_mips_feature_detected, is_powerpc64_feature_detected, is_powerpc_feature_detected,
+};
 
 // Re-export macros defined in libcore.
 #[stable(feature = "rust1", since = "1.0.0")]

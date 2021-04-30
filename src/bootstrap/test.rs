@@ -632,6 +632,26 @@ impl Step for Clippy {
 
         cargo.add_rustc_lib_path(builder, compiler);
 
+        if builder.try_run(&mut cargo.into()) {
+            // The tests succeeded; nothing to do.
+            return;
+        }
+
+        if !builder.config.cmd.bless() {
+            std::process::exit(1);
+        }
+
+        let mut cargo = builder.cargo(compiler, Mode::ToolRustc, SourceType::InTree, host, "run");
+        cargo.arg("-p").arg("clippy_dev");
+        // clippy_dev gets confused if it can't find `clippy/Cargo.toml`
+        cargo.current_dir(&builder.src.join("src").join("tools").join("clippy"));
+        if builder.config.rust_optimize {
+            cargo.env("PROFILE", "release");
+        } else {
+            cargo.env("PROFILE", "debug");
+        }
+        cargo.arg("--");
+        cargo.arg("bless");
         builder.run(&mut cargo.into());
     }
 }
@@ -1232,6 +1252,7 @@ note: if you're sure you want to do this, please open an issue as to why. In the
         hostflags.push(format!("-Lnative={}", builder.test_helpers_out(compiler.host).display()));
         if builder.is_fuse_ld_lld(compiler.host) {
             hostflags.push("-Clink-args=-fuse-ld=lld".to_string());
+            hostflags.push("-Clink-arg=-Wl,--threads=1".to_string());
         }
         cmd.arg("--host-rustcflags").arg(hostflags.join(" "));
 
@@ -1239,6 +1260,7 @@ note: if you're sure you want to do this, please open an issue as to why. In the
         targetflags.push(format!("-Lnative={}", builder.test_helpers_out(target).display()));
         if builder.is_fuse_ld_lld(target) {
             targetflags.push("-Clink-args=-fuse-ld=lld".to_string());
+            targetflags.push("-Clink-arg=-Wl,--threads=1".to_string());
         }
         cmd.arg("--target-rustcflags").arg(targetflags.join(" "));
 

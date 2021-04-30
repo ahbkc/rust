@@ -16,7 +16,7 @@
 #![feature(type_ascription)]
 #![feature(iter_intersperse)]
 #![recursion_limit = "256"]
-#![deny(rustc::internal)]
+#![warn(rustc::internal)]
 
 #[macro_use]
 extern crate lazy_static;
@@ -81,6 +81,8 @@ use rustc_middle::ty::TyCtxt;
 use rustc_session::config::{make_crate_type_option, ErrorOutputType, RustcOptGroup};
 use rustc_session::getopts;
 use rustc_session::{early_error, early_warn};
+
+use crate::clean::utils::doc_rust_lang_org_channel;
 
 /// A macro to create a FxHashMap.
 ///
@@ -287,7 +289,13 @@ fn opts() -> Vec<RustcOptGroup> {
         stable("cfg", |o| o.optmulti("", "cfg", "pass a --cfg to rustc", "")),
         stable("extern", |o| o.optmulti("", "extern", "pass an --extern to rustc", "NAME[=PATH]")),
         unstable("extern-html-root-url", |o| {
-            o.optmulti("", "extern-html-root-url", "base URL to use for dependencies", "NAME=URL")
+            o.optmulti(
+                "",
+                "extern-html-root-url",
+                "base URL to use for dependencies; for example, \
+                 \"std=/doc\" links std::vec::Vec to /doc/std/vec/struct.Vec.html",
+                "NAME=URL",
+            )
         }),
         stable("plugin-path", |o| o.optmulti("", "plugin-path", "removed", "DIR")),
         stable("C", |o| {
@@ -597,7 +605,10 @@ fn usage(argv0: &str) {
     }
     println!("{}", options.usage(&format!("{} [options] <input>", argv0)));
     println!("    @path               Read newline separated options from `path`\n");
-    println!("More information available at https://doc.rust-lang.org/rustdoc/what-is-rustdoc.html")
+    println!(
+        "More information available at https://doc.rust-lang.org/{}/rustdoc/what-is-rustdoc.html",
+        doc_rust_lang_org_channel()
+    );
 }
 
 /// A result type used by several functions under `main()`.
@@ -645,14 +656,13 @@ fn run_renderer<'tcx, T: formats::FormatRenderer<'tcx>>(
     krate: clean::Crate,
     renderopts: config::RenderOptions,
     cache: formats::cache::Cache,
-    diag: &rustc_errors::Handler,
-    edition: rustc_span::edition::Edition,
     tcx: TyCtxt<'tcx>,
 ) -> MainResult {
-    match formats::run_format::<T>(krate, renderopts, cache, &diag, edition, tcx) {
+    match formats::run_format::<T>(krate, renderopts, cache, tcx) {
         Ok(_) => Ok(()),
         Err(e) => {
-            let mut msg = diag.struct_err(&format!("couldn't generate documentation: {}", e.error));
+            let mut msg =
+                tcx.sess.struct_err(&format!("couldn't generate documentation: {}", e.error));
             let file = e.file.display().to_string();
             if file.is_empty() {
                 msg.emit()
@@ -681,7 +691,6 @@ fn main_options(options: config::Options) -> MainResult {
 
     // need to move these items separately because we lose them by the time the closure is called,
     // but we can't create the Handler ahead of time because it's not Send
-    let diag_opts = (options.error_format, options.edition, options.debugging_opts.clone());
     let show_coverage = options.show_coverage;
     let run_check = options.run_check;
 
@@ -747,28 +756,12 @@ fn main_options(options: config::Options) -> MainResult {
                 }
 
                 info!("going to format");
-                let (error_format, edition, debugging_options) = diag_opts;
-                let diag = core::new_handler(error_format, None, &debugging_options);
                 match output_format {
                     config::OutputFormat::Html => sess.time("render_html", || {
-                        run_renderer::<html::render::Context<'_>>(
-                            krate,
-                            render_opts,
-                            cache,
-                            &diag,
-                            edition,
-                            tcx,
-                        )
+                        run_renderer::<html::render::Context<'_>>(krate, render_opts, cache, tcx)
                     }),
                     config::OutputFormat::Json => sess.time("render_json", || {
-                        run_renderer::<json::JsonRenderer<'_>>(
-                            krate,
-                            render_opts,
-                            cache,
-                            &diag,
-                            edition,
-                            tcx,
-                        )
+                        run_renderer::<json::JsonRenderer<'_>>(krate, render_opts, cache, tcx)
                     }),
                 }
             })

@@ -18,7 +18,7 @@ use rustc_serialize::json;
 
 use crate::parse::CrateConfig;
 use rustc_feature::UnstableFeatures;
-use rustc_span::edition::{Edition, DEFAULT_EDITION, EDITION_NAME_LIST};
+use rustc_span::edition::{Edition, DEFAULT_EDITION, EDITION_NAME_LIST, LATEST_STABLE_EDITION};
 use rustc_span::source_map::{FileName, FilePathMapping};
 use rustc_span::symbol::{sym, Symbol};
 use rustc_span::SourceFileHashAlgorithm;
@@ -75,19 +75,21 @@ impl_stable_hash_via_hash!(OptLevel);
 
 /// This is what the `LtoCli` values get mapped to after resolving defaults and
 /// and taking other command line options into account.
+///
+/// Note that linker plugin-based LTO is a different mechanism entirely.
 #[derive(Clone, PartialEq)]
 pub enum Lto {
-    /// Don't do any LTO whatsoever
+    /// Don't do any LTO whatsoever.
     No,
 
-    /// Do a full crate graph LTO with ThinLTO
+    /// Do a full-crate-graph (inter-crate) LTO with ThinLTO.
     Thin,
 
-    /// Do a local graph LTO with ThinLTO (only relevant for multiple codegen
-    /// units).
+    /// Do a local ThinLTO (intra-crate, over the CodeGen Units of the local crate only). This is
+    /// only relevant if multiple CGUs are used.
     ThinLocal,
 
-    /// Do a full crate graph LTO with "fat" LTO
+    /// Do a full-crate-graph (inter-crate) LTO with "fat" LTO.
     Fat,
 }
 
@@ -154,7 +156,7 @@ pub enum InstrumentCoverage {
     Off,
 }
 
-#[derive(Clone, PartialEq, Hash)]
+#[derive(Clone, PartialEq, Hash, Debug)]
 pub enum LinkerPluginLto {
     LinkerPlugin(PathBuf),
     LinkerPluginAuto,
@@ -170,7 +172,7 @@ impl LinkerPluginLto {
     }
 }
 
-#[derive(Clone, PartialEq, Hash)]
+#[derive(Clone, PartialEq, Hash, Debug)]
 pub enum SwitchWithOptPath {
     Enabled(Option<PathBuf>),
     Disabled,
@@ -700,6 +702,7 @@ impl Default for Options {
             cli_forced_codegen_units: None,
             cli_forced_thinlto_off: false,
             remap_path_prefix: Vec::new(),
+            real_rust_source_base_dir: None,
             edition: DEFAULT_EDITION,
             json_artifact_notifications: false,
             json_unused_externs: false,
@@ -776,7 +779,7 @@ pub enum CrateType {
 
 impl_stable_hash_via_hash!(CrateType);
 
-#[derive(Clone, Hash)]
+#[derive(Clone, Hash, Debug, PartialEq, Eq)]
 pub enum Passes {
     Some(Vec<String>),
     All,
@@ -795,7 +798,7 @@ pub const fn default_lib_output() -> CrateType {
     CrateType::Rlib
 }
 
-pub fn default_configuration(sess: &Session) -> CrateConfig {
+fn default_configuration(sess: &Session) -> CrateConfig {
     let end = &sess.target.endian;
     let arch = &sess.target.arch;
     let wordsz = sess.target.pointer_width.to_string();
@@ -822,9 +825,6 @@ pub fn default_configuration(sess: &Session) -> CrateConfig {
         }
     }
     ret.insert((sym::target_arch, Some(Symbol::intern(arch))));
-    if sess.target.is_like_wasm {
-        ret.insert((sym::wasm, None));
-    }
     ret.insert((sym::target_endian, Some(Symbol::intern(end.as_str()))));
     ret.insert((sym::target_pointer_width, Some(Symbol::intern(&wordsz))));
     ret.insert((sym::target_env, Some(Symbol::intern(env))));
@@ -893,7 +893,7 @@ pub fn build_configuration(sess: &Session, mut user_cfg: CrateConfig) -> CrateCo
     user_cfg
 }
 
-pub fn build_target_config(opts: &Options, target_override: Option<Target>) -> Target {
+pub(super) fn build_target_config(opts: &Options, target_override: Option<Target>) -> Target {
     let target_result = target_override.map_or_else(|| Target::search(&opts.target_triple), Ok);
     let target = target_result.unwrap_or_else(|e| {
         early_error(
@@ -1323,13 +1323,16 @@ pub fn parse_crate_edition(matches: &getopts::Matches) -> Edition {
     };
 
     if !edition.is_stable() && !nightly_options::is_unstable_enabled(matches) {
-        early_error(
-            ErrorOutputType::default(),
-            &format!(
-                "edition {} is unstable and only available with -Z unstable-options.",
-                edition,
-            ),
-        )
+        let is_nightly = nightly_options::match_is_nightly_build(matches);
+        let msg = if !is_nightly {
+            format!(
+                "the crate requires edition {}, but the latest edition supported by this Rust version is {}",
+                edition, LATEST_STABLE_EDITION
+            )
+        } else {
+            format!("edition {} is unstable and only available with -Z unstable-options", edition)
+        };
+        early_error(ErrorOutputType::default(), &msg)
     }
 
     edition
@@ -1978,6 +1981,34 @@ pub fn build_session_options(matches: &getopts::Matches) -> Options {
         }
     }
 
+    // Try to find a directory containing the Rust `src`, for more details see
+    // the doc comment on the `real_rust_source_base_dir` field.
+    let tmp_buf;
+    let sysroot = match &sysroot_opt {
+        Some(s) => s,
+        None => {
+            tmp_buf = crate::filesearch::get_or_default_sysroot();
+            &tmp_buf
+        }
+    };
+    let real_rust_source_base_dir = {
+        // This is the location used by the `rust-src` `rustup` component.
+        let mut candidate = sysroot.join("lib/rustlib/src/rust");
+        if let Ok(metadata) = candidate.symlink_metadata() {
+            // Replace the symlink rustbuild creates, with its destination.
+            // We could try to use `fs::canonicalize` instead, but that might
+            // produce unnecessarily verbose path.
+            if metadata.file_type().is_symlink() {
+                if let Ok(symlink_dest) = std::fs::read_link(&candidate) {
+                    candidate = symlink_dest;
+                }
+            }
+        }
+
+        // Only use this directory if it has a file we can expect to always find.
+        if candidate.join("library/std/src/lib.rs").is_file() { Some(candidate) } else { None }
+    };
+
     Options {
         crate_types,
         optimize: opt_level,
@@ -2008,6 +2039,7 @@ pub fn build_session_options(matches: &getopts::Matches) -> Options {
         cli_forced_codegen_units: codegen_units,
         cli_forced_thinlto_off: disable_thinlto,
         remap_path_prefix,
+        real_rust_source_base_dir,
         edition,
         json_artifact_notifications,
         json_unused_externs,
@@ -2372,6 +2404,7 @@ crate mod dep_tracking {
 
     impl_dep_tracking_hash_for_sortable_vec_of!(String);
     impl_dep_tracking_hash_for_sortable_vec_of!(PathBuf);
+    impl_dep_tracking_hash_for_sortable_vec_of!((PathBuf, PathBuf));
     impl_dep_tracking_hash_for_sortable_vec_of!(CrateType);
     impl_dep_tracking_hash_for_sortable_vec_of!((String, lint::Level));
     impl_dep_tracking_hash_for_sortable_vec_of!((String, Option<String>, NativeLibKind));

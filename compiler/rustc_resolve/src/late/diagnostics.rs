@@ -456,12 +456,14 @@ impl<'a: 'ast, 'ast> LateResolutionVisitor<'a, '_, 'ast> {
             }
         }
 
+        let is_macro = base_span.from_expansion() && base_span.desugaring_kind().is_none();
         if !self.type_ascription_suggestion(&mut err, base_span) {
             let mut fallback = false;
             if let (
                 PathSource::Trait(AliasPossibility::Maybe),
                 Some(Res::Def(DefKind::Struct | DefKind::Enum | DefKind::Union, _)),
-            ) = (source, res)
+                false,
+            ) = (source, res, is_macro)
             {
                 if let Some(bounds @ [_, .., _]) = self.diagnostic_metadata.current_trait_object {
                     fallback = true;
@@ -928,7 +930,14 @@ impl<'a: 'ast, 'ast> LateResolutionVisitor<'a, '_, 'ast> {
                     let msg = "you might have meant to use `#![feature(trait_alias)]` instead of a \
                                `type` alias";
                     if let Some(span) = self.def_span(def_id) {
-                        err.span_help(span, msg);
+                        if let Ok(snip) = self.r.session.source_map().span_to_snippet(span) {
+                            // The span contains a type alias so we should be able to
+                            // replace `type` with `trait`.
+                            let snip = snip.replacen("type", "trait", 1);
+                            err.span_suggestion(span, msg, snip, Applicability::MaybeIncorrect);
+                        } else {
+                            err.span_help(span, msg);
+                        }
                     } else {
                         err.help(msg);
                     }

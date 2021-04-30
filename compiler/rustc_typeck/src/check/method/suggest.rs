@@ -987,66 +987,88 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
     ) {
         let mut alt_rcvr_sugg = false;
         if let SelfSource::MethodCall(rcvr) = source {
-            info!(?span, ?item_name, ?rcvr_ty, ?rcvr);
-            if let ty::Adt(..) = rcvr_ty.kind() {
-                // Try alternative arbitrary self types that could fulfill this call.
-                // FIXME: probe for all types that *could* be arbitrary self-types, not
-                // just this list.
-                for (rcvr_ty, post) in &[
-                    (rcvr_ty, ""),
-                    (self.tcx.mk_mut_ref(&ty::ReErased, rcvr_ty), "&mut "),
-                    (self.tcx.mk_imm_ref(&ty::ReErased, rcvr_ty), "&"),
+            debug!(?span, ?item_name, ?rcvr_ty, ?rcvr);
+            let skippable = [
+                self.tcx.lang_items().clone_trait(),
+                self.tcx.lang_items().deref_trait(),
+                self.tcx.lang_items().deref_mut_trait(),
+                self.tcx.lang_items().drop_trait(),
+            ];
+            // Try alternative arbitrary self types that could fulfill this call.
+            // FIXME: probe for all types that *could* be arbitrary self-types, not
+            // just this list.
+            for (rcvr_ty, post) in &[
+                (rcvr_ty, ""),
+                (self.tcx.mk_mut_ref(&ty::ReErased, rcvr_ty), "&mut "),
+                (self.tcx.mk_imm_ref(&ty::ReErased, rcvr_ty), "&"),
+            ] {
+                if let Ok(pick) = self.lookup_probe(
+                    span,
+                    item_name,
+                    rcvr_ty,
+                    rcvr,
+                    crate::check::method::probe::ProbeScope::AllTraits,
+                ) {
+                    // If the method is defined for the receiver we have, it likely wasn't `use`d.
+                    // We point at the method, but we just skip the rest of the check for arbitrary
+                    // self types and rely on the suggestion to `use` the trait from
+                    // `suggest_valid_traits`.
+                    let did = Some(pick.item.container.id());
+                    let skip = skippable.contains(&did);
+                    if pick.autoderefs == 0 && !skip {
+                        err.span_label(
+                            pick.item.ident.span,
+                            &format!("the method is available for `{}` here", rcvr_ty),
+                        );
+                    }
+                    break;
+                }
+                for (rcvr_ty, pre) in &[
+                    (self.tcx.mk_lang_item(rcvr_ty, LangItem::OwnedBox), "Box::new"),
+                    (self.tcx.mk_lang_item(rcvr_ty, LangItem::Pin), "Pin::new"),
+                    (self.tcx.mk_diagnostic_item(rcvr_ty, sym::Arc), "Arc::new"),
+                    (self.tcx.mk_diagnostic_item(rcvr_ty, sym::Rc), "Rc::new"),
                 ] {
-                    for (rcvr_ty, pre) in &[
-                        (self.tcx.mk_lang_item(rcvr_ty, LangItem::OwnedBox), "Box::new"),
-                        (self.tcx.mk_lang_item(rcvr_ty, LangItem::Pin), "Pin::new"),
-                        (self.tcx.mk_diagnostic_item(rcvr_ty, sym::Arc), "Arc::new"),
-                        (self.tcx.mk_diagnostic_item(rcvr_ty, sym::Rc), "Rc::new"),
-                    ] {
-                        if let Some(new_rcvr_t) = *rcvr_ty {
-                            if let Ok(pick) = self.lookup_probe(
-                                span,
-                                item_name,
-                                new_rcvr_t,
-                                rcvr,
-                                crate::check::method::probe::ProbeScope::AllTraits,
-                            ) {
-                                debug!("try_alt_rcvr: pick candidate {:?}", pick);
-                                // Make sure the method is defined for the *actual* receiver:
-                                // we don't want to treat `Box<Self>` as a receiver if
-                                // it only works because of an autoderef to `&self`
-                                if pick.autoderefs == 0
-                                    // We don't want to suggest a container type when the missing method is
-                                    // `.clone()`, otherwise we'd suggest `Arc::new(foo).clone()`, which is
-                                    // far from what the user really wants.
-                                    && Some(pick.item.container.id()) != self.tcx.lang_items().clone_trait()
-                                {
-                                    err.span_label(
-                                        pick.item.ident.span,
-                                        &format!(
-                                            "the method is available for `{}` here",
-                                            new_rcvr_t
-                                        ),
-                                    );
-                                    err.multipart_suggestion(
-                                        "consider wrapping the receiver expression with the \
-                                         appropriate type",
-                                        vec![
-                                            (rcvr.span.shrink_to_lo(), format!("{}({}", pre, post)),
-                                            (rcvr.span.shrink_to_hi(), ")".to_string()),
-                                        ],
-                                        Applicability::MaybeIncorrect,
-                                    );
-                                    // We don't care about the other suggestions.
-                                    alt_rcvr_sugg = true;
-                                }
+                    if let Some(new_rcvr_t) = *rcvr_ty {
+                        if let Ok(pick) = self.lookup_probe(
+                            span,
+                            item_name,
+                            new_rcvr_t,
+                            rcvr,
+                            crate::check::method::probe::ProbeScope::AllTraits,
+                        ) {
+                            debug!("try_alt_rcvr: pick candidate {:?}", pick);
+                            let did = Some(pick.item.container.id());
+                            // We don't want to suggest a container type when the missing
+                            // method is `.clone()` or `.deref()` otherwise we'd suggest
+                            // `Arc::new(foo).clone()`, which is far from what the user wants.
+                            let skip = skippable.contains(&did);
+                            // Make sure the method is defined for the *actual* receiver: we don't
+                            // want to treat `Box<Self>` as a receiver if it only works because of
+                            // an autoderef to `&self`
+                            if pick.autoderefs == 0 && !skip {
+                                err.span_label(
+                                    pick.item.ident.span,
+                                    &format!("the method is available for `{}` here", new_rcvr_t),
+                                );
+                                err.multipart_suggestion(
+                                    "consider wrapping the receiver expression with the \
+                                        appropriate type",
+                                    vec![
+                                        (rcvr.span.shrink_to_lo(), format!("{}({}", pre, post)),
+                                        (rcvr.span.shrink_to_hi(), ")".to_string()),
+                                    ],
+                                    Applicability::MaybeIncorrect,
+                                );
+                                // We don't care about the other suggestions.
+                                alt_rcvr_sugg = true;
                             }
                         }
                     }
                 }
             }
         }
-        if !alt_rcvr_sugg && self.suggest_valid_traits(err, valid_out_of_scope_traits) {
+        if self.suggest_valid_traits(err, valid_out_of_scope_traits) {
             return;
         }
 

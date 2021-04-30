@@ -158,7 +158,7 @@ enum ProbeResult {
 
 /// When adjusting a receiver we often want to do one of
 ///
-/// - Add a `&` (or `&mut`), converting the recevier from `T` to `&T` (or `&mut T`)
+/// - Add a `&` (or `&mut`), converting the receiver from `T` to `&T` (or `&mut T`)
 /// - If the receiver has type `*mut T`, convert it to `*const T`
 ///
 /// This type tells us which one to do.
@@ -1461,6 +1461,16 @@ impl<'a, 'tcx> ProbeContext<'a, 'tcx> {
                 }
 
                 TraitCandidate(trait_ref) => {
+                    if let Some(method_name) = self.method_name {
+                        // Some trait methods are excluded for arrays before 2021.
+                        // (`array.into_iter()` wants a slice iterator for compatibility.)
+                        if self_ty.is_array() && !method_name.span.rust_2021() {
+                            let trait_def = self.tcx.trait_def(trait_ref.def_id);
+                            if trait_def.skip_array_during_method_dispatch {
+                                return ProbeResult::NoMatch;
+                            }
+                        }
+                    }
                     let predicate = trait_ref.without_const().to_predicate(self.tcx);
                     let obligation = traits::Obligation::new(cause, self.param_env, predicate);
                     if !self.predicate_may_hold(&obligation) {
@@ -1768,7 +1778,9 @@ impl<'a, 'tcx> ProbeContext<'a, 'tcx> {
 
     /// Finds the method with the appropriate name (or return type, as the case may be). If
     /// `allow_similar_names` is set, find methods with close-matching names.
-    fn impl_or_trait_item(&self, def_id: DefId) -> Vec<ty::AssocItem> {
+    // The length of the returned iterator is nearly always 0 or 1 and this
+    // method is fairly hot.
+    fn impl_or_trait_item(&self, def_id: DefId) -> SmallVec<[ty::AssocItem; 1]> {
         if let Some(name) = self.method_name {
             if self.allow_similar_names {
                 let max_dist = max(name.as_str().len(), 3) / 3;
@@ -1784,7 +1796,7 @@ impl<'a, 'tcx> ProbeContext<'a, 'tcx> {
             } else {
                 self.fcx
                     .associated_item(def_id, name, Namespace::ValueNS)
-                    .map_or_else(Vec::new, |x| vec![x])
+                    .map_or_else(SmallVec::new, |x| SmallVec::from_buf([x]))
             }
         } else {
             self.tcx.associated_items(def_id).in_definition_order().copied().collect()
