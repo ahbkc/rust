@@ -1156,8 +1156,6 @@ function hideThemeButtonState() {
         var hideMethodDocs = getSettingValue("auto-hide-method-docs") === "true";
         var hideImplementors = getSettingValue("auto-collapse-implementors") !== "false";
         var hideLargeItemContents = getSettingValue("auto-hide-large-items") !== "false";
-        var hideTraitImplementations =
-            getSettingValue("auto-hide-trait-implementations") !== "false";
 
         var impl_list = document.getElementById("trait-implementations-list");
         if (impl_list !== null) {
@@ -1173,98 +1171,23 @@ function hideThemeButtonState() {
             });
         }
 
-        var func = function(e) {
-            var next = e.nextElementSibling;
-            if (next && hasClass(next, "item-info")) {
-              next = next.nextElementSibling;
-            }
-            if (!next) {
-                return;
-            }
-            if (hasClass(next, "docblock")) {
-                var newToggle = toggle.cloneNode(true);
-                insertAfter(newToggle, e.childNodes[e.childNodes.length - 1]);
-                if (hideMethodDocs === true && hasClass(e, "method") === true) {
-                    collapseDocs(newToggle, "hide");
+        if (hideMethodDocs === true) {
+            onEachLazy(document.getElementsByClassName("method"), function(e) {
+                var toggle = e.parentNode;
+                if (toggle) {
+                    toggle = toggle.parentNode;
                 }
-            }
-        };
+                if (toggle && toggle.tagName === "DETAILS") {
+                    toggle.open = false;
+                }
+            });
+        }
 
-        var funcImpl = function(e) {
-            var next = e.nextElementSibling;
-            if (next && hasClass(next, "item-info")) {
-                next = next.nextElementSibling;
-            }
-            if (next && hasClass(next, "docblock")) {
-                next = next.nextElementSibling;
-            }
-            if (!next) {
-                return;
-            }
-        };
-
-        onEachLazy(document.getElementsByClassName("method"), func);
-        onEachLazy(document.getElementsByClassName("associatedconstant"), func);
-        var impl_call = function() {};
         onEachLazy(document.getElementsByTagName("details"), function (e) {
             var showLargeItem = !hideLargeItemContents && hasClass(e, "type-contents-toggle");
             var showImplementor = !hideImplementors && hasClass(e, "implementors-toggle");
             if (showLargeItem || showImplementor) {
                 e.open = true;
-            }
-        });
-        if (hideMethodDocs === true) {
-            impl_call = function(e, newToggle) {
-                if (e.id.match(/^impl(?:-\d+)?$/) === null) {
-                    // Automatically minimize all non-inherent impls
-                    if (hasClass(e, "impl") === true) {
-                        collapseDocs(newToggle, "hide");
-                    }
-                }
-            };
-        }
-        var newToggle = document.createElement("a");
-        newToggle.href = "javascript:void(0)";
-        newToggle.className = "collapse-toggle hidden-default collapsed";
-        newToggle.innerHTML = "[<span class=\"inner\">" + labelForToggleButton(true) +
-                              "</span>] Show hidden undocumented items";
-        function toggleClicked() {
-            if (hasClass(this, "collapsed")) {
-                removeClass(this, "collapsed");
-                onEachLazy(this.parentNode.getElementsByClassName("hidden"), function(x) {
-                    if (hasClass(x, "content") === false) {
-                        removeClass(x, "hidden");
-                        addClass(x, "x");
-                    }
-                }, true);
-                this.innerHTML = "[<span class=\"inner\">" + labelForToggleButton(false) +
-                                 "</span>] Hide undocumented items";
-            } else {
-                addClass(this, "collapsed");
-                onEachLazy(this.parentNode.getElementsByClassName("x"), function(x) {
-                    if (hasClass(x, "content") === false) {
-                        addClass(x, "hidden");
-                        removeClass(x, "x");
-                    }
-                }, true);
-                this.innerHTML = "[<span class=\"inner\">" + labelForToggleButton(true) +
-                                 "</span>] Show hidden undocumented items";
-            }
-        }
-        onEachLazy(document.getElementsByClassName("impl-items"), function(e) {
-            onEachLazy(e.getElementsByClassName("associatedconstant"), func);
-            // We transform the DOM iterator into a vec of DOM elements to prevent performance
-            // issues on webkit browsers.
-            var hiddenElems = Array.prototype.slice.call(e.getElementsByClassName("hidden"));
-            var needToggle = hiddenElems.some(function(hiddenElem) {
-                return hasClass(hiddenElem, "content") === false &&
-                    hasClass(hiddenElem, "docblock") === false;
-            });
-            if (needToggle === true) {
-                var inner_toggle = newToggle.cloneNode(true);
-                inner_toggle.onclick = toggleClicked;
-                e.insertBefore(inner_toggle, e.firstChild);
-                impl_call(e.previousSibling, inner_toggle);
             }
         });
 
@@ -1490,27 +1413,42 @@ function hideThemeButtonState() {
     searchState.setup();
 }());
 
-function copy_path(but) {
-    var parent = but.parentElement;
-    var path = [];
+(function () {
+    var reset_button_timeout = null;
 
-    onEach(parent.childNodes, function(child) {
-        if (child.tagName === 'A') {
-            path.push(child.textContent);
+    window.copy_path = function(but) {
+        var parent = but.parentElement;
+        var path = [];
+
+        onEach(parent.childNodes, function(child) {
+            if (child.tagName === 'A') {
+                path.push(child.textContent);
+            }
+        });
+
+        var el = document.createElement('textarea');
+        el.value = 'use ' + path.join('::') + ';';
+        el.setAttribute('readonly', '');
+        // To not make it appear on the screen.
+        el.style.position = 'absolute';
+        el.style.left = '-9999px';
+
+        document.body.appendChild(el);
+        el.select();
+        document.execCommand('copy');
+        document.body.removeChild(el);
+
+        but.textContent = '✓';
+
+        if (reset_button_timeout !== null) {
+            window.clearTimeout(reset_button_timeout);
         }
-    });
 
-    var el = document.createElement('textarea');
-    el.value = 'use ' + path.join('::') + ';';
-    el.setAttribute('readonly', '');
-    // To not make it appear on the screen.
-    el.style.position = 'absolute';
-    el.style.left = '-9999px';
+        function reset_button() {
+            but.textContent = '⎘';
+            reset_button_timeout = null;
+        }
 
-    document.body.appendChild(el);
-    el.select();
-    document.execCommand('copy');
-    document.body.removeChild(el);
-
-    but.textContent = '✓';
-}
+        reset_button_timeout = window.setTimeout(reset_button, 1000);
+    };
+}());

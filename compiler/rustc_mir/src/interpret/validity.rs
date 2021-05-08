@@ -330,7 +330,7 @@ impl<'rt, 'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> ValidityVisitor<'rt, 'mir, '
                         vtable,
                         3 * self.ecx.tcx.data_layout.pointer_size, // drop, size, align
                         Some(self.ecx.tcx.data_layout.pointer_align.abi),
-                        CheckInAllocMsg::InboundsTest,
+                        CheckInAllocMsg::InboundsTest, // will anyway be replaced by validity message
                     ),
                     self.path,
                     err_ub!(DanglingIntPointer(..)) |
@@ -416,7 +416,7 @@ impl<'rt, 'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> ValidityVisitor<'rt, 'mir, '
                 place.ptr,
                 size,
                 Some(align),
-                CheckInAllocMsg::InboundsTest,
+                CheckInAllocMsg::InboundsTest, // will anyway be replaced by validity message
             ),
             self.path,
             err_ub!(AlignmentCheckFailed { required, has }) =>
@@ -427,7 +427,7 @@ impl<'rt, 'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> ValidityVisitor<'rt, 'mir, '
                     has.bytes()
                 },
             err_ub!(DanglingIntPointer(0, _)) =>
-                { "a NULL {}", kind },
+                { "a null {}", kind },
             err_ub!(DanglingIntPointer(i, _)) =>
                 { "a dangling {} (address 0x{:x} is unallocated)", kind, i },
             err_ub!(PointerOutOfBounds { .. }) =>
@@ -662,10 +662,10 @@ impl<'rt, 'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> ValidityVisitor<'rt, 'mir, '
         let bits = match value.to_bits_or_ptr(op.layout.size, self.ecx) {
             Err(ptr) => {
                 if lo == 1 && hi == max_hi {
-                    // Only NULL is the niche.  So make sure the ptr is NOT NULL.
+                    // Only null is the niche.  So make sure the ptr is NOT null.
                     if self.ecx.memory.ptr_may_be_null(ptr) {
                         throw_validation_failure!(self.path,
-                            { "a potentially NULL pointer" }
+                            { "a potentially null pointer" }
                             expected {
                                 "something that cannot possibly fail to be {}",
                                 wrapping_range_format(valid_range, max_hi)

@@ -940,13 +940,14 @@ impl Tester for Collector {
                 let report_unused_externs = |uext| {
                     unused_externs.lock().unwrap().push(uext);
                 };
+                let no_run = config.no_run || options.no_run;
                 let res = run_test(
                     &test,
                     &cratename,
                     line,
                     options,
                     config.should_panic,
-                    config.no_run,
+                    no_run,
                     config.test_harness,
                     runtool,
                     runtool_args,
@@ -1095,7 +1096,7 @@ impl<'a, 'hir, 'tcx> HirCollector<'a, 'hir, 'tcx> {
         let ast_attrs = self.tcx.hir().attrs(hir_id);
         let mut attrs = Attributes::from_ast(ast_attrs, None);
 
-        if let Some(ref cfg) = ast_attrs.cfg(self.sess.diagnostic()) {
+        if let Some(ref cfg) = ast_attrs.cfg(self.sess) {
             if !cfg.matches(&self.sess.parse_sess, Some(&self.sess.features_untracked())) {
                 return;
             }
