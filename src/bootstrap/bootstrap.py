@@ -1082,6 +1082,7 @@ class RustBuild(object):
 def bootstrap(help_triggered):
     """Configure, fetch, build and run the initial bootstrap"""
 
+    # 添加注释: 如果用户需要help, 请让他们知道必须先完成整个下载和构建过程, 然后才能打印出所有内容
     # If the user is asking for help, let them know that the whole download-and-build
     # process has to happen before anything is printed out.
     if help_triggered:

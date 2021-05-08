@@ -24,6 +24,9 @@ fn main() {
     {
         use std::os::raw::{c_int, c_void};
 
+        // 添加注释: 暂猜测以下声明的_F1, _F2, _F3等全局静态变量是提供给llvm使用
+        //          不明确以下声明的全局符号的用处
+
         #[used]
         static _F1: unsafe extern "C" fn(usize, usize) -> *mut c_void = jemalloc_sys::calloc;
         #[used]
@@ -54,5 +57,6 @@ fn main() {
     }
 
     rustc_driver::set_sigpipe_handler();
+    // 添加注释: 进入编译入口
     rustc_driver::main()
 }

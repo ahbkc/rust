@@ -217,10 +217,12 @@ pub fn create_compiler_and_run<R>(config: Config, f: impl FnOnce(&Compiler) -> R
 pub fn run_compiler<R: Send>(mut config: Config, f: impl FnOnce(&Compiler) -> R + Send) -> R {
     tracing::trace!("run_compiler");
     let stderr = config.stderr.take();
+    // 添加注释: 设置回调并使用全局变量在线程中运行
     util::setup_callbacks_and_run_in_thread_pool_with_globals(
         config.opts.edition,
         config.opts.debugging_opts.threads,
         &stderr,
+        // 添加注释: 创建编译并运行
         || create_compiler_and_run(config, f),
     )
 }

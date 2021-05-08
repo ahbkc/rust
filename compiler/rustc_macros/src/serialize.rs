@@ -40,6 +40,7 @@ fn decodable_body(
         panic!("cannot derive on union")
     }
     let ty_name = s.ast().ident.to_string();
+    // 添加注释: `s.variants()`表示获取变体, 如果是struct则variants数量为1, 如果是enum则数量为集合
     let decode_body = match s.variants() {
         [vi] => {
             let construct = vi.construct(|field, index| decode_field(field, index, true));

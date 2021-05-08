@@ -76,9 +76,11 @@ pub fn create_session(
     let codegen_backend = if let Some(make_codegen_backend) = make_codegen_backend {
         make_codegen_backend(&sopts)
     } else {
+        // 添加注释: 如果传入的`make_codegen_backend`为空, 则调用`get_codegen_backend`去获取
         get_codegen_backend(&sopts)
     };
 
+    // 添加注释: 据证明`target_override`是在init()之前调用的, 所以okay
     // target_override is documented to be called before init(), so this is okay
     let target_override = codegen_backend.target_override(&sopts);
 
@@ -390,6 +392,7 @@ fn sysroot_candidates() -> Vec<PathBuf> {
     }
 }
 
+// 添加注释: 获取内置的代码生成后端
 pub fn get_builtin_codegen_backend(
     maybe_sysroot: &Option<PathBuf>,
     backend_name: &str,

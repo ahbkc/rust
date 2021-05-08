@@ -179,7 +179,10 @@ impl<'a, 'b> RunCompiler<'a, 'b> {
         )
     }
 }
+
+// 添加注释: 解析args并运行编译器. 这是rustc的主要入口点
 // Parse args and run the compiler. This is the primary entry point for rustc.
+// FileLoader提供了一种从文件系统以外的源中加载文件的方法
 // The FileLoader provides a way to load files from sources other than the file system.
 fn run_compiler(
     at_args: &[String],
@@ -190,6 +193,7 @@ fn run_compiler(
         Box<dyn FnOnce(&config::Options) -> Box<dyn CodegenBackend> + Send>,
     >,
 ) -> interface::Result<()> {
+    // 添加注释: 展开所有命令行参数
     let args = args::arg_expand_all(at_args);
 
     let diagnostic_output = emitter.map_or(DiagnosticOutput::Default, DiagnosticOutput::Raw);
@@ -201,11 +205,13 @@ fn run_compiler(
     let sopts = config::build_session_options(&matches);
     let cfg = interface::parse_cfgspecs(matches.opt_strs("cfg"));
 
+    // 添加注释: 我们将`make_codegen_backend`包装在另一个Option中, 以便在需要时, `dummy_config`可以拥有所有权
     // We wrap `make_codegen_backend` in another `Option` such that `dummy_config` can take
     // ownership of it when necessary, while also allowing the non-dummy config to take ownership
     // when `dummy_config` is not used.
     let mut make_codegen_backend = Some(make_codegen_backend);
 
+    // 添加注释: 定义局部闭包函数, 用于构建interface::Config
     let mut dummy_config = |sopts, cfg, diagnostic_output| {
         let mut config = interface::Config {
             opts: sopts,
@@ -233,6 +239,7 @@ fn run_compiler(
         return Ok(());
     }
 
+    // 添加注释: 获取输出目录和输出文件名
     let (odir, ofile) = make_output(&matches);
     let (input, input_file_path, input_err) = match make_input(&matches.free) {
         Some(v) => v,
@@ -282,6 +289,7 @@ fn run_compiler(
         },
     };
 
+    // 添加注释: 如果输入错误, 则将会立即停止编译
     if let Some(err) = input_err {
         // Immediately stop compilation if there was an issue reading
         // the input (for example if the input stream is not UTF-8).
@@ -313,6 +321,7 @@ fn run_compiler(
 
     interface::run_compiler(config, |compiler| {
         let sess = compiler.session();
+        // 添加注释: `RustcDefaultCalls::print_crate_info`将会根据参数选项打印对应信息
         let should_stop = RustcDefaultCalls::print_crate_info(
             &***compiler.codegen_backend(),
             sess,
@@ -321,6 +330,7 @@ fn run_compiler(
             compiler.output_file(),
         )
         .and_then(|| {
+            // 添加注释: `RustcDefaultCalls::list_metadata`将会根据参数选项打印对应metadata
             RustcDefaultCalls::list_metadata(
                 sess,
                 &*compiler.codegen_backend().metadata_loader(),
@@ -328,12 +338,14 @@ fn run_compiler(
                 compiler.input(),
             )
         })
+            // 添加注释: 如果参数中输入了只进行`链接`选项
         .and_then(|| RustcDefaultCalls::try_process_rlink(sess, compiler));
 
         if should_stop == Compilation::Stop {
             return sess.compile_status();
         }
 
+        // 添加注释: `enter`进入
         let linker = compiler.enter(|queries| {
             let early_exit = || sess.compile_status().map(|_| None);
             queries.parse()?;
@@ -489,6 +501,7 @@ fn make_output(matches: &getopts::Matches) -> (Option<PathBuf>, Option<PathBuf>)
     (odir, ofile)
 }
 
+// 添加注释: 提取输入中的字符串或文件以及可选路径
 // Extract input (string or file and optional path) from matches.
 fn make_input(free_matches: &[String]) -> Option<(Input, Option<PathBuf>, Option<io::Error>)> {
     if free_matches.len() == 1 {
@@ -1318,6 +1331,7 @@ pub fn main() -> ! {
     let start_rss = get_resident_set_size();
     init_rustc_env_logger();
     let mut callbacks = TimePassesCallbacks::default();
+    // 添加注释: 安装panic hook
     install_ice_hook();
     let exit_code = catch_with_exit_code(|| {
         let args = env::args_os()
@@ -1331,6 +1345,7 @@ pub fn main() -> ! {
                 })
             })
             .collect::<Vec<_>>();
+        // 添加注释: 开始编译
         RunCompiler::new(&args, &mut callbacks).run()
     });
 

@@ -147,7 +147,7 @@ pub struct CrateInfo {
     pub missing_lang_items: FxHashMap<CrateNum, Vec<LangItem>>,
     pub dependency_formats: Lrc<Dependencies>,
 }
-
+// 添加注释: Encodable, Decodable是在rustc_macros模块中实现的过程宏
 #[derive(Encodable, Decodable)]
 pub struct CodegenResults {
     pub crate_name: Symbol,
