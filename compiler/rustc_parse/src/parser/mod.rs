@@ -522,27 +522,27 @@ impl<'a> Parser<'a> {
         self.parse_ident_common(true)
     }
 
-    fn parse_ident_common(&mut self, recover: bool) -> PResult<'a, Ident> {
-        match self.token.ident() {
-            Some((ident, is_raw)) => {
-                if !is_raw && ident.is_reserved() {
-                    let mut err = self.expected_ident_found();
-                    if recover {
-                        err.emit();
-                    } else {
-                        return Err(err);
-                    }
-                }
-                self.bump();
-                Ok(ident)
+    fn ident_or_err(&mut self) -> PResult<'a, (Ident, /* is_raw */ bool)> {
+        self.token.ident().ok_or_else(|| match self.prev_token.kind {
+            TokenKind::DocComment(..) => {
+                self.span_err(self.prev_token.span, Error::UselessDocComment)
             }
-            _ => Err(match self.prev_token.kind {
-                TokenKind::DocComment(..) => {
-                    self.span_fatal_err(self.prev_token.span, Error::UselessDocComment)
-                }
-                _ => self.expected_ident_found(),
-            }),
+            _ => self.expected_ident_found(),
+        })
+    }
+
+    fn parse_ident_common(&mut self, recover: bool) -> PResult<'a, Ident> {
+        let (ident, is_raw) = self.ident_or_err()?;
+        if !is_raw && ident.is_reserved() {
+            let mut err = self.expected_ident_found();
+            if recover {
+                err.emit();
+            } else {
+                return Err(err);
+            }
         }
+        self.bump();
+        Ok(ident)
     }
 
     /// Checks if the next token is `tok`, and returns `true` if so.
@@ -1077,7 +1077,7 @@ impl<'a> Parser<'a> {
                     let span = expr.span;
 
                     match &expr.kind {
-                        // Not gated to supporte things like `doc = $expr` that work on stable.
+                        // Not gated to support things like `doc = $expr` that work on stable.
                         _ if is_interpolated_expr => {}
                         ExprKind::Lit(lit) if lit.kind.is_unsuffixed() => {}
                         _ => self.sess.gated_spans.gate(sym::extended_key_value_attributes, span),

@@ -827,32 +827,31 @@ impl Step for RustdocGUI {
             }
 
             let out_dir = builder.test_out(self.target).join("rustdoc-gui");
-            let mut command = builder.rustdoc_cmd(self.compiler);
-            command.arg("src/test/rustdoc-gui/lib.rs").arg("-o").arg(&out_dir);
-            builder.run(&mut command);
 
-            let mut tests = Vec::new();
-            for file in fs::read_dir("src/test/rustdoc-gui").unwrap() {
-                let file = file.unwrap();
-                let file_path = file.path();
-                let file_name = file.file_name();
+            // We remove existing folder to be sure there won't be artifacts remaining.
+            let _ = fs::remove_dir_all(&out_dir);
 
-                if !file_name.to_str().unwrap().ends_with(".goml") {
-                    continue;
+            // We generate docs for the libraries present in the rustdoc-gui's src folder.
+            let libs_dir = builder.build.src.join("src/test/rustdoc-gui/src");
+            for entry in libs_dir.read_dir().expect("read_dir call failed") {
+                let entry = entry.expect("invalid entry");
+                let path = entry.path();
+                if path.extension().map(|e| e == "rs").unwrap_or(false) {
+                    let mut command = builder.rustdoc_cmd(self.compiler);
+                    command.arg(path).arg("-o").arg(&out_dir);
+                    builder.run(&mut command);
                 }
-                tests.push(file_path);
             }
-            tests.sort_unstable();
-            for test in tests {
-                let mut command = Command::new(&nodejs);
-                command
-                    .arg("src/tools/rustdoc-gui/tester.js")
-                    .arg("--doc-folder")
-                    .arg(out_dir.join("test_docs"))
-                    .arg("--test-file")
-                    .arg(test);
-                builder.run(&mut command);
-            }
+
+            // We now run GUI tests.
+            let mut command = Command::new(&nodejs);
+            command
+                .arg(builder.build.src.join("src/tools/rustdoc-gui/tester.js"))
+                .arg("--doc-folder")
+                .arg(out_dir)
+                .arg("--tests-folder")
+                .arg(builder.build.src.join("src/test/rustdoc-gui"));
+            builder.run(&mut command);
         } else {
             builder.info("No nodejs found, skipping \"src/test/rustdoc-gui\" tests");
         }
@@ -903,7 +902,7 @@ help: to skip test's attempt to check tidiness, pass `--exclude src/tools/tidy` 
                 );
                 std::process::exit(1);
             }
-            crate::format::format(&builder.build, !builder.config.cmd.bless());
+            crate::format::format(&builder.build, !builder.config.cmd.bless(), &[]);
         }
     }
 
