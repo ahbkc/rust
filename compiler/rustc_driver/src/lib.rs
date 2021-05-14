@@ -347,6 +347,7 @@ fn run_compiler(
 
         // 添加注释: `enter`进入
         let linker = compiler.enter(|queries| {
+            // 添加注释: 获取sess对应的编译状态
             let early_exit = || sess.compile_status().map(|_| None);
             queries.parse()?;
 
@@ -461,6 +462,7 @@ fn run_compiler(
             Ok(Some(linker))
         })?;
 
+        // 添加注释: 如果存在link则执行link
         if let Some(linker) = linker {
             let _timer = sess.timer("link");
             linker.link()?
@@ -1327,6 +1329,9 @@ pub fn init_env_logger(env: &str) {
 }
 
 pub fn main() -> ! {
+    // FIXME
+    let f = fs::write("C:\\Users\\ahbkc\\Desktop\\hello.txt", "hhhhh");
+    if let Ok(_f) = f {}
     let start_time = Instant::now();
     let start_rss = get_resident_set_size();
     init_rustc_env_logger();

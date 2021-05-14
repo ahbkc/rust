@@ -129,6 +129,7 @@ impl<'tcx> Queries<'tcx> {
 
     pub fn parse(&self) -> Result<&Query<ast::Crate>> {
         self.parse.compute(|| {
+            // 添加注释: 对输入信息进行处理
             passes::parse(self.session(), &self.compiler.input).map_err(|mut parse_error| {
                 parse_error.emit();
                 ErrorReported

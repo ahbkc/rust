@@ -61,6 +61,7 @@ pub fn add_configuration(
     }
 }
 
+// 添加注释: 创建`session`
 pub fn create_session(
     sopts: config::Options,
     cfg: FxHashSet<(String, Option<String>)>,
@@ -84,6 +85,7 @@ pub fn create_session(
     // target_override is documented to be called before init(), so this is okay
     let target_override = codegen_backend.target_override(&sopts);
 
+    // 添加注释: 构建`session`
     let mut sess = session::build_session(
         sopts,
         input_path,

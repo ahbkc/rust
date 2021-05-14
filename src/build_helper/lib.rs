@@ -30,6 +30,7 @@ macro_rules! t {
     };
 }
 
+// 添加注释: 读取环境变量并将其添加到依赖项
 /// Reads an environment variable and adds it to dependencies.
 /// Supposed to be used for all variables except those set for build scripts by cargo
 /// <https://doc.rust-lang.org/cargo/reference/environment-variables.html#environment-variables-cargo-sets-for-build-scripts>
@@ -38,6 +39,10 @@ pub fn tracked_env_var_os<K: AsRef<OsStr> + Display>(key: K) -> Option<OsString>
     env::var_os(key)
 }
 
+// 添加注释: 因为Cargo将编译器的dylib路径添加到我们的库搜索路径, 所以llvm-config可能会中断: 截止到写该文本时,
+// 编译器的dylib路径包含llvm共享库的副本, 这意味着当我们新构建的llvm-config时去加载它的相关llvm, 它实际上是
+// 加载编译器的llvm.
+// 特别是在构建第一个编译器时(即 stage 0), 这是一个问题, 因为编译器的llvm可能与我们要使用的llvm不同.
 // Because Cargo adds the compiler's dylib path to our library search path, llvm-config may
 // break: the dylib path for the compiler, as of this writing, contains a copy of the LLVM
 // shared library, which means that when our freshly built llvm-config goes to load it's
@@ -162,11 +167,13 @@ pub fn rerun_if_changed_anything_in_dir(dir: &Path) {
     }
 }
 
+// 添加注释: 返回`path`的最后修改时间, 如果不存在, 则返回零
 /// Returns the last-modified time for `path`, or zero if it doesn't exist.
 pub fn mtime(path: &Path) -> SystemTime {
     fs::metadata(path).and_then(|f| f.modified()).unwrap_or(UNIX_EPOCH)
 }
 
+// 添加注释: 如果使用`src`中的一个或多个文件来生成`dst`, 则如果`dst`是最新的, 则返回 true
 /// Returns `true` if `dst` is up to date given that the file or files in `src`
 /// are used to generate it.
 ///
@@ -198,6 +205,7 @@ fn dir_up_to_date(src: &Path, threshold: SystemTime) -> bool {
     })
 }
 
+// 添加注释: 打印字符信息后退出当前进程
 fn fail(s: &str) -> ! {
     println!("\n\n{}\n\n", s);
     std::process::exit(1);

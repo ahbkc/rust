@@ -56,6 +56,7 @@ macro_rules! panictry_buffer {
 }
 
 pub fn parse_crate_from_file<'a>(input: &Path, sess: &'a ParseSess) -> PResult<'a, ast::Crate> {
+    // 添加注释: 传入输入文件路径, ParseSess
     let mut parser = new_parser_from_file(sess, input, None);
     parser.parse_crate_mod()
 }
@@ -111,6 +112,8 @@ pub fn maybe_new_parser_from_source_str(
     maybe_source_file_to_parser(sess, sess.source_map().new_source_file(name, source))
 }
 
+// 添加注释: 创建一个新的解析器, 如果文件不存在, 则适当地处理错误,
+//          如果给出了span, 则将其用于错误作为问题的根源
 /// Creates a new parser, handling errors as appropriate if the file doesn't exist.
 /// If a span is given, that is used on an error as the source of the problem.
 pub fn new_parser_from_file<'a>(sess: &'a ParseSess, path: &Path, sp: Option<Span>) -> Parser<'a> {
@@ -141,6 +144,8 @@ fn maybe_source_file_to_parser(
 
 // Base abstractions
 
+// 添加注释: 给定一个会话, 一个路径和一个可选的span(用于错误报告), 将该路径添加到会话的source_map中, 并在无法
+//          读取文件时返回新的source_file或错误
 /// Given a session and a path and an optional span (for error reporting),
 /// add the path to the session's source_map and return the new source_file or
 /// error when a file can't be read.
@@ -159,6 +164,7 @@ fn try_file_to_source_file(
     })
 }
 
+// 添加注释: 给定一个sess和一个路径以及一个可选的span(用于错误报告), 将该路径添加到会话的`source_map`中并返回新的`source_file`
 /// Given a session and a path and an optional span (for error reporting),
 /// adds the path to the session's `source_map` and returns the new `source_file`.
 fn file_to_source_file(sess: &ParseSess, path: &Path, spanopt: Option<Span>) -> Lrc<SourceFile> {

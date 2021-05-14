@@ -169,6 +169,7 @@ pub struct Config {
 
 pub fn create_compiler_and_run<R>(config: Config, f: impl FnOnce(&Compiler) -> R) -> R {
     let registry = &config.registry;
+    // 添加注释: 查看`sess`和`codegen_backend`这两个变量是如何获取到的 ???
     let (mut sess, codegen_backend) = util::create_session(
         config.opts,
         config.crate_cfg,

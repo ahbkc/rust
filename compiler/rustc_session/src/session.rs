@@ -1255,6 +1255,7 @@ pub enum DiagnosticOutput {
     Raw(Box<dyn Write + Send>),
 }
 
+// 添加注释: 构建`session`
 pub fn build_session(
     sopts: config::Options,
     local_crate_source_file: Option<PathBuf>,
@@ -1282,27 +1283,36 @@ pub fn build_session(
         DiagnosticOutput::Raw(write) => Some(write),
     };
 
+    // 添加注释: 获取`target_cfg`
     let target_cfg = config::build_target_config(&sopts, target_override);
+    // 添加注释: 获取`host_triple`
     let host_triple = TargetTriple::from_triple(config::host_triple());
+    // 添加注释: 获取`host`
     let host = Target::search(&host_triple).unwrap_or_else(|e| {
         early_error(sopts.error_format, &format!("Error loading host specification: {}", e))
     });
-
+    // 添加注释: 构建`file_loader`
     let loader = file_loader.unwrap_or_else(|| Box::new(RealFileLoader));
+    // 添加注释: 获取`用于散列每个源文件内容的算法`
     let hash_kind = sopts.debugging_opts.src_hash_algorithm.unwrap_or_else(|| {
         if target_cfg.is_like_msvc {
+            // 添加注释: 如果是windows工具链则使用Sha1算法
             SourceFileHashAlgorithm::Sha1
         } else {
+            // 添加注释: 否则则使用Md5算法
             SourceFileHashAlgorithm::Md5
         }
     });
+    // 添加注释: 构建`SourceMap`类型变量
     let source_map = Lrc::new(SourceMap::with_file_loader_and_hash_kind(
         loader,
         sopts.file_path_mapping(),
         hash_kind,
     ));
+    // 添加注释: 获取`emitter`
     let emitter = default_emitter(&sopts, registry, source_map.clone(), write_dest);
 
+    // 添加注释: 通过`emitter`和`flags`构建Handler
     let span_diagnostic = rustc_errors::Handler::with_emitter_and_flags(
         emitter,
         sopts.debugging_opts.diagnostic_handler_flags(can_emit_warnings),
@@ -1329,6 +1339,7 @@ pub fn build_session(
         None
     };
 
+    // 添加注释: 通过`handler`和`source_map`构建`ParseSess`类型变量
     let mut parse_sess = ParseSess::with_span_handler(span_diagnostic, source_map);
     parse_sess.assume_incomplete_release = sopts.debugging_opts.assume_incomplete_release;
     let sysroot = match &sopts.maybe_sysroot {
@@ -1361,6 +1372,7 @@ pub fn build_session(
     let working_dir = env::current_dir().unwrap_or_else(|e| {
         parse_sess.span_diagnostic.fatal(&format!("Current directory is invalid: {}", e)).raise()
     });
+    // 添加注释: 获取工作目录`working_dir`
     let working_dir = file_path_mapping.map_prefix(working_dir);
 
     let cgu_reuse_tracker = if sopts.debugging_opts.query_dep_graph {
@@ -1381,9 +1393,11 @@ pub fn build_session(
         _ => CtfeBacktrace::Disabled,
     });
 
+    // 添加注释: 获取asm平台类型
     let asm_arch =
         if target_cfg.allow_asm { InlineAsmArch::from_str(&target_cfg.arch).ok() } else { None };
 
+    // 添加注释: 构建Session类型变量
     let sess = Session {
         target: target_cfg,
         host,
@@ -1431,14 +1445,21 @@ pub fn build_session(
         if_let_suggestions: Default::default(),
     };
 
+    // 添加注释: 验证具有可用会话的命令行参数
     validate_commandline_args_with_session_available(&sess);
 
     sess
 }
 
+// 添加注释: 如果已经有一个可用的session来验证命令行参数很有用, 则可以在此处进行
 // If it is useful to have a Session available already for validating a
 // commandline argument, you can do so here.
 fn validate_commandline_args_with_session_available(sess: &Session) {
+    // 添加注释: 由于我们不知道rlib中的代码是静态链接还是动态链接到下游, 因此rustc生成`__imp_`
+    // 符号, 以帮助Windows上的链接器解决这一知识不足(#27438). 不幸的是, 当它们在ThinLTO期间
+    // 尝试合并位码时, 这些手动生成的符号会使LLD感到困惑. 因此, 当编译LLD ThinLTO时, 我们不允许
+    // 在Windows上进行动态链接. 这样, 在这种情况下, 我们可以有效地不生成dllimpor属性和__imp__符号.
+
     // Since we don't know if code in an rlib will be linked to statically or
     // dynamically downstream, rustc generates `__imp_` symbols that help linkers
     // on Windows deal with this lack of knowledge (#27438). Unfortunately,
@@ -1456,6 +1477,7 @@ fn validate_commandline_args_with_session_available(sess: &Session) {
         );
     }
 
+    // 添加注释: 确保确实存在任何给定的概要分析数据, 以便LLVM无法决定以静默方式跳过PGO
     // Make sure that any given profiling data actually exists so LLVM can't
     // decide to silently skip PGO.
     if let Some(ref path) = sess.opts.cg.profile_use {
@@ -1467,6 +1489,7 @@ fn validate_commandline_args_with_session_available(sess: &Session) {
         }
     }
 
+    // 添加注释: 如果目标需要, 则无法禁用展开表
     // Unwind tables cannot be disabled if the target requires them.
     if let Some(include_uwtables) = sess.opts.cg.force_unwind_tables {
         if sess.target.requires_uwtable && !include_uwtables {
@@ -1477,6 +1500,9 @@ fn validate_commandline_args_with_session_available(sess: &Session) {
         }
     }
 
+    // 添加注释: PGO在Windows上无法通过panic=unwind可靠地工作. 现在将两者结合起来是一个错误.
+    // 如果LLVM是使用断言构建的, 则它总是会遇到断言, 但是如果没有断言, 它有时不会崩溃, 并且可能
+    // 会生成损坏的二进制文件
     // PGO does not work reliably with panic=unwind on Windows. Let's make it
     // an error to combine the two for now. It always runs into an assertions
     // if LLVM is built with assertions, but without assertions it sometimes
@@ -1496,6 +1522,7 @@ fn validate_commandline_args_with_session_available(sess: &Session) {
         );
     }
 
+    // 添加注释: `Sanitizers`只能在我们知道具有有效消毒剂代码源的平台上使用
     // Sanitizers can only be used on platforms that we know have working sanitizer codegen.
     let supported_sanitizers = sess.target.options.supported_sanitizers;
     let unsupported_sanitizers = sess.opts.debugging_opts.sanitizer - supported_sanitizers;
@@ -1508,6 +1535,7 @@ fn validate_commandline_args_with_session_available(sess: &Session) {
             unsupported_sanitizers
         )),
     }
+    // 添加注释: 无法混合搭配`sanitizers`
     // Cannot mix and match sanitizers.
     let mut sanitizer_iter = sess.opts.debugging_opts.sanitizer.into_iter();
     if let (Some(first), Some(second)) = (sanitizer_iter.next(), sanitizer_iter.next()) {

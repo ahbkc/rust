@@ -212,7 +212,10 @@ impl SourceMap {
     }
 
     pub fn load_file(&self, path: &Path) -> io::Result<Lrc<SourceFile>> {
+        // 添加注释: 查看对应的file_loader具体注入的是什么类型???
+        // 添加注释: file_loader默认是`RealFileLoader`类型, 通过read_file读取到的是String类型的
         let src = self.file_loader.read_file(path)?;
+        // 添加注释: path.to_owned()方法实现了从&Path转变为PathBuf
         let filename = path.to_owned().into();
         Ok(self.new_source_file(filename, src))
     }
@@ -271,11 +274,14 @@ impl SourceMap {
         }
     }
 
+    // 添加注释: 创建一个新的`SourceFile`
+    // 添加注释: 如果`SourceFile`中已经存在一个具有相同ID的文件, 则该文件将原样返回
     /// Creates a new `SourceFile`.
     /// If a file already exists in the `SourceMap` with the same ID, that file is returned
     /// unmodified.
     pub fn new_source_file(&self, filename: FileName, src: String) -> Lrc<SourceFile> {
         self.try_new_source_file(filename, src).unwrap_or_else(|OffsetOverflowError| {
+            // 添加注释: 错误信息意思是: rustc不支持大于4GB的文件
             eprintln!("fatal error: rustc does not support files larger than 4GB");
             crate::fatal_error::FatalError.raise()
         })
@@ -286,6 +292,9 @@ impl SourceMap {
         mut filename: FileName,
         src: String,
     ) -> Result<Lrc<SourceFile>, OffsetOverflowError> {
+        // 添加注释: 该路径用于确定用于加载子模块和包含文件的目录, 因此该路径必须在重新映射之前.
+        // 添加注释: 请注意, 文件名可能不是有效的路径, 例如, 可能是`<>anon`等, 但这是可以的,
+        // 因为由`path.pop()`确定的目录为空, 因此将使用工作目录.
         // The path is used to determine the directory for loading submodules and
         // include files, so it must be before remapping.
         // Note that filename may not be a valid path, eg it may be `<anon>` etc,
@@ -301,6 +310,7 @@ impl SourceMap {
                     local_path: path_to_be_remapped,
                     virtual_name: _,
                 } => {
+                    // 添加注释: 当路径匹配到时则`was_remapped`将会被置为true, 映射路径也将会被新路径覆盖
                     let mapped = self.path_mapping.map_prefix(path_to_be_remapped.clone());
                     was_remapped = mapped.1;
                     *path_to_be_remapped = mapped.0;
@@ -1027,6 +1037,8 @@ impl FilePathMapping {
         FilePathMapping { mapping }
     }
 
+    // 添加注释: 应用映射定义的任何路径前缀替换.
+    // 返回值是重新映射的路径和一个布尔值, 指示该路径是否受映射影响
     /// Applies any path prefix substitution as defined by the mapping.
     /// The return value is the remapped path and a boolean indicating whether
     /// the path was affected by the mapping.
@@ -1035,7 +1047,13 @@ impl FilePathMapping {
         //       because entries specified later on the command line should
         //       take precedence.
         for &(ref from, ref to) in self.mapping.iter().rev() {
+            // 添加注释: `strip_prefix`用于判断传入参数`from`是否同path一样的路径开头,
+            // 如果是则返回Some, 否则返回None
+            // 例: let path = Path::new("/test/haha/foo.txt");
+            //     assert_eq!(path.strip_prefix("/test/"), Ok(Path::new("haha/foo.txt")));
+            //     assert!(path.strip_prefix("test").is_err());
             if let Ok(rest) = path.strip_prefix(from) {
+                // 添加注释: 使用`to`连接`rest`字符串
                 return (to.join(rest), true);
             }
         }

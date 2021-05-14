@@ -5,6 +5,8 @@ use std::process::Command;
 use build_helper::{output, tracked_env_var_os};
 
 fn detect_llvm_link() -> (&'static str, &'static str) {
+    // 添加注释: 强制使用我们想要的链接模式, 默认情况下首选静态模式, 但可能会被
+    // `configure --enable-llvm-link-shared`覆盖
     // Force the link mode we want, preferring static by default, but
     // possibly overridden by `configure --enable-llvm-link-shared`.
     if tracked_env_var_os("LLVM_LINK_SHARED").is_some() {

@@ -8,6 +8,9 @@ use std::mem;
 #[cfg(test)]
 mod tests;
 
+// 添加注释: 当散列最终影响符号名称等属性的内容时, 我们希望这些符号名称的计算独立于其它因素, 例如你要编译的体系结构.
+// 添加注释: 为此, 我们总是在散列之前将整数转换为little-endian格式, 并在需要时将体系结构相关的`isize`和`usize`
+// 类型扩展为64位
 /// When hashing something that ends up affecting properties like symbol names,
 /// we want these symbol names to be calculated independently of other factors
 /// like what architecture you're compiling *from*.
