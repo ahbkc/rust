@@ -13,6 +13,7 @@ use rustc_errors::{Diagnostic, TRACK_DIAGNOSTICS};
 use rustc_middle::ty::tls;
 use std::fmt;
 
+// 添加注释: 这是来自`rustc_ast`的回调, 因为它无法访问`rustc_middle`中的隐式状态
 /// This is a callback from `rustc_ast` as it cannot access the implicit state
 /// in `rustc_middle` otherwise.
 fn span_debug(span: rustc_span::Span, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -25,6 +26,8 @@ fn span_debug(span: rustc_span::Span, f: &mut fmt::Formatter<'_>) -> fmt::Result
     })
 }
 
+// 添加注释: 这是来自`rustc_ast`的回调, 因为否则它无法访问`rustc_middle`中的隐式状态.
+// 它用于在何时发出诊断消息并将其存储在当前查询中(如果有).
 /// This is a callback from `rustc_ast` as it cannot access the implicit state
 /// in `rustc_middle` otherwise. It is used to when diagnostic messages are
 /// emitted and stores them in the current query, if there is one.
@@ -39,6 +42,7 @@ fn track_diagnostic(diagnostic: &Diagnostic) {
     })
 }
 
+// 添加注释: 这是来自`rustc_hir`的回调, 因方否则无法访问`rustc_middle`中的隐式状态
 /// This is a callback from `rustc_hir` as it cannot access the implicit state
 /// in `rustc_middle` otherwise.
 fn def_id_debug(def_id: rustc_hir::def_id::DefId, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -52,6 +56,7 @@ fn def_id_debug(def_id: rustc_hir::def_id::DefId, f: &mut fmt::Formatter<'_>) ->
     write!(f, ")")
 }
 
+// 添加注释: 在先前要引用`TyCtxt`的板条箱中设置回调
 /// Sets up the callbacks in prior crates which we want to refer to the
 /// TyCtxt in.
 pub fn setup_callbacks() {

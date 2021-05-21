@@ -1423,6 +1423,7 @@ impl Target {
         }
     }
 
+    // 添加注释: 此目标可以对其执行原子操作的最小整数大小(以位为单位)
     /// Minimum integer size in bits that this target can perform atomic
     /// operations on.
     pub fn min_atomic_width(&self) -> u64 {

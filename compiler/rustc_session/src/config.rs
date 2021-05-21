@@ -874,6 +874,10 @@ fn default_configuration(sess: &Session) -> CrateConfig {
     ret
 }
 
+// 添加注释: 将crate的`cfg!`配置从`String`转换为`Symbol`
+
+// 添加注释: `rustc_interface::interface::Config`在编译器配置中接受此设置, 但是那时还没有设置符号交互器,
+//          因此我们必须稍后对其进行转换
 /// Converts the crate `cfg!` configuration from `String` to `Symbol`.
 /// `rustc_interface::interface::Config` accepts this in the compiler configuration,
 /// but the symbol interner is not yet set up then, so we must convert it later.
@@ -882,9 +886,11 @@ pub fn to_crate_config(cfg: FxHashSet<(String, Option<String>)>) -> CrateConfig 
 }
 
 pub fn build_configuration(sess: &Session, mut user_cfg: CrateConfig) -> CrateConfig {
+    // 添加注释: 将会话(命令行)请求的配置与一些默认配置和生成的配置项结合在一起
     // Combine the configuration requested by the session (command line) with
     // some default and generated configuration items.
     let default_cfg = default_configuration(sess);
+    // 添加注释: 如果用户想要运行`test`, 则添加`test`cfg
     // If the user wants a test runner, then add the test cfg.
     if sess.opts.test {
         user_cfg.insert((sym::test, None));

@@ -151,6 +151,10 @@ impl<'tcx> Queries<'tcx> {
                 &crate_name,
             );
 
+            // 添加注释: 计算依赖关系图(在后台). 我们希望尽早执行此操作, 以便在调用dep_graph()之前
+            // 为DepGraph提供最大的加载时间, 但也要等到`rustc_incremental::prepare_session_directory()`
+            // 调用之后再发生, 这会在`passes::register_plugins()`中发生.
+
             // Compute the dependency graph (in the background). We want to do
             // this as early as possible, to give the DepGraph maximum time to
             // load before dep_graph() is called, but it also can't happen
@@ -209,6 +213,7 @@ impl<'tcx> Queries<'tcx> {
                                 .open(self.session())
                         });
 
+                    // 添加注释: 构建深度依赖图
                     rustc_incremental::build_dep_graph(
                         self.session(),
                         prev_graph,
@@ -294,6 +299,7 @@ impl<'tcx> Queries<'tcx> {
                 // Hook for UI tests.
                 Self::check_for_rustc_errors_attr(tcx);
 
+                // 添加注释: `start_codegen`将开始运行代码生成后端, 此后可以废弃AST和`analysis`
                 Ok(passes::start_codegen(&***self.codegen_backend(), tcx, &*outputs.peek()))
             })
         })
@@ -426,8 +432,10 @@ impl Compiler {
     {
         let mut _timer = None;
         let queries = Queries::new(&self);
+        // 添加注释: 调用传入的闭包参数
         let ret = f(&queries);
 
+        // 添加注释: 如果尚未构建全局上下文, 则有意不对其进行计算, 因为这很可能意味着存在解析错误
         // NOTE: intentionally does not compute the global context if it hasn't been built yet,
         // since that likely means there was a parse error.
         if let Some(Ok(gcx)) = &mut *queries.global_ctxt.result.borrow_mut() {
@@ -447,6 +455,7 @@ impl Compiler {
                 .time("serialize_dep_graph", || gcx.enter(rustc_incremental::save_dep_graph));
         }
 
+        // 添加注释: 调用`timer`后将会开始详细分析
         _timer = Some(self.session().timer("free_global_ctxt"));
 
         ret

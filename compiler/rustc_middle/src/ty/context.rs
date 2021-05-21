@@ -1736,6 +1736,7 @@ pub mod tls {
         set_tlv(context as *const _ as usize, || f(&context))
     }
 
+    // 添加注释: 允许在封闭的情况下访问当前的`ImplicitCtxt`
     /// Allows access to the current `ImplicitCtxt` in a closure if one is available.
     #[inline]
     pub fn with_context_opt<F, R>(f: F) -> R
@@ -1791,6 +1792,8 @@ pub mod tls {
         with_context(|context| f(context.tcx))
     }
 
+    // 添加注释: 允许访问当前`ImplicitCtxt`中的`TyCtxt`
+    // 如果没有`ImplicitCtxt`可用, 则关闭传递为None
     /// Allows access to the `TyCtxt` in the current `ImplicitCtxt`.
     /// The closure is passed None if there is no `ImplicitCtxt` available.
     #[inline]

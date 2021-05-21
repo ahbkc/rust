@@ -301,6 +301,7 @@ impl Session {
         }
     }
 
+    // 添加注释: 最后一路调用以完成诊断打印
     /// Invoked all the way at the end to finish off diagnostics printing.
     pub fn finish_diagnostics(&self, registry: &Registry) {
         self.check_miri_unleashed_features();
@@ -744,9 +745,11 @@ impl Session {
             .unwrap_or(self.opts.debug_assertions)
     }
 
+    // 添加注释: 检查此编译会话和crate类型是否使用静态crt
     /// Check whether this compile session and crate type use static crt.
     pub fn crt_static(&self, crate_type: Option<CrateType>) -> bool {
         if !self.target.crt_static_respected {
+            // 添加注释: 如果目标不选择接受`crt-static`支持, 请使用其默认值
             // If the target does not opt in to crt-static support, use its default.
             return self.target.crt_static_default;
         }
@@ -761,6 +764,9 @@ impl Session {
             || crate_type == None && self.opts.crate_types.contains(&CrateType::ProcMacro)
         {
             // FIXME: When crate_type is not available,
+
+            // 添加注释: 我们使用编译器选项来确定crate_type
+            // 添加注释: 我们无法在此处检查`#![crate_type = "proc-macro"]`
             // we use compiler options to determine the crate_type.
             // We can't check `#![crate_type = "proc-macro"]` here.
             false

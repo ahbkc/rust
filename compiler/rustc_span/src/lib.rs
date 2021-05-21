@@ -109,6 +109,8 @@ pub fn with_default_session_globals<R>(f: impl FnOnce() -> R) -> R {
     with_session_globals(edition::DEFAULT_EDITION, f)
 }
 
+// 添加注释: 如果它变成非线程本地的, 则需要更新`decode_syntax_context`和`decode_expn_id`以处理并发反序列化
+// `scoped_thread_local!`是一个作用域本地线程存储
 // If this ever becomes non thread-local, `decode_syntax_context`
 // and `decode_expn_id` will need to be updated to handle concurrent
 // deserialization.
@@ -762,9 +764,13 @@ impl<D: Decoder> Decodable<D> for Span {
     }
 }
 
+// 添加注释: 调用提供的闭包, 使用提供的`SourceMap`格式化在闭包执行期间调试打印的所有范围
 /// Calls the provided closure, using the provided `SourceMap` to format
 /// any spans that are debug-printed during the closure's execution.
 ///
+// 添加注释: 通常, 全局`TyCtxt`用于检索`SourceMap`(参见`rustc_interface::callbacks::span_debug1`).
+// 但是, 编译器的某些部分(例如 `rustc_parse`)可能会在`TyCtxt`可用之前调试`Span`的打印.
+// 在这种情况下, 我们将退回到为此函数提供的`SourceMap`. 如果那不可用, 我们将退回到打印原始的`Span`字段值
 /// Normally, the global `TyCtxt` is used to retrieve the `SourceMap`
 /// (see `rustc_interface::callbacks::span_debug1`). However, some parts
 /// of the compiler (e.g. `rustc_parse`) may debug-print `Span`s before

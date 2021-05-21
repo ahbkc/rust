@@ -57,6 +57,7 @@ pub fn add_configuration(
     cfg.extend(target_features.into_iter().map(|feat| (tf, Some(feat))));
 
     if sess.crt_static(None) {
+        // 如果编译会话和crate类型支持使用静态crt
         cfg.insert((tf, Some(sym::crt_dash_static)));
     }
 }
@@ -108,15 +109,19 @@ pub fn create_session(
 const STACK_SIZE: usize = 8 * 1024 * 1024;
 
 fn get_stack_size() -> Option<usize> {
+    // 添加注释: Hacks on hacks. 如果环境正在尝试覆盖堆栈大小
     // FIXME: Hacks on hacks. If the env is trying to override the stack size
+    // 添加注释: 然后*不要*显示设置它
     // then *don't* set it explicitly.
     env::var_os("RUST_MIN_STACK").is_none().then_some(STACK_SIZE)
 }
 
+// 添加注释: 就像`thread::Builder::spawn`之后是`join`一样, 但是避免了`'static`边界的需要
 /// Like a `thread::Builder::spawn` followed by a `join()`, but avoids the need
 /// for `'static` bounds.
 #[cfg(not(parallel_compiler))]
 pub fn scoped_thread<F: FnOnce() -> R + Send, R: Send>(cfg: thread::Builder, f: F) -> R {
+    // 添加注释: 定义Ptr结构体, 并为其实现`Send`和`Sync`
     struct Ptr(*mut ());
     unsafe impl Send for Ptr {}
     unsafe impl Sync for Ptr {}
@@ -126,6 +131,7 @@ pub fn scoped_thread<F: FnOnce() -> R + Send, R: Send>(cfg: thread::Builder, f: 
     let mut result = None;
     let result_ptr = Ptr(&mut result as *mut _ as *mut ());
 
+    // 添加注释: 使用Ptr包装后, 就没有了`'static`的限制
     let thread = cfg.spawn(move || {
         let run = unsafe { (*(run.0 as *mut Option<F>)).take().unwrap() };
         let result = unsafe { &mut *(result_ptr.0 as *mut Option<R>) };
@@ -145,21 +151,26 @@ pub fn setup_callbacks_and_run_in_thread_pool_with_globals<F: FnOnce() -> R + Se
     stderr: &Option<Arc<Mutex<Vec<u8>>>>,
     f: F,
 ) -> R {
+    // 添加注释: 根据指定名称创建线程
     let mut cfg = thread::Builder::new().name("rustc".to_string());
 
+    // 添加注释: 获取堆栈大小
     if let Some(size) = get_stack_size() {
         cfg = cfg.stack_size(size);
     }
 
+    // 添加注释: 设置回调
     crate::callbacks::setup_callbacks();
 
     let main_handler = move || {
         rustc_span::with_session_globals(edition, || {
+            // 添加注释: 设置线程本地输出捕获缓冲区并返回旧的缓冲区
             io::set_output_capture(stderr.clone());
             f()
         })
     };
 
+    // 添加注释: 省去了`'static`边界限定的线程执行
     scoped_thread(cfg, main_handler)
 }
 

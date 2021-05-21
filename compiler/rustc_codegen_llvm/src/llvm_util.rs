@@ -21,6 +21,7 @@ static INIT: Once = Once::new();
 
 pub(crate) fn init(sess: &Session) {
     unsafe {
+        // 添加注释: 在接触LLVM之前, 请确保已启用多线程
         // Before we touch LLVM, make sure that multithreading is enabled.
         INIT.call_once(|| {
             if llvm::LLVMStartMultithreaded() != 1 {
@@ -46,18 +47,23 @@ fn require_inited() {
 }
 
 unsafe fn configure_llvm(sess: &Session) {
+    // `sess.opts.cg.llvm_args`代表传递给LLVM的参数列表(以空格分隔)
+    // `sess.target`实现的Defer返回的类型是`TargetOptions`类型, `sess.target.llvm_args`指的是similar to the `-C llvm-args` codegen option.传递的参数
     let n_args = sess.opts.cg.llvm_args.len() + sess.target.llvm_args.len();
     let mut llvm_c_strs = Vec::with_capacity(n_args + 1);
     let mut llvm_args = Vec::with_capacity(n_args + 1);
 
+    // 添加注释: 安装Fatal处理
     llvm::LLVMRustInstallFatalErrorHandler();
 
     fn llvm_arg_to_arg_name(full_arg: &str) -> &str {
+        // 添加注释: 使用`=`或空格分隔字符串
         full_arg.trim().split(|c: char| c == '=' || c.is_whitespace()).next().unwrap_or("")
     }
 
     let cg_opts = sess.opts.cg.llvm_args.iter();
     let tg_opts = sess.target.llvm_args.iter();
+    // 连接两个集合
     let sess_args = cg_opts.chain(tg_opts);
 
     let user_specified_args: FxHashSet<_> =
@@ -113,13 +119,18 @@ unsafe fn configure_llvm(sess: &Session) {
             bug!("`-Z llvm-time-trace` requires `-Z no-parallel-llvm")
         }
 
+        // 添加注释: 时间跟踪探查器初始化
         llvm::LLVMTimeTraceProfilerInitialize();
     }
 
+    // 添加注释: 初始化`Passes`
     llvm::LLVMInitializePasses();
 
+    // 添加注释: 通过`cfg(llvm_component = "...")`初始化由构建脚本启用的目标
+    // 添加注释: 注意, 由于`cfg`, 该函数无法移至`rustc_codegen_llvm`
     rustc_llvm::initialize_available_targets();
 
+    // 添加注释: 初始化命令行选项, 不允许多次初始化
     llvm::LLVMRustSetLLVMOptions(llvm_args.len() as c_int, llvm_args.as_ptr());
 }
 

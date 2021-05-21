@@ -1006,6 +1006,7 @@ fn encode_and_write_metadata(
     (metadata, need_metadata_module)
 }
 
+// 添加注释: 将开始运行代码生成后端, 此后可以废弃AST和`analysis`
 /// Runs the codegen backend, after which the AST and analysis can
 /// be discarded.
 pub fn start_codegen<'tcx>(
@@ -1020,6 +1021,9 @@ pub fn start_codegen<'tcx>(
     let codegen = tcx.sess.time("codegen_crate", move || {
         codegen_backend.codegen_crate(tcx, metadata, need_metadata_module)
     });
+
+    // 添加注释: 不执行代码生成时不要运行这些测试断点. `Compiletest`首先尝试在检查模式下构建`构建失败`测试,
+    // 并期望在这种情况下它不会产生错误.
 
     // Don't run these test assertions when not doing codegen. Compiletest tries to build
     // build-fail tests in check mode first and expects it to not give an error in that case.

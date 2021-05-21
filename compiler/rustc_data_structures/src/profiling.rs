@@ -202,6 +202,8 @@ impl SelfProfilerRef {
         }
     }
 
+    // 添加注释: 开始分析详细的一般活动. 分析将继续进行, 直到从此调用返回的`VerboseTimingGuard`被丢弃为止.
+    // 除了记录量度事件之外, 如果使用-Ztime或-Ztime-passes调用编译器, 则`verbose`的通用活动还将向stdout打印定时条目
     /// Start profiling a verbose generic activity. Profiling continues until the
     /// VerboseTimingGuard returned from this call is dropped. In addition to recording
     /// a measureme event, "verbose" generic activities also print a timing entry to
@@ -237,6 +239,7 @@ impl SelfProfilerRef {
         VerboseTimingGuard::start(message, self.generic_activity_with_arg(event_label, event_arg))
     }
 
+    // 添加注释: 开始分析一般活动. 分析将继续进行, 直到从此调用返回的TimingGuard被丢弃为止
     /// Start profiling a generic activity. Profiling continues until the
     /// TimingGuard returned from this call is dropped.
     #[inline(always)]

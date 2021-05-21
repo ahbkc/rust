@@ -169,7 +169,7 @@ pub struct Config {
 
 pub fn create_compiler_and_run<R>(config: Config, f: impl FnOnce(&Compiler) -> R) -> R {
     let registry = &config.registry;
-    // 添加注释: 查看`sess`和`codegen_backend`这两个变量是如何获取到的 ???
+    // 添加注释: 调用`create_session`方法构建session和codegen_backend
     let (mut sess, codegen_backend) = util::create_session(
         config.opts,
         config.crate_cfg,
@@ -181,6 +181,7 @@ pub fn create_compiler_and_run<R>(config: Config, f: impl FnOnce(&Compiler) -> R
         registry.clone(),
     );
 
+    // 添加注释: `config.parse_sess_created`这是创建[ParseSess]时从驱动程序中调用的回调
     if let Some(parse_sess_created) = config.parse_sess_created {
         parse_sess_created(
             &mut Lrc::get_mut(&mut sess)
@@ -210,6 +211,7 @@ pub fn create_compiler_and_run<R>(config: Config, f: impl FnOnce(&Compiler) -> R
         };
 
         let prof = compiler.sess.prof.clone();
+        // 添加注释: `generic_activity`函数将开始一般活动. 分析将继续进行, 直到从此调用返回的TimingGuard被丢弃为止
         prof.generic_activity("drop_compiler").run(move || drop(compiler));
         r
     })

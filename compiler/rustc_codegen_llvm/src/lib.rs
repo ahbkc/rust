@@ -205,6 +205,7 @@ impl LlvmCodegenBackend {
 
 impl CodegenBackend for LlvmCodegenBackend {
     fn init(&self, sess: &Session) {
+        // 添加注释: 确保llvm已初始化
         llvm_util::init(sess); // Make sure llvm is inited
     }
 
@@ -261,6 +262,7 @@ impl CodegenBackend for LlvmCodegenBackend {
         attributes::provide_both(providers);
     }
 
+    // 添加注释: 代码生成`crate`
     fn codegen_crate<'tcx>(
         &self,
         tcx: TyCtxt<'tcx>,

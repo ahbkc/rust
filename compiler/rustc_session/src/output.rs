@@ -46,11 +46,15 @@ fn is_writeable(p: &Path) -> bool {
 }
 
 pub fn find_crate_name(sess: &Session, attrs: &[ast::Attribute], input: &Input) -> String {
+    // 添加注释: 一个用于验证的闭包
     let validate = |s: String, span: Option<Span>| {
         validate_crate_name(sess, &s, span);
         s
     };
 
+    // 添加注释: 100%的时间查看属性以确保将该属性标记为已使用. 但是, 执行完此操作后, 我们仍然会优先使用
+    // 命令行中的`--crate-name`优先于在`#[crate_name]`属性中找到的crate-name
+    // 如果我们找到两者, 则可以确保以后也相同
     // Look in attributes 100% of the time to make sure the attribute is marked
     // as used. After doing this, however, we still prioritize a crate name from
     // the command line over one found in the #[crate_name] attribute. If we
@@ -58,7 +62,9 @@ pub fn find_crate_name(sess: &Session, attrs: &[ast::Attribute], input: &Input) 
     let attr_crate_name =
         sess.find_by_name(attrs, sym::crate_name).and_then(|at| at.value_str().map(|s| (at, s)));
 
+    // 添加注释: 如果在命令行中输入了`--crate-name`参数
     if let Some(ref s) = sess.opts.crate_name {
+        // 添加注释: 判断`--crate-name`和`#[crate_name]`是否相等
         if let Some((attr, name)) = attr_crate_name {
             if name.as_str() != *s {
                 let msg = format!(
@@ -72,6 +78,7 @@ pub fn find_crate_name(sess: &Session, attrs: &[ast::Attribute], input: &Input) 
         return validate(s.clone(), None);
     }
 
+    // 添加注释: 如果从`attrs`中找到了attr_crate_name
     if let Some((attr, s)) = attr_crate_name {
         return validate(s.to_string(), Some(attr.span));
     }
@@ -93,6 +100,7 @@ pub fn find_crate_name(sess: &Session, attrs: &[ast::Attribute], input: &Input) 
     "rust_out".to_string()
 }
 
+// 添加注释: 验证`crate_name`
 pub fn validate_crate_name(sess: &Session, s: &str, sp: Option<Span>) {
     let mut err_count = 0;
     {
@@ -107,6 +115,9 @@ pub fn validate_crate_name(sess: &Session, s: &str, sp: Option<Span>) {
             say("crate name must not be empty");
         }
         for c in s.chars() {
+            // 添加注释: [`is_alphabetic()`]如果此char具有`Alphabetic`属性, 则返回true, 用于匹配字母
+            // 添加注释: [`is_numeric()`]如果此char具有数字的常规类别之一, 则返回true, 用于匹配数字
+            // 添加注释: 如果此`char`满足[`is_alphabetic()`] or [`is_numeric()`], 则返回true, 用于匹配字母和数字
             if c.is_alphanumeric() {
                 continue;
             }
@@ -118,6 +129,7 @@ pub fn validate_crate_name(sess: &Session, s: &str, sp: Option<Span>) {
     }
 
     if err_count > 0 {
+        // 添加注释: 当错误数量大于0, 则调用终止方法
         sess.abort_if_errors();
     }
 }
