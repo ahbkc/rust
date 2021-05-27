@@ -14,6 +14,7 @@ mod session_diagnostic;
 mod symbols;
 mod type_foldable;
 
+// 添加注释: 对应`rustc_queries!`宏
 #[proc_macro]
 pub fn rustc_queries(input: TokenStream) -> TokenStream {
     query::rustc_queries(input)

@@ -1,9 +1,14 @@
+// 添加注释: 每个`queries`都对应于提供者结构中的一个函数指针字段, 用于请求该类型的值, 以及对应于tcx:TyCtxt(和`tcx.at(span)`)
+// 上的方法, 用于在记忆和进行图形跟踪的方式, 将驱动程序创建的实际`Provides`包装起来(使用多个`rustc_*`crates)
 // Each of these queries corresponds to a function pointer field in the
 // `Providers` struct for requesting a value of that type, and a method
 // on `tcx: TyCtxt` (and `tcx.at(span)`) for doing that request in a way
 // which memoizes and does dep-graph tracking, wrapping around the actual
 // `Providers` that the driver creates (using several `rustc_*` crates).
 //
+// 添加注释: 每个查询的结果类型必须实现`Clone`, 并且还必须实现`ty::query::values::Value`,
+// 如果查询导致查询周期, 则生成适当的占位符(错误值). 标有`fatal_cycle`的查询不需要后一种实现,
+// 因为它们会在查询周期中引发致命错误.
 // The result type of each query must implement `Clone`, and additionally
 // `ty::query::values::Value`, which produces an appropriate placeholder
 // (error) value if the query resulted in a query cycle.
@@ -14,6 +19,11 @@ rustc_queries! {
         desc { "trigger a delay span bug" }
     }
 
+    // 添加注释: 代表整个`crate`(与top-level的`crate`模块不同).
+    // 如果调用`hir_crate`(例如, 通过调用`tcx.hir().krate()`间接), 我们将不得不假定任何
+    // 更改都意味着你需要重新编译.
+    // 这是因为使用`hir_crate`查询可以访问所有其它项. 为了避免这种命运, 请不要调用`tcx.hir().krate()`; 相反,
+    // 更喜欢像`tcx.visit_all_items_in_krate()`这样的包装器.
     /// Represents crate as a whole (as distinct from the top-level crate module).
     /// If you call `hir_crate` (e.g., indirectly by calling `tcx.hir().krate()`),
     /// we will have to assume that any change means that you need to be recompiled.
@@ -26,6 +36,7 @@ rustc_queries! {
         desc { "get the crate HIR" }
     }
 
+    // 添加注释: 索引的HIR, 可以通过`tcx.hir()`方便的访问.避免直接调用此查询.
     /// The indexed HIR. This can be conveniently accessed by `tcx.hir()`.
     /// Avoid calling this query directly.
     query index_hir(_: CrateNum) -> &'tcx crate::hir::IndexedHir<'tcx> {
@@ -34,8 +45,10 @@ rustc_queries! {
         desc { "index HIR" }
     }
 
+    // 添加注释: 模块中的项目
     /// The items in a module.
     ///
+    // 添加注释: 可以通过`tcx.hir().visit_item_likes_in_module`方便地访问. 避免直接调用此查询.
     /// This can be conveniently accessed by `tcx.hir().visit_item_likes_in_module`.
     /// Avoid calling this query directly.
     query hir_module_items(key: LocalDefId) -> &'tcx hir::ModuleItems {
@@ -43,8 +56,10 @@ rustc_queries! {
         desc { |tcx| "HIR module items in `{}`", tcx.def_path_str(key.to_def_id()) }
     }
 
+    // 添加注释: 为HIR所有者`key`授予对HIR节点的访问权限.
     /// Gives access to the HIR node for the HIR owner `key`.
     ///
+    // 添加注释: 这可以通过`tcx.hir()`上的方法方便地访问. 避免直接访问此查询
     /// This can be conveniently accessed by methods on `tcx.hir()`.
     /// Avoid calling this query directly.
     query hir_owner(key: LocalDefId) -> Option<&'tcx crate::hir::Owner<'tcx>> {
@@ -52,8 +67,11 @@ rustc_queries! {
         desc { |tcx| "HIR owner of `{}`", tcx.def_path_str(key.to_def_id()) }
     }
 
+
+    // 添加注释: 为HIR所有者`key`授予对HIR节点的你父级的访问权限.
     /// Gives access to the HIR node's parent for the HIR owner `key`.
     ///
+    // 添加注释: 这可以通过`tcx.hir()`上的方法方便地访问. 避免直接调用此查询
     /// This can be conveniently accessed by methods on `tcx.hir()`.
     /// Avoid calling this query directly.
     query hir_owner_parent(key: LocalDefId) -> hir::HirId {
@@ -61,6 +79,7 @@ rustc_queries! {
         desc { |tcx| "HIR parent of `{}`", tcx.def_path_str(key.to_def_id()) }
     }
 
+    // 添加注释: 允许访问HIR所有者`key`中的HIR节点和主体
     /// Gives access to the HIR nodes and bodies inside the HIR owner `key`.
     ///
     /// This can be conveniently accessed by methods on `tcx.hir()`.
@@ -70,6 +89,7 @@ rustc_queries! {
         desc { |tcx| "HIR owner items in `{}`", tcx.def_path_str(key.to_def_id()) }
     }
 
+    // 添加注释: 允许访问HIR所有者`key`中的HIR属性
     /// Gives access to the HIR attributes inside the HIR owner `key`.
     ///
     /// This can be conveniently accessed by methods on `tcx.hir()`.
@@ -79,6 +99,7 @@ rustc_queries! {
         desc { |tcx| "HIR owner attributes in `{}`", tcx.def_path_str(key.to_def_id()) }
     }
 
+    // 添加注释: 如果`key`是const参数, 则计算相应const参数的`DefId`, 否则返回None.
     /// Computes the `DefId` of the corresponding const parameter in case the `key` is a
     /// const argument and returns `None` otherwise.
     ///
@@ -90,35 +111,44 @@ rustc_queries! {
     /// //           ^ returns this `DefId`.
     ///
     /// fn bar() {
+    /// // 添加注释: 当为其他实体调用`opt_const_param_of`时, 将返回`None`
     /// // ^ While calling `opt_const_param_of` for other bodies returns `None`.
     /// }
     /// ```
+
+    // 添加注释: 看起来在磁盘上缓存此查询实际上使#74376中的性能稍有下降.
     // It looks like caching this query on disk actually slightly
     // worsened performance in #74376.
     //
+    // 添加注释: 一旦更广泛地使用const泛型, 我们可能只想考虑返回`Some`的缓存调用.
     // Once const generics are more prevalently used, we might want to
     // consider only caching calls returning `Some`.
     query opt_const_param_of(key: LocalDefId) -> Option<DefId> {
         desc { |tcx| "computing the optional const parameter of `{}`", tcx.def_path_str(key.to_def_id()) }
     }
 
+    // 添加注释: 给定const泛型参数的def_id, 可计算关联的默认const参数. 例如在N中调用的`fn example<const N: usize=3>`
+    // 将返回3
     /// Given the def_id of a const-generic parameter, computes the associated default const
     /// parameter. e.g. `fn example<const N: usize=3>` called on `N` would return `3`.
     query const_param_default(param: DefId) -> &'tcx ty::Const<'tcx> {
         desc { |tcx| "compute const default for a given parameter `{}`", tcx.def_path_str(param)  }
     }
 
+    // 添加注释: 记录每个项目的类型
     /// Records the type of every item.
     query type_of(key: DefId) -> Ty<'tcx> {
         desc { |tcx| "computing type of `{}`", tcx.def_path_str(key) }
         cache_on_disk_if { key.is_local() }
     }
 
+    // 添加注释: 运行分析通过在此`crate`
     query analysis(key: CrateNum) -> Result<(), ErrorReported> {
         eval_always
         desc { "running analysis passes on this crate" }
     }
 
+    // 添加注释: 从项目(trait/struct/enum/fn)的`DefId`映射到其关联的泛型
     /// Maps from the `DefId` of an item (trait/struct/enum/fn) to its
     /// associated generics.
     query generics_of(key: DefId) -> ty::Generics {
@@ -127,11 +157,17 @@ rustc_queries! {
         cache_on_disk_if { key.is_local() }
     }
 
+    // 添加注释: 从项目(trait/struct/enum/fn)的`DefId`映射到predicates(where-clauses),
+    // 这些`predicates`必须被证明是正确的才能引用它. 这几乎总是想要的`predicates query`.
     /// Maps from the `DefId` of an item (trait/struct/enum/fn) to the
     /// predicates (where-clauses) that must be proven true in order
     /// to reference it. This is almost always the "predicates query"
     /// that you want.
     ///
+    // 添加注释: `predicates_of`基于`predicates_defined_on`构建 --实际上,
+    // 除了`traits`的情况外, 它几乎总是与该查询相同. 对于`traits`, `predicates_of`包含了一个
+    // 额外的`Self::Trait<...>`predicates, 用户实际上并未编写. 这反映了一个事实, 即调用`trait`(例如, 通过`Default::default`)
+    // 必须提供实际实现`trait`的类型. (但是, 此额外predicate会妨碍某些检查, 这些检查仅可用于用户编写的实际在哪里子句(where-clauses))
     /// `predicates_of` builds on `predicates_defined_on` -- in fact,
     /// it is almost always the same as that query, except for the
     /// case of traits. For traits, `predicates_of` contains
@@ -147,6 +183,8 @@ rustc_queries! {
         cache_on_disk_if { key.is_local() }
     }
 
+    // 添加注释: 返回可用于`SelectionCandidate::ProjectionCandidate(_)`和`ProjectionTyCandidate::TraitDef`
+    // 的边界列表. 具体来说, 这是写在trait的类型定义上的边界, 或者是在`impl`关键字之后的边界
     /// Returns the list of bounds that can be used for
     /// `SelectionCandidate::ProjectionCandidate(_)` and
     /// `ProjectionTyCandidate::TraitDef`.
@@ -160,13 +198,16 @@ rustc_queries! {
     /// //   ^^^^^^^^^^^^^^^
     /// ```
     ///
+    // 添加注释: `key`是关联类型或不透明类型的`DefId`
     /// `key` is the `DefId` of the associated type or opaque type.
     ///
+    // 添加注释: 不包括来自父级的边界(例如, 具有嵌套的impl trait)
     /// Bounds from the parent (e.g. with nested impl trait) are not included.
     query explicit_item_bounds(key: DefId) -> &'tcx [(ty::Predicate<'tcx>, Span)] {
         desc { |tcx| "finding item bounds for `{}`", tcx.def_path_str(key) }
     }
 
+    // 添加注释: predicates的详尽版本, 来自`explicit_item_bounds`.
     /// Elaborated version of the predicates from `explicit_item_bounds`.
     ///
     /// For example:
@@ -186,6 +227,7 @@ rustc_queries! {
     /// ]
     /// ```
     ///
+    // 添加注释: 不包括来自父级的边界(例如, 具有嵌套的impl trait)
     /// Bounds from the parent (e.g. with nested impl trait) are not included.
     query item_bounds(key: DefId) -> &'tcx ty::List<ty::Predicate<'tcx>> {
         desc { |tcx| "elaborating item bounds for `{}`", tcx.def_path_str(key) }
@@ -195,10 +237,12 @@ rustc_queries! {
         desc { |tcx| "finding projection type inside predicates of `{}`", tcx.def_path_str(key.0) }
     }
 
+    // 添加注释: 查找链接`crate`的本机库
     query native_libraries(_: CrateNum) -> Lrc<Vec<NativeLib>> {
         desc { "looking up the native libraries of a linked crate" }
     }
 
+    // 添加注释: 计算此`crate`中项目的`lint`级别
     query lint_levels(_: CrateNum) -> LintLevelMap {
         storage(ArenaCacheSelector<'tcx>)
         eval_always
@@ -210,16 +254,20 @@ rustc_queries! {
         desc { |tcx| "parent module of `{}`", tcx.def_path_str(key.to_def_id()) }
     }
 
+    // 添加注释: 内部助手查询. 使用`tcx.expansion_that_defined`代替
     /// Internal helper query. Use `tcx.expansion_that_defined` instead
     query expn_that_defined(key: DefId) -> rustc_span::ExpnId {
         desc { |tcx| "expansion that defined `{}`", tcx.def_path_str(key) }
     }
 
+    // 添加注释: 检查`crate`是否为 is_panic_runtime
     query is_panic_runtime(_: CrateNum) -> bool {
         fatal_cycle
         desc { "checking if the crate is_panic_runtime" }
     }
 
+    // 添加注释: 这个`crate`中所有与MIR相关联的`DefId`的集合. 这包括所有主体所有者,
+    // 还包括诸如struct构建函数之类的东西
     /// Set of all the `DefId`s in this crate that have MIR associated with
     /// them. This includes all the body owners, but also things like struct
     /// constructors.
@@ -228,6 +276,8 @@ rustc_queries! {
         desc { "getting a list of all mir_keys" }
     }
 
+    // 添加注释: 将具有关联的`mir::Body`的DefId映射到MIR const检查通过的结果.
+    // 这是const最终值中一组限定词.
     /// Maps DefId's that have an associated `mir::Body` to the result
     /// of the MIR const-checking pass. This is the set of qualifs in
     /// the final value of a `const`.
@@ -244,12 +294,14 @@ rustc_queries! {
         }
     }
 
+    // 添加注释: 构建后立即获取给定`DefId`的MIR -- 这包括无法访问的代码.
     /// Fetch the MIR for a given `DefId` right after it's built - this includes
     /// unreachable code.
     query mir_built(key: ty::WithOptConstParam<LocalDefId>) -> &'tcx Steal<mir::Body<'tcx>> {
         desc { |tcx| "building MIR for `{}`", tcx.def_path_str(key.did.to_def_id()) }
     }
 
+    // 添加注释: 获取给定`DefId`的MIR, 直到准备好进行const限定为止.
     /// Fetch the MIR for a given `DefId` up till the point where it is
     /// ready for const qualification.
     ///
@@ -263,6 +315,7 @@ rustc_queries! {
         no_hash
     }
 
+    // 添加注释: 尝试构建给定常量的抽象表示.
     /// Try to build an abstract representation of the given constant.
     query mir_abstract_const(
         key: DefId
@@ -326,6 +379,7 @@ rustc_queries! {
         }
     }
 
+    // 添加注释: 我们的优化遍历运行后的MIR. 这是已准备好进行代码生成的MIR. 这也是目前唯一可以获取非本地MIR的查询.
     /// MIR after our optimization passes have run. This is MIR that is ready
     /// for codegen. This is also the only query that can fetch non-local MIR, at present.
     query optimized_mir(key: DefId) -> &'tcx mir::Body<'tcx> {
@@ -333,6 +387,7 @@ rustc_queries! {
         cache_on_disk_if { key.is_local() }
     }
 
+    // 添加注释: 在执行`InstrumentCoverage`MIR传递后(假设启用了-Zinstrument-coverage选项), 返回函数的覆盖率摘要信息.
     /// Returns coverage summary info for a function, after executing the `InstrumentCoverage`
     /// MIR pass (assuming the -Zinstrument-coverage option is enabled).
     query coverageinfo(key: DefId) -> mir::CoverageInfo {
@@ -341,6 +396,7 @@ rustc_queries! {
         cache_on_disk_if { key.is_local() }
     }
 
+    // 添加注释: 返回文件的名称, 该文件包含功能主体(如果有覆盖说明).
     /// Returns the name of the file that contains the function body, if instrumented for coverage.
     query covered_file_name(key: DefId) -> Option<Symbol> {
         desc {
@@ -351,6 +407,7 @@ rustc_queries! {
         cache_on_disk_if { key.is_local() }
     }
 
+    // 如果已在代码生成之前和添加到Coverage Map之前对函数过行了优化, 则返回已检测覆盖的函数的`CodeRegions`.
     /// Returns the `CodeRegions` for a function that has instrumented coverage, in case the
     /// function was optimized out before codegen, and before being added to the Coverage Map.
     query covered_code_regions(key: DefId) -> Vec<&'tcx mir::coverage::CodeRegion> {
@@ -362,6 +419,9 @@ rustc_queries! {
         cache_on_disk_if { key.is_local() }
     }
 
+    // 添加注释: `DefId`是包含的MIR主体的`DefId`. 推荐人没有自已的`DefId`. 此函数返回指定正文中的所有提升.
+    // 正文引用由`DefId`和`mir::Promoted`索引提升. 这是必要的, 因为内联后的身体可能是指向其它身体的提升. 在
+    // 这种情况下, 你仍然需要使用原始body的`DefId`.
     /// The `DefId` is the `DefId` of the containing MIR body. Promoteds do not have their own
     /// `DefId`. This function returns all promoteds in the specified body. The body references
     /// promoteds by the `DefId` and the `mir::Promoted` index. This is necessary, because
@@ -380,10 +440,16 @@ rustc_queries! {
         }
     }
 
+    // 添加注释: 从`ty`中擦除区域以产生新的类型. 通常只会使用`tcx.erase_regions(value)`,
+    // 但是它将此查询用作一种缓存.
     /// Erases regions from `ty` to yield a new type.
     /// Normally you would just use `tcx.erase_regions(value)`,
     /// however, which uses this query as a kind of cache.
     query erase_regions_ty(ty: Ty<'tcx>) -> Ty<'tcx> {
+        // 添加注释: 预计该查询没有输入 --结果, 它不是`replay`的理想选择, 因为它本质上是其
+        // 输入的纯函数(因此, 期望没有任何调用者会保持绿色** 仅来自这些查询). 将其设置为匿名
+        // 可避免对结果进行哈希处理, 这样可以节省一些时间.
+
         // This query is not expected to have input -- as a result, it
         // is not a good candidates for "replay" because it is essentially a
         // pure function of its input (and hence the expectation is that
@@ -394,11 +460,14 @@ rustc_queries! {
         desc { "erasing regions from `{:?}`", ty }
     }
 
+    // 添加注释: wasm导入的模块地图
     query wasm_import_module_map(_: CrateNum) -> FxHashMap<DefId, String> {
         storage(ArenaCacheSelector<'tcx>)
         desc { "wasm import module map" }
     }
 
+    // 添加注释: 从项目(trait/struct/enum/fn)的`DefId`映射到直接在其上定义的predicates(where-clauses).
+    // 这等于`explicit_predicates_of`predicates加上`inferred_outlives_of`predicates.
     /// Maps from the `DefId` of an item (trait/struct/enum/fn) to the
     /// predicates (where-clauses) directly defined on it. This is
     /// equal to the `explicit_predicates_of` predicates plus the
@@ -407,9 +476,11 @@ rustc_queries! {
         desc { |tcx| "computing predicates of `{}`", tcx.def_path_str(key) }
     }
 
+    // 添加注释: 返回看起来像predicate的所有内容, 这些predicate由用户明确地写在trait项目上.
     /// Returns everything that looks like a predicate written explicitly
     /// by the user on a trait item.
     ///
+    // 添加注释: trait是不寻常的, 因为关联类型的predicates会转换为该类型的边界以实现向后兼容:
     /// Traits are unusual, because predicates on associated types are
     /// converted into bounds on that type for backwards compatibility:
     ///

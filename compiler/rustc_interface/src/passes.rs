@@ -242,6 +242,7 @@ fn configure_and_expand_inner<'a>(
     tracing::trace!("configure_and_expand_inner");
     pre_expansion_lint(sess, lint_store, &krate, crate_name);
 
+    // 添加注释: 构建Resolver并注册内置宏
     let mut resolver = Resolver::new(sess, &krate, crate_name, metadata_loader, &resolver_arenas);
     rustc_builtin_macros::register_builtin_macros(&mut resolver);
 
@@ -712,6 +713,7 @@ pub fn prepare_outputs(
     Ok(outputs)
 }
 
+// 添加注释: 注册相关库
 pub static DEFAULT_QUERY_PROVIDERS: SyncLazy<Providers> = SyncLazy::new(|| {
     let providers = &mut Providers::default();
     providers.analysis = analysis;
@@ -1024,7 +1026,6 @@ pub fn start_codegen<'tcx>(
 
     // 添加注释: 不执行代码生成时不要运行这些测试断点. `Compiletest`首先尝试在检查模式下构建`构建失败`测试,
     // 并期望在这种情况下它不会产生错误.
-
     // Don't run these test assertions when not doing codegen. Compiletest tries to build
     // build-fail tests in check mode first and expects it to not give an error in that case.
     if tcx.sess.opts.output_types.should_codegen() {
@@ -1034,6 +1035,7 @@ pub fn start_codegen<'tcx>(
 
     info!("Post-codegen\n{:?}", tcx.debug_stats());
 
+    // 添加注释: 当命令行中指定输出类型MIR
     if tcx.sess.opts.output_types.contains_key(&OutputType::Mir) {
         if let Err(e) = mir::transform::dump_mir::emit_mir(tcx, outputs) {
             tcx.sess.err(&format!("could not emit MIR: {}", e));

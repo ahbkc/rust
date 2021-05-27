@@ -262,6 +262,7 @@ pub(crate) fn create_dump_file(
     )
 }
 
+// 添加注释: 为给定的MIR编写出易于阅读的文本表示形式
 /// Write out a human-readable textual representation for the given MIR.
 pub fn write_mir_pretty<'tcx>(
     tcx: TyCtxt<'tcx>,
@@ -290,11 +291,13 @@ pub fn write_mir_pretty<'tcx>(
             Ok(())
         };
 
+        // 添加注释: 对于`const fn`, 我们需要呈现优化的MIR和ctfe的MIR
         // For `const fn` we want to render both the optimized MIR and the MIR for ctfe.
         if tcx.is_const_fn_raw(def_id) {
             render_body(w, tcx.optimized_mir(def_id))?;
             writeln!(w)?;
             writeln!(w, "// MIR FOR CTFE")?;
+            // 添加注释: 不要使用`render_body`, 因为那样会再次渲染被提升的东西, 但是它们在mir_for_ctfe和optimized_mir之间共享
             // Do not use `render_body`, as that would render the promoteds again, but these
             // are shared between mir_for_ctfe and optimized_mir
             write_mir_fn(tcx, tcx.mir_for_ctfe(def_id), &mut |_, _| Ok(()), w)?;
@@ -1013,8 +1016,10 @@ fn write_user_type_annotations(
     Ok(())
 }
 
+// 添加注释: 导出mir定义ids
 pub fn dump_mir_def_ids(tcx: TyCtxt<'_>, single: Option<DefId>) -> Vec<DefId> {
     if let Some(i) = single {
+        // 添加注释: 如果single是Some的, 则构建集合中包含一个元素的集合
         vec![i]
     } else {
         tcx.mir_keys(LOCAL_CRATE).iter().map(|def_id| def_id.to_def_id()).collect()

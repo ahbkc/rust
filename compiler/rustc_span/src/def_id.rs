@@ -17,12 +17,14 @@ rustc_index::newtype_index! {
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum CrateNum {
+    // 添加注释: 当从`incr.` `comp.` `cache.`解码时, 我们用于tcx.rcache的特殊的CrateNum
     /// A special `CrateNum` that we use for the `tcx.rcache` when decoding from
     /// the incr. comp. cache.
     ReservedForIncrCompCache,
     Index(CrateId),
 }
 
+// 添加注释: 当前编译的板条箱中的项目定义在其`DefId`中将具有`CrateNum`, `LOCAL_CRATE`
 /// Item definitions in the currently-compiled crate would have the `CrateNum`
 /// `LOCAL_CRATE` in their `DefId`.
 pub const LOCAL_CRATE: CrateNum = CrateNum::Index(CrateId::from_u32(0));

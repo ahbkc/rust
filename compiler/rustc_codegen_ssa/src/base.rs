@@ -481,6 +481,7 @@ pub fn codegen_crate<B: ExtraBackendMethods>(
     metadata: EncodedMetadata,
     need_metadata_module: bool,
 ) -> OngoingCodegen<B> {
+    // 添加注释: 跳过`crate`条目, 仅以-Z no-codegen模式输出无数据
     // Skip crate items and just output metadata in -Z no-codegen mode.
     if tcx.sess.opts.debugging_opts.no_codegen || !tcx.sess.opts.output_types.should_codegen() {
         let ongoing_codegen = start_async_codegen(backend, tcx, metadata, 1);
@@ -494,10 +495,14 @@ pub fn codegen_crate<B: ExtraBackendMethods>(
 
     let cgu_name_builder = &mut CodegenUnitNameBuilder::new(tcx);
 
+    // 添加注释: 运行`monomorphization`收集器, 并将收集的项目划分为codegen单元
     // Run the monomorphization collector and partition the collected items into
     // codegen units.
     let codegen_units = tcx.collect_and_partition_mono_items(LOCAL_CRATE).1;
 
+    // 添加注释: 强制所有`codegen_unit`查询, 以便当`compile_codegen_unit`访问它们时它们
+    // 已经是红色或绿色. 我们无法仅从DepNode重新执行`codegen_unit`查询, 因此, 未知的颜色可
+    // 能会导致不得不重新执行`compile_codegen_unit`, 这可能是不必要的
     // Force all codegen_unit queries so they are already either red or green
     // when compile_codegen_unit accesses them. We are not able to re-execute
     // the codegen_unit query from just the DepNode, so an unknown color would
@@ -512,8 +517,12 @@ pub fn codegen_crate<B: ExtraBackendMethods>(
     let ongoing_codegen = start_async_codegen(backend.clone(), tcx, metadata, codegen_units.len());
     let ongoing_codegen = AbortCodegenOnDrop::<B>(Some(ongoing_codegen));
 
+    // 添加注释: 必要时, `Codegen`是分配器填充程序
     // Codegen an allocator shim, if necessary.
     //
+    // 添加注释: 如果`crate`没有设置`allocator_kind`, 那么肯定没有垫片产生.
+    // 否则, 我们还将检查所有输出包装箱类型的依存关系图. 如果那里看起来像它的`动态`链接, 那么它
+    // 已经有了分配器垫片, 我们将改用它. 如果不存在, 那么生成分配器是我们的工作!
     // If the crate doesn't have an `allocator_kind` set then there's definitely
     // no shim to generate. Otherwise we also check our dependency graph for all
     // our output crate types. If anything there looks like its a `Dynamic`
@@ -564,14 +573,23 @@ pub fn codegen_crate<B: ExtraBackendMethods>(
         ongoing_codegen.submit_pre_codegened_module_to_llvm(tcx, metadata_module);
     }
 
+    // 添加注释: 为了在LLVM进行并行处理期间获得获得更好的吞吐量, 我们习惯将CGU排序为最大到最小.
+    // 例如, 通过防止大型CGU最后被处理, 并且只有一个LLVM线程工作而其余的则保持空闲状态, 这将导致
+    // 更好的线程利用率.
+
     // For better throughput during parallel processing by LLVM, we used to sort
     // CGUs largest to smallest. This would lead to better thread utilization
     // by, for example, preventing a large CGU from being processed last and
     // having only one LLVM thread working while the rest remained idle.
+
+    // 添加注释: 但是, 此策略将导致较高的内存使用率, 因为这意味着所有最大CGU的LLVM-IR将
+    // 立即驻留在内存中.
     //
     // However, this strategy would lead to high memory usage, as it meant the
     // LLVM-IR for all of the largest CGUs would be resident in memory at once.
     //
+    // 添加注释: 取而代之的是, 我们可以通过对CGU进行排序来妥协, 以使最大和最小为第一, 第二大在和最小为
+    // 下一个, 等等. 如果大小变化很大, 则可以显着减少内存使用.
     // Instead, we can compromise by ordering CGUs such that the largest and
     // smallest are first, second largest and smallest are next, etc. If there
     // are large size variations, this can reduce memory usage significantly.
@@ -583,6 +601,9 @@ pub fn codegen_crate<B: ExtraBackendMethods>(
         second_half.iter().rev().interleave(first_half).copied().collect()
     };
 
+    // 添加注释: 非并行编译器只能在单个线程上将代码生成单元转换为LLVM-IR, 从而导致阶梯效应,
+    // 其中N个LLVM线程必须等待单个代码生成线程为其生成工作.并行编译器没有此限制, 因此我们可
+    // 以在将协调移交给`OnGoingCodegen`调度程序之前并行预加载LLVM队列.
     // The non-parallel compiler can only translate codegen units to LLVM IR
     // on a single thread, leading to a staircase effect where the N LLVM
     // threads have to wait on the single codegen threads to generate work
@@ -590,6 +611,8 @@ pub fn codegen_crate<B: ExtraBackendMethods>(
     // we can pre-load the LLVM queue in parallel before handing off
     // coordination to the OnGoingCodegen scheduler.
     //
+    // 添加注释: 这可能是临时措施. 一旦我们不再需要支持非并行编译器, 我们就可以并行编译端到
+    // 端的CGU并摆脱复杂的调度逻辑.
     // This likely is a temporary measure. Once we don't have to support the
     // non-parallel compiler anymore, we can compile CGUs end-to-end in
     // parallel and get rid of the complicated scheduling logic.
@@ -630,12 +653,15 @@ pub fn codegen_crate<B: ExtraBackendMethods>(
         ongoing_codegen.wait_for_signal_to_codegen_item();
         ongoing_codegen.check_for_errors(tcx.sess);
 
+        // 添加注释: 在第一次迭代中进行一些设置工作
         // Do some setup work in the first iteration
         if pre_compiled_cgus.is_none() {
+            // 添加注释: 计算CGU重用
             // Calculate the CGU reuse
             cgu_reuse = tcx.sess.time("find_cgu_reuse", || {
                 codegen_units.iter().map(|cgu| determine_cgu_reuse(tcx, &cgu)).collect()
             });
+            // 添加注释: 预编译一些CGU
             // Pre compile some CGUs
             let (compiled_cgus, codegen_time) = pre_compile_cgus(&cgu_reuse);
             pre_compiled_cgus = Some(compiled_cgus);
@@ -656,6 +682,8 @@ pub fn codegen_crate<B: ExtraBackendMethods>(
                         total_codegen_time += start_time.elapsed();
                         module
                     };
+                // 添加注释: 如果有错误, 它将`unwind`, 这将触发我们的`AbortCodegenOnDrop`保护.
+                // 不幸的是, 仅仅跳过`submit_codegened_module_to_llvm`会使编译挂在`post-monomorphization`错误上
                 // This will unwind if there are errors, which triggers our `AbortCodegenOnDrop`
                 // guard. Unfortunately, just skipping the `submit_codegened_module_to_llvm` makes
                 // compilation hang on post-monomorphization errors.
@@ -697,6 +725,7 @@ pub fn codegen_crate<B: ExtraBackendMethods>(
 
     ongoing_codegen.codegen_finished(tcx);
 
+    // 添加注释: 由于有时在代码生成期间主线程会被阻塞, 因此我们会手动跟踪`-Ztime-passes`输出
     // Since the main thread is sometimes blocked during codegen, we keep track
     // -Ztime-passes output manually.
     if tcx.sess.time_passes() {

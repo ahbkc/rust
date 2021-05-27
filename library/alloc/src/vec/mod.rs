@@ -2467,6 +2467,7 @@ impl<T, A: Allocator> IntoIterator for Vec<T, A> {
     ///     println!("{}", s);
     /// }
     /// ```
+    // IntoIter已实现了Iterator trait
     #[inline]
     fn into_iter(self) -> IntoIter<T, A> {
         unsafe {
