@@ -83,6 +83,7 @@ pub struct TyCtxtEnsure<'tcx> {
 }
 
 impl TyCtxt<'tcx> {
+    // 添加注释: 为`TyCtxt`返回一个透明的包装器, 它确保查询被执行, 而不是仅仅返回它们的结果
     /// Returns a transparent wrapper for `TyCtxt`, which ensures queries
     /// are executed instead of just returning their results.
     #[inline(always)]
@@ -90,6 +91,7 @@ impl TyCtxt<'tcx> {
         TyCtxtEnsure { tcx: self }
     }
 
+    // 添加注释: 返回`TyCtxt`的透明包装, 该包装使用`span`作为通过其执行的查询的位置.
     /// Returns a transparent wrapper for `TyCtxt` which uses
     /// `span` as the location of queries performed through it.
     #[inline(always)]
@@ -107,6 +109,9 @@ macro_rules! query_helper_param_ty {
     ($K:ty) => { $K };
 }
 
+// 添加注释: 进行类型 `as` 操作
+// 例: `query_storage!([fatal_cycle , cycle_delay_bug , anon , storage(#ty)][key, ()]);)*`
+// `query_storage!([$($modifiers)*][$($K)*, $V])`对应哪个匹配???
 macro_rules! query_storage {
     ([][$K:ty, $V:ty]) => {
         <DefaultCacheSelector as CacheSelector<$K, $V>>::Cache
@@ -124,6 +129,13 @@ macro_rules! define_callbacks {
      $($(#[$attr:meta])*
         [$($modifiers:tt)*] fn $name:ident($($K:tt)*) -> $V:ty,)*) => {
 
+        // 添加注释: HACK(eddyb) 类似于下面的`impl QueryConfig for queries::$name`,
+        // 但是使用类型别名而不是关联类型来绕过HRTB规范下的限制, 例如如下:
+        // `for<'tcx> fn(...) -> <queries::$name<'tcx> as QueryConfig<TyCtxt<'tcx>>>::Value` 当前未规范为
+        // `for<'tcx> fn(...) -> query_values::$name<'tcx>`.
+
+        // 这主要由`rustc_metadata`中的`provide!`使用.
+
         // HACK(eddyb) this is like the `impl QueryConfig for queries::$name`
         // below, but using type aliases instead of associated types, to bypass
         // the limitations around normalizing under HRTB - for example, this:
@@ -134,24 +146,36 @@ macro_rules! define_callbacks {
         pub mod query_keys {
             use super::*;
 
+            // 添加注释: 进行类型别名定义, 使用参数类型进行别名定义
             $(pub type $name<$tcx> = $($K)*;)*
         }
         #[allow(nonstandard_style, unused_lifetimes)]
         pub mod query_values {
             use super::*;
 
+            // 添加注释: 进行类型别名定义, 使用返回类型进行别名定义
             $(pub type $name<$tcx> = $V;)*
         }
         #[allow(nonstandard_style, unused_lifetimes)]
         pub mod query_storage {
             use super::*;
 
+            // 添加注释: 进行类型别名定义, 如果修饰符是storage时, 对应的值是`storage(#ty)`
+            // `query_storage!([$($modifiers)*][$($K)*, $V]);)*`应会解析为以下传参形式
+            // `query_storage!([fatal_cycle , eval_always ][key, ()]);)*`
+
+            // 添加注释: 当传的`modifiers`中包含有`storage(#ty)`时, 将会匹配到``[storage($ty:ty) $($rest:tt)*][$K:ty, $V:ty],
+            // 否则将会匹配到`[][$K:ty, $V:ty]`
+
+            // 添加注释: 如果`modifiers`中包含`storage(#ty)`, 则将使用`<$ty as CacheSelector<$K, $V>>::Cache`进行别名定义
+            // 如果`modifiers`中不包含`storage(#ty)`, 则使用`<DefaultCacheSelector as CacheSelector<$K, $V>>::Cache`进行别名定义
             $(pub type $name<$tcx> = query_storage!([$($modifiers)*][$($K)*, $V]);)*
         }
         #[allow(nonstandard_style, unused_lifetimes)]
         pub mod query_stored {
             use super::*;
 
+            // 添加注释: 使用`query_storage`中的类型字段进行别名定义
             $(pub type $name<$tcx> = <query_storage::$name<$tcx> as QueryStorage>::Stored;)*
         }
 
@@ -160,6 +184,7 @@ macro_rules! define_callbacks {
             $($(#[$attr])* pub $name: QueryCacheStore<query_storage::$name<$tcx>>,)*
         }
 
+        // 添加注释: 为`TyCtxtEnsure`实现方法
         impl TyCtxtEnsure<$tcx> {
             $($(#[$attr])*
             #[inline(always)]
@@ -176,6 +201,7 @@ macro_rules! define_callbacks {
             })*
         }
 
+        // 添加注释: 为`TyCtxt`实现方法
         impl TyCtxt<$tcx> {
             $($(#[$attr])*
             #[inline(always)]
@@ -186,6 +212,7 @@ macro_rules! define_callbacks {
             })*
         }
 
+        // 添加注释: 为`TyCtxtAt`实现方法
         impl TyCtxtAt<$tcx> {
             $($(#[$attr])*
             #[inline(always)]
@@ -231,6 +258,7 @@ macro_rules! define_callbacks {
             fn clone(&self) -> Self { *self }
         }
 
+        // 添加注释: 定义`QueryEngine<'tcx>` trait, 并为其继承`rustc_data_structures::sync::Sync` trait
         pub trait QueryEngine<'tcx>: rustc_data_structures::sync::Sync {
             unsafe fn deadlock(&'tcx self, tcx: TyCtxt<'tcx>, registry: &rustc_rayon_core::Registry);
 
@@ -266,12 +294,18 @@ macro_rules! define_callbacks {
     };
 }
 
+// 添加注释: 这些查询中的每个字段都对应于`Provideers`中的每个函数指针字段, 用于请求该类型
+// 的值, 以及`tcx: TyCtxt(和`tcx.at(span)`)`上的一个方法, 用于在一个记忆并进行深度图
+// 跟踪的方式, 环绕驱动程序创建的实际`Providers`(使用几个`rustc_*`板条箱).
 // Each of these queries corresponds to a function pointer field in the
 // `Providers` struct for requesting a value of that type, and a method
 // on `tcx: TyCtxt` (and `tcx.at(span)`) for doing that request in a way
 // which memoizes and does dep-graph tracking, wrapping around the actual
 // `Providers` that the driver creates (using several `rustc_*` crates).
 //
+// 添加注释: 每个查询的结果类型必须实现`Clone`, 另外还有`ty::query::values::Value`,
+// 如果查询导致查询循环, 它会产生一个适当的占位符(错误)值. 标记为`fatal_cycle`的查询不需要
+// 后一种实现, 因为它们会在查询周期中引发致命错误.
 // The result type of each query must implement `Clone`, and additionally
 // `ty::query::values::Value`, which produces an appropriate placeholder
 // (error) value if the query resulted in a query cycle.

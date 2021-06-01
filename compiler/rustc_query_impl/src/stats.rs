@@ -119,6 +119,7 @@ macro_rules! print_stats {
     (<$tcx:tt>
         $($(#[$attr:meta])* [$($modifiers:tt)*] fn $name:ident($K:ty) -> $V:ty,)*
     ) => {
+        // 添加注释: 构建`query_stats`函数
         fn query_stats(tcx: TyCtxt<'_>) -> Vec<QueryStats> {
             let mut queries = Vec::new();
 

@@ -296,6 +296,9 @@ pub struct ResolvedOpaqueTy<'tcx> {
     pub substs: SubstsRef<'tcx>,
 }
 
+// 添加注释: 每当一个值可能存在于生成器yield中时, 该值的类型就会在`GeneratorInteriorTypeCause`结构中结束.
+// 此结构添加了有关此类捕获类型的附加信息, 这些信息可用于诊断. 特别是, 它存储导致记录给定类型的跨度, 以及包含该值
+// 的范围(可用于查找该值所在的`await`)
 /// Whenever a value may be live across a generator yield, the type of that value winds up in the
 /// `GeneratorInteriorTypeCause` struct. This struct adds additional information about such
 /// captured types that can be useful for diagnostics. In particular, it stores the span that
@@ -317,14 +320,19 @@ pub struct ResolvedOpaqueTy<'tcx> {
 #[derive(TyEncodable, TyDecodable, Clone, Debug, Eq, Hash, PartialEq, HashStable)]
 #[derive(TypeFoldable)]
 pub struct GeneratorInteriorTypeCause<'tcx> {
+    // 添加注释: 捕获的绑定类型
     /// Type of the captured binding.
     pub ty: Ty<'tcx>,
+    // 添加注释: 捕获的绑定的跨度
     /// Span of the binding that was captured.
     pub span: Span,
+    // 添加注释: 捕获的绑定范围的跨度
     /// Span of the scope of the captured binding.
     pub scope_span: Option<Span>,
+    // 添加注释: `.await`或`yield`表达式的跨度
     /// Span of `.await` or `yield` expression.
     pub yield_span: Span,
+    // 添加注释: 从中评估类型的表达式
     /// Expr which the type evaluated from.
     pub expr: Option<hir::HirId>,
 }

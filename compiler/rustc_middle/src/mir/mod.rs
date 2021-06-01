@@ -109,12 +109,14 @@ pub enum MirPhase {
 }
 
 impl MirPhase {
+    // 添加注释: 获取当前MirPhase在所有`MirPhase`集合中的索引
     /// Gets the index of the current MirPhase within the set of all `MirPhase`s.
     pub fn phase_index(&self) -> usize {
         *self as usize
     }
 }
 
+// 添加注释: 特定的`mir::Body`来自哪里
 /// Where a specific `mir::Body` comes from.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 #[derive(HashStable, TyEncodable, TyDecodable, TypeFoldable)]
@@ -149,27 +151,35 @@ impl<'tcx> MirSource<'tcx> {
 
 #[derive(Clone, TyEncodable, TyDecodable, Debug, HashStable, TypeFoldable)]
 pub struct GeneratorInfo<'tcx> {
+    // 添加注释: 函数的yield类型, 如果它是生成器
     /// The yield type of the function, if it is a generator.
     pub yield_ty: Option<Ty<'tcx>>,
 
     /// Generator drop glue.
     pub generator_drop: Option<Body<'tcx>>,
 
+    // 添加注释: 生成器布局. 由状态转换产生
     /// The layout of a generator. Produced by the state transformation.
     pub generator_layout: Option<GeneratorLayout<'tcx>>,
 
+    // 添加注释: 如果这是一个生成器, 则记录导致创建此生成器的源表达式的类型.
     /// If this is a generator then record the type of source expression that caused this generator
     /// to be created.
     pub generator_kind: GeneratorKind,
 }
 
+// 添加注释: 单个函数的低级表示
 /// The lowered representation of a single function.
 #[derive(Clone, TyEncodable, TyDecodable, Debug, HashStable, TypeFoldable)]
 pub struct Body<'tcx> {
+    // 添加注释: 基本块列表. 对基本块的引用使用新类型索引类型[`BasicBlock`]来索引到这个向量中.
     /// A list of basic blocks. References to basic block use a newtyped index type [`BasicBlock`]
     /// that indexes into this vector.
     basic_blocks: IndexVec<BasicBlock, BasicBlockData<'tcx>>,
 
+    // 添加注释: 记录些特定MIR已过`desugaring and optimization`过程的程度. 这在内联时特别有用, 因为在这种
+    // 情况下, 我们实例化了提升的常量并将它们添加到我们的提升向量中 -- 但是那些提升的项目已经被优化, 而我们的还没有.
+    // 该字段允许我们查看内联促销项目的差异并放弃优化.
     /// Records how far through the "desugaring and optimization" process this particular
     /// MIR has traversed. This is particularly useful when inlining, since in that context
     /// we instantiate the promoted constants and add them to our promoted vector -- but those
@@ -179,6 +189,7 @@ pub struct Body<'tcx> {
 
     pub source: MirSource<'tcx>,
 
+    // 添加注释: 源范围列表; 这些被语句引用并用于调试信息. 由`SourceScope`索引.
     /// A list of source scopes; these are referenced by statements
     /// and used for debuginfo. Indexed by a `SourceScope`.
     pub source_scopes: IndexVec<SourceScope, SourceScopeData<'tcx>>,
@@ -187,40 +198,54 @@ pub struct Body<'tcx> {
 
     /// Declarations of locals.
     ///
+    // 添加注释: 第一个局部变量是返回值指针, 然后是函数参数的`arg_count`局部变量, 然后是任何用户声明的变量
+    // 和临时变量.
     /// The first local is the return value pointer, followed by `arg_count`
     /// locals for the function arguments, followed by any user-declared
     /// variables and temporaries.
     pub local_decls: LocalDecls<'tcx>,
 
+    // 添加注释: 用户类型注释
     /// User type annotations.
     pub user_type_annotations: ty::CanonicalUserTypeAnnotations<'tcx>,
 
+    // 添加注释: 此函数采用的参数数量
     /// The number of arguments this function takes.
     ///
+    // 添加注释: 从local1开始, `arg_count` locals将由调用者提供, 并且可以假定为已初始化.
     /// Starting at local 1, `arg_count` locals will be provided by the caller
     /// and can be assumed to be initialized.
     ///
+    // 添加注释: 如果此MIR是常数构建的, 则该值为0
     /// If this MIR was built for a constant, this will be 0.
     pub arg_count: usize,
 
     /// Mark an argument local (which must be a tuple) as getting passed as
     /// its individual components at the LLVM level.
     ///
+    // 添加注释: 这用于`rust-call` ABI调用
     /// This is used for the "rust-call" ABI.
     pub spread_arg: Option<Local>,
 
+    // 添加注释: 与用户变量有关的调试信息, 包括捕获.
     /// Debug information pertaining to user variables, including captures.
     pub var_debug_info: Vec<VarDebugInfo<'tcx>>,
 
+    // 添加注释: 表示此MIR的跨度, 用于错误报告.
     /// A span representing this MIR, for error reporting.
     pub span: Span,
 
+    // 添加注释: 为使此MIR格式良好而成功评估所需的常量.
+    // 我们在这个领域拥有我们还不能评估的所有常数.
     /// Constants that are required to evaluate successfully for this MIR to be well-formed.
     /// We hold in this field all the constants we are not able to evaluate yet.
     pub required_consts: Vec<Constant<'tcx>>,
 
+    // 添加注释: 此主体是否使用通用参数. 这用于`ConstEvaluatable`检查.
     /// Does this body use generic parameters. This is used for the `ConstEvaluatable` check.
     ///
+    // 添加注释: 请注意, 这实际上并不意味着该主体现在不可计算. 以下示例中的重复计数是多态的, 但仍然可以在不了解
+    // 类型参数`T`的情况下进行评估
     /// Note that this does not actually mean that this body is not computable right now.
     /// The repeat count in the following example is polymorphic, but can still be evaluated
     /// without knowing anything about the type parameter `T`.
@@ -231,6 +256,8 @@ pub struct Body<'tcx> {
     /// }
     /// ```
     ///
+    // 添加注释: **WARNING**: 在最初创建MIR后不要更改此标志, 即使优化删除了所有通用参数的最后提及. 由于这个原因, 我们不想依赖
+    // 优化并可能允许像`[u8; std::mem::size_of::<T>() * 0]`这样的事情.
     /// **WARNING**: Do not change this flags after the MIR was originally created, even if an optimization
     /// removed the last mention of all generic params. We do not want to rely on optimizations and
     /// potentially allow things like `[u8; std::mem::size_of::<T>() * 0]` due to this.

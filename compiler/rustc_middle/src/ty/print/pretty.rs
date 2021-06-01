@@ -61,6 +61,9 @@ thread_local! {
     static NO_QUERIES: Cell<bool> = const { Cell::new(false) };
 }
 
+// 添加注释: 避免在关闭期间发生的任何打印期间运行任何查询. 这可能会更改某些类型的外观(例如, 对不透明类型强制进行详细打印).
+// 在某些查询期间使用此方法(例如, 对于不透明类型使用`explicit_item_bounds`), 以确保在查询计算过程中发生的任何调试打印
+// 都不会最终递归调用同一查询.
 /// Avoids running any queries during any prints that occur
 /// during the closure. This may alter the appearance of some
 /// types (e.g. forcing verbose printing for opaque types).
@@ -77,6 +80,8 @@ pub fn with_no_queries<F: FnOnce() -> R, R>(f: F) -> R {
     })
 }
 
+// 添加注释: 强迫我们仅使用文件名/行号来命名impls. 我们通常尝试使用类型.
+// 但是在某些时候, 特别是在打印周期错误时, 这可能会导致额外或次佳的错误输出, 因此此变量将标用该检查.
 /// Force us to name impls with just the filename/line number. We
 /// normally try to use types. But at some points, notably while printing
 /// cycle errors, this can result in extra or suboptimal error output,
@@ -90,6 +95,7 @@ pub fn with_forced_impl_filename_line<F: FnOnce() -> R, R>(f: F) -> R {
     })
 }
 
+// 添加注释: 在适当的位置向路径添加`crate::`前缀
 /// Adds the `crate::` prefix to paths where appropriate.
 pub fn with_crate_prefix<F: FnOnce() -> R, R>(f: F) -> R {
     SHOULD_PREFIX_WITH_CRATE.with(|flag| {
@@ -100,6 +106,8 @@ pub fn with_crate_prefix<F: FnOnce() -> R, R>(f: F) -> R {
     })
 }
 
+// 添加注释: 如果打开, 请防止路径修整. 路径修整会影响各种rustc类型的`Display`
+// 例如: 如果找不到其它`Vec`, 则会将`std::vec::Vec`将会修整为`Vec`
 /// Prevent path trimming if it is turned on. Path trimming affects `Display` impl
 /// of various rustc types, for example `std::vec::Vec` would be trimmed to `Vec`,
 /// if no other `Vec` is found.

@@ -182,6 +182,7 @@ impl<'tcx, D: TyDecoder<'tcx>> Decodable<D> for GenericArg<'tcx> {
     }
 }
 
+// 添加注释: 将通用参数映射到新值的替换.
 /// A substitution mapping generic parameters to new values.
 pub type InternalSubsts<'tcx> = List<GenericArg<'tcx>>;
 

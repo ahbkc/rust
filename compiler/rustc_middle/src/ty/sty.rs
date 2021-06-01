@@ -157,6 +157,7 @@ pub enum TyKind<'tcx> {
     /// `|a| a`.
     Closure(DefId, SubstsRef<'tcx>),
 
+    // 添加注释: 生成器的匿名类型. 用来表示`|a|`的类型产量`a`
     /// The anonymous type of a generator. Used to represent the type of
     /// `|a| yield a`.
     Generator(DefId, SubstsRef<'tcx>, hir::Movability),

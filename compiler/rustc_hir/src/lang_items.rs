@@ -34,6 +34,7 @@ macro_rules! expand_group {
     };
 }
 
+// 添加注释: 定义的实际lang项位于此文件末尾的一个方便的表中.
 // The actual lang items defined come at the end of this file in one handy table.
 // So you probably just want to nip down to the end.
 macro_rules! language_item_table {
@@ -41,7 +42,11 @@ macro_rules! language_item_table {
         $( $(#[$attr:meta])* $variant:ident $($group:expr)?, $module:ident :: $name:ident, $method:ident, $target:expr; )*
     ) => {
 
+        // 添加注释: 以下调用的enum_from_u32!宏将会构建:
+        // `pub enum LangItem {}`, 其内部字段为调用`language_item_table!`宏传入的`$variant:ident`集合
+        // 并还会为`LangItem`实现`from_u32(u: u32)`方法.
         enum_from_u32! {
+            // 添加注释: Rust中所有有效语言项的表示.
             /// A representation of all the valid language items in Rust.
             #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Encodable, Decodable)]
             pub enum LangItem {
@@ -55,6 +60,7 @@ macro_rules! language_item_table {
         }
 
         impl LangItem {
+            // 添加注释: `name`方法将会返回`#[lang = "$name"]`中的`name`符号
             /// Returns the `name` symbol in `#[lang = "$name"]`.
             /// For example, [`LangItem::PartialEq`]`.name()`
             /// would result in [`sym::eq`] since it is `#[lang = "eq"]`.
@@ -64,6 +70,8 @@ macro_rules! language_item_table {
                 }
             }
 
+            // 添加注释: 此lang项所属的[group](LangItemGroup), 如果不属于某个组, 则
+            // 将会返回None.
             /// The [group](LangItemGroup) that this lang item belongs to,
             /// or `None` if it doesn't belong to a group.
             pub fn group(self) -> Option<LangItemGroup> {
@@ -74,21 +82,28 @@ macro_rules! language_item_table {
             }
         }
 
+        // 添加注释: 所有语言项目, 无论是否定义.
+        // 定义的lang项可以来自当前的crate或其依赖项
         /// All of the language items, defined or not.
         /// Defined lang items can come from the current crate or its dependencies.
         #[derive(HashStable_Generic, Debug)]
         pub struct LanguageItems {
+            // 添加注释: 从lang项到它们可能找到的[`DefId`]的映射.
             /// Mappings from lang items to their possibly found [`DefId`]s.
+            // 添加注释: 索引对应于[`LangItem`]中的顺序.
             /// The index corresponds to the order in [`LangItem`].
             pub items: Vec<Option<DefId>>,
+            // 添加注释: 在收集过程中未找到的Lang项
             /// Lang items that were not found during collection.
             pub missing: Vec<LangItem>,
+            // 添加注释: 从[`LangItemGroup`]判别式映射到该组中所有lang项的[`DefId`]
             /// Mapping from [`LangItemGroup`] discriminants to all
             /// [`DefId`]s of lang items in that group.
             pub groups: [Vec<DefId>; NUM_GROUPS],
         }
 
         impl LanguageItems {
+            // 添加注释: 构建一个空的lang项集合, 没有丢失的项.
             /// Construct an empty collection of lang items and no missing ones.
             pub fn new() -> Self {
                 fn init_none(_: LangItem) -> Option<DefId> { None }
@@ -100,11 +115,14 @@ macro_rules! language_item_table {
                 }
             }
 
+            // 添加注释: 为每个lang项返回到可能找到的`DefId`的映射.
             /// Returns the mappings to the possibly found `DefId`s for each lang item.
             pub fn items(&self) -> &[Option<DefId>] {
                 &*self.items
             }
 
+            // 添加注释: 要求绑定给定的`LangItem`并返回相应的`DefId`. 如果它没有被绑定, 例如由于缺少`#[lang = "<item.name()>"]`,
+            // 将会以字符串形式返回错误消息.
             /// Requires that a given `LangItem` was bound and returns the corresponding `DefId`.
             /// If it wasn't bound, e.g. due to a missing `#[lang = "<it.name()>"]`,
             /// returns an error message as a string.
@@ -112,6 +130,7 @@ macro_rules! language_item_table {
                 self.items[it as usize].ok_or_else(|| format!("requires `{}` lang_item", it.name()))
             }
 
+            // 添加注释: 返回组中所有lang项的[`DefId`]
             /// Returns the [`DefId`]s of all lang items in a group.
             pub fn group(&self, group: LangItemGroup) -> &[DefId] {
                 self.groups[group as usize].as_ref()
@@ -125,6 +144,7 @@ macro_rules! language_item_table {
             )*
         }
 
+        // 添加注释: 从lang项的名称到它的顺序和它必须采用的形式的映射.
         /// A mapping from the name of the lang item to its order and the form it must be of.
         pub static ITEM_REFS: SyncLazy<FxHashMap<Symbol, (usize, Target)>> = SyncLazy::new(|| {
             let mut item_refs = FxHashMap::default();

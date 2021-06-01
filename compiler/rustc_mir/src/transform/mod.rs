@@ -487,6 +487,7 @@ fn run_optimization_passes<'tcx>(tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
         &generator::StateTransform,
     ];
 
+    // 添加注释: 即使我们不做优化, 对于代码生成我们仍然需要低级别的`generators`
     // Even if we don't do optimizations, we still have to lower generators for codegen.
     let no_optimizations_with_generators: &[&dyn MirPass<'tcx>] = &[&generator::StateTransform];
 
@@ -559,6 +560,7 @@ fn run_optimization_passes<'tcx>(tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
     );
 }
 
+// 添加注释: 优化MIR并为代码生成做好准备.
 /// Optimize the MIR and prepare it for codegen.
 fn optimized_mir<'tcx>(tcx: TyCtxt<'tcx>, did: DefId) -> &'tcx Body<'tcx> {
     let did = did.expect_local();

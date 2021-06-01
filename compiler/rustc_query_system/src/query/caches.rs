@@ -18,6 +18,8 @@ pub trait QueryStorage {
     type Value: Debug;
     type Stored: Clone;
 
+    // 添加注释: 存储值而不将其放入缓存中.
+    // 这就意味着与循环错误一起使用.
     /// Store a value without putting it in the cache.
     /// This is meant to be used with cycle errors.
     fn store_nocache(&self, value: Self::Value) -> Self::Stored;
@@ -27,6 +29,8 @@ pub trait QueryCache: QueryStorage + Sized {
     type Key: Hash + Eq + Clone + Debug;
     type Sharded: Default;
 
+    // 添加注释: 检查查询是否已经计算并在缓存中.
+    // 它将分片索引和锁保护返回给分片, 如果查询不在缓存中并且我们需要计算它, 它将被使用.
     /// Checks if the query is already computed and in the cache.
     /// It returns the shard index and a lock guard to the shard,
     /// which will be used if the query is not in the cache and we need

@@ -233,9 +233,11 @@ impl<D: Decoder> Decodable<D> for DefIndex {
     }
 }
 
+// 添加注释: `DefId` 通过组合 crate 索引和 def 索引来标识特定的 *definition*
 /// A `DefId` identifies a particular *definition*, by combining a crate
 /// index and a def index.
 ///
+// 添加注释: 您可以使用`local_def_id.to_def_id()`从`LocalDefId`创建一个`DefId`
 /// You can create a `DefId` from a `LocalDefId` using `local_def_id.to_def_id()`.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Copy)]
 pub struct DefId {

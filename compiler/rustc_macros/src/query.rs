@@ -393,6 +393,9 @@ fn add_query_description_impl(
     impls: &mut proc_macro2::TokenStream,
 ) {
     let name = &query.name;
+    // 添加注释: 例1: `query crate_inherent_impls_overlap_check(_: CrateNum)`, 获取的query.key等于 _
+    // 例2: `query crate_inherent_impls(k: CrateNum)`, 获取的query.key等于 k
+    // 此处获取的是参数的标识符
     let key = &query.key.0;
 
     // 添加注释: 找出我们是否应该将查询缓存在磁盘上
@@ -451,6 +454,7 @@ fn add_query_description_impl(
                 #expr
             }
 
+            // 添加注释: 对应`try_load_from_disk`函数块
             #try_load_from_disk
         }
     } else {
@@ -460,9 +464,12 @@ fn add_query_description_impl(
         quote! {}
     };
 
+    // 添加注释: modifiers.desc = desc { |tcx| "used_trait_imports `{}`", tcx.def_path_str(key.to_def_id()) }
+    // tcx = tcx, desc = "used_trait_imports `{}`", tcx.def_path_str(key.to_def_id())
     let (tcx, desc) = modifiers.desc;
     let tcx = tcx.as_ref().map_or_else(|| quote! { _ }, |t| quote! { #t });
 
+    // 添加注释: 生成`describe`函数
     let desc = quote! {
         #[allow(unused_variables)]
         fn describe(tcx: QueryCtxt<'tcx>, key: Self::Key) -> String {
@@ -545,14 +552,19 @@ pub fn rustc_queries(input: TokenStream) -> TokenStream {
 
         // Create a dep node for the query
         dep_node_def_stream.extend(quote! {
+            // 添加注释: quote! { [anon, eval_always] trigger_delay_span_bug(key: DefId) }
             [#attribute_stream] #name(#arg),
         });
 
+        // 添加注释: 为#name实现`QueryDescription<QueryCtxt<'tcx>>`
         add_query_description_impl(&query, modifiers, &mut query_description_stream);
     }
 
     // 添加注释: 生成最终代码, 生成了四个宏! .....
+    // 以下四个宏会在其它地方调用, 有的宏会接收宏参数, 以下有的宏会接收宏参数, 在内容调用宏.....
     TokenStream::from(quote! {
+        // 添加注释: 调用该宏的示例如下
+        // rustc_query_append! { [define_callbacks!][<'tcx>] }
         #[macro_export]
         macro_rules! rustc_query_append {
             ([$($macro:tt)*][$($other:tt)*]) => {
@@ -564,6 +576,20 @@ pub fn rustc_queries(input: TokenStream) -> TokenStream {
                 }
             }
         }
+        // 添加注释: 调用该宏的示例如下
+        // rustc_dep_node_append!([define_dep_nodes!][ <'tcx>
+        //     // We use this for most things when incr. comp. is turned off.
+        //     [] Null,
+        //
+        //     [anon] TraitSelect,
+        //
+        //     // WARNING: if `Symbol` is changed, make sure you update `make_compile_codegen_unit` below.
+        //     [] CompileCodegenUnit(Symbol),
+        //
+        //     // WARNING: if `MonoItem` is changed, make sure you update `make_compile_mono_item` below.
+        //     // Only used by rustc_codegen_cranelift
+        //     [] CompileMonoItem(MonoItem),
+        // ]);
         macro_rules! rustc_dep_node_append {
             ([$($macro:tt)*][$($other:tt)*]) => {
                 $($macro)*(
@@ -573,12 +599,15 @@ pub fn rustc_queries(input: TokenStream) -> TokenStream {
                 );
             }
         }
+        // 添加注释: 当调用传入参数宏时, 传入需缓存的`rustc_queries!`宏内的每一#name
+        // 例: rustc_cached_queries!(encode_queries!);
         #[macro_export]
         macro_rules! rustc_cached_queries {
             ($($macro:tt)*) => {
                 $($macro)*(#cached_queries);
             }
         }
+        // 添加注释: 为`rustc_queries!`宏内的每一#name实现`QueryDescription<QueryCtxt<'tcx>>`
         #[macro_export]
         macro_rules! rustc_query_description {
             () => { #query_description_stream }

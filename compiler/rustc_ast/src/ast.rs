@@ -1226,11 +1226,14 @@ impl Expr {
     }
 }
 
+// 添加注释: 范围的限制类型(包含或不包含)
 /// Limit types of a range (inclusive or exclusive)
 #[derive(Copy, Clone, PartialEq, Encodable, Decodable, Debug)]
 pub enum RangeLimits {
+    // 添加注释: 开头包容, 结尾独占.
     /// Inclusive at the beginning, exclusive at the end
     HalfOpen,
+    // 添加注释: 包含在开始和结束.
     /// Inclusive at the beginning and end
     Closed,
 }
@@ -1423,22 +1426,27 @@ pub struct QSelf {
     pub position: usize,
 }
 
+// 添加注释:  在闭包和`async`块中使用的捕获子句.
 /// A capture clause used in closures and `async` blocks.
 #[derive(Clone, Copy, PartialEq, Encodable, Decodable, Debug, HashStable_Generic)]
 pub enum CaptureBy {
     /// `move |x| y + x`.
     Value,
+    // 添加注释: 未指定`move`关键字
     /// `move` keyword was not specified.
     Ref,
 }
 
+// 添加注释: 生成器是否包含自引用, 导致它是否实现`!Unpin`.
 /// The movability of a generator / closure literal:
 /// whether a generator contains self-references, causing it to be `!Unpin`.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encodable, Decodable, Debug, Copy)]
 #[derive(HashStable_Generic)]
 pub enum Movability {
+    // 添加注释: 可能包含自我引用, `!Unpin`.
     /// May contain self-references, `!Unpin`.
     Static,
+    // 添加注释: 不得包含自我引用, `Unpin`
     /// Must not contain self-references, `Unpin`.
     Movable,
 }

@@ -1,3 +1,4 @@
+// 添加注释: 查询系统本身的实现. 这定义了在tcx上生成实际方法的宏, 这些方法查找和执行提供者, 管理缓存等.
 //! The implementation of the query system itself. This defines the macros that
 //! generate the actual methods on tcx which find and execute the provider,
 //! manage the caches, and so forth.
@@ -310,6 +311,7 @@ macro_rules! define_queries {
      $($(#[$attr:meta])*
         [$($modifiers:tt)*] fn $name:ident($($K:tt)*) -> $V:ty,)*) => {
 
+
         define_queries_struct! {
             tcx: $tcx,
             input: ($(([$($modifiers)*] [$($attr)*] [$name]))*)
@@ -501,7 +503,10 @@ macro_rules! define_queries {
     }
 }
 
+// 添加注释: FIXED(eddyb) 这个宏(和其它宏) 交替使用`$tcx`和`'tcx`
 // FIXME(eddyb) this macro (and others?) use `$tcx` and `'tcx` interchangeably.
+
+// 添加注释: 我们要么根本不使用`$tcx`而到处使用`'tcx`, 或者到处使用`$tcx`(即使由于缺乏卫生而没有必要这样做).
 // We should either not take `$tcx` at all and use `'tcx` everywhere, or use
 // `$tcx` everywhere (even if that isn't necessary due to lack of hygiene).
 macro_rules! define_queries_struct {
@@ -549,6 +554,7 @@ macro_rules! define_queries_struct {
             }
         }
 
+        // 添加注释: 为Queries<'tcx> 实现 QueryEngine<'tcx>
         impl QueryEngine<'tcx> for Queries<'tcx> {
             unsafe fn deadlock(&'tcx self, _tcx: TyCtxt<'tcx>, _registry: &rustc_rayon_core::Registry) {
                 #[cfg(parallel_compiler)]

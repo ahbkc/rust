@@ -1,3 +1,4 @@
+// 添加注释: 这是将生成器转换为状态机的传递的实现.
 //! This is the implementation of the pass which transforms generators into state machines.
 //!
 //! MIR generation for generators creates a function which has a self argument which
@@ -195,16 +196,22 @@ const RETURNED: usize = GeneratorSubsts::RETURNED;
 /// Generator has panicked and is poisoned.
 const POISONED: usize = GeneratorSubsts::POISONED;
 
+// 添加注释: 一个`yield`点在generator中
 /// A `yield` point in the generator.
 struct SuspensionPoint<'tcx> {
+    // 添加注释: 此时暂停或恢复时使用的状态判别式.
     /// State discriminant used when suspending or resuming at this point.
     state: usize,
+    // 添加注释: 恢复后跳转到的块.
     /// The block to jump to after resumption.
     resume: BasicBlock,
+    // 添加注释: 恢复后将恢复参数移到哪里.
     /// Where to move the resume argument after resumption.
     resume_arg: Place<'tcx>,
+    // 添加注释: 如果生成器在此状态下被丢弃, 则跳转到哪个块.
     /// Which block to jump to if the generator is dropped in this state.
     drop: Option<BasicBlock>,
+    // 添加注释: 在此暂停点具有实时存储的`locals`集合
     /// Set of locals that have live storage while at this suspension point.
     storage_liveness: BitSet<Local>,
 }
@@ -383,6 +390,7 @@ fn make_generator_state_argument_indirect<'tcx>(tcx: TyCtxt<'tcx>, body: &mut Bo
     let ref_gen_ty =
         tcx.mk_ref(tcx.lifetimes.re_erased, ty::TypeAndMut { ty: gen_ty, mutbl: Mutability::Mut });
 
+    // 添加注释: 替换 by value 生成器参数
     // Replace the by value generator argument
     body.local_decls.raw[1].ty = ref_gen_ty;
 
@@ -398,9 +406,11 @@ fn make_generator_state_argument_pinned<'tcx>(tcx: TyCtxt<'tcx>, body: &mut Body
     let substs = tcx.intern_substs(&[ref_gen_ty.into()]);
     let pin_ref_gen_ty = tcx.mk_adt(pin_adt_ref, substs);
 
+    // 添加注释: 替换 by ref 生成器参数
     // Replace the by ref generator argument
     body.local_decls.raw[1].ty = pin_ref_gen_ty;
 
+    // 添加注释: 将Pin字段访问添加到生成器状态的访问.
     // Add the Pin field access to accesses of the generator state
     PinArgVisitor { ref_gen_ty, tcx }.visit_body(body);
 }
@@ -919,6 +929,7 @@ fn create_generator_drop_shim<'tcx>(
     drop_clean: BasicBlock,
 ) -> Body<'tcx> {
     let mut body = body.clone();
+    // 添加注释: 确保这里不包括resume参数
     body.arg_count = 1; // make sure the resume argument is not included here
 
     let source_info = SourceInfo::outermost(body.span);
@@ -1135,6 +1146,7 @@ fn create_generator_resume_function<'tcx>(
 
     no_landing_pads(tcx, body);
 
+    // 添加注释: 确保我们删除`dead blocks`以从函数的drop部分删除不相关的代码.
     // Make sure we remove dead blocks to remove
     // unrelated code from the drop part of the function
     simplify::remove_dead_blocks(tcx, body);
@@ -1240,15 +1252,18 @@ impl<'tcx> MirPass<'tcx> for StateTransform {
         let yield_ty = if let Some(yield_ty) = body.yield_ty() {
             yield_ty
         } else {
+            // 添加注释: 这只适用于`generators`
             // This only applies to generators
             return;
         };
 
         assert!(body.generator_drop().is_none());
 
+        // 添加注释: 第一个参数是通过值传递的生成器类型
         // The first argument is the generator type passed by value
         let gen_ty = body.local_decls.raw[1].ty;
 
+        // 添加注释: 获取typeck计算的内部类型和substs
         // Get the interior types and substs which typeck computed
         let (upvars, interior, discr_ty, movable) = match *gen_ty.kind() {
             ty::Generator(_, substs, movability) => {
@@ -1261,12 +1276,15 @@ impl<'tcx> MirPass<'tcx> for StateTransform {
                 )
             }
             _ => {
+                // 如果不匹配`ty::Generator`则直接返回错误信息
                 tcx.sess
                     .delay_span_bug(body.span, &format!("unexpected generator type {}", gen_ty));
                 return;
             }
         };
 
+
+        // 添加注释: 计算 GeneratorState<yield_ty, return_ty>
         // Compute GeneratorState<yield_ty, return_ty>
         let state_did = tcx.require_lang_item(LangItem::GeneratorState, None);
         let state_adt_ref = tcx.adt_def(state_did);
@@ -1277,6 +1295,9 @@ impl<'tcx> MirPass<'tcx> for StateTransform {
         // RETURN_PLACE then is a fresh unused local with type ret_ty.
         let new_ret_local = replace_local(RETURN_PLACE, ret_ty, body, tcx);
 
+        // 添加注释: 我们还替换了resume参数并插入了一个`Assign`.
+        // 这是必需要的, 因为resume参数`_2`可能存在于`yield`中, 在这种情况下, 没有`Assign`可以转换为
+        // 生成器状态的存储. 在yield之后, 生成器状态中的插槽将被取消初始化.
         // We also replace the resume argument and insert an `Assign`.
         // This is needed because the resume argument `_2` might be live across a `yield`, in which
         // case there is no `Assign` to it that the transform can turn into a store to the generator
@@ -1285,6 +1306,7 @@ impl<'tcx> MirPass<'tcx> for StateTransform {
         let new_resume_local =
             replace_local(resume_local, body.local_decls[resume_local].ty, body, tcx);
 
+        // 添加注释: 首次进入生成器时, 将resume参数移动到新的本地.
         // When first entering the generator, move the resume argument into its new local.
         let source_info = SourceInfo::outermost(body.span);
         let stmts = &mut body.basic_blocks_mut()[BasicBlock::new(0)].statements;
@@ -1340,6 +1362,7 @@ impl<'tcx> MirPass<'tcx> for StateTransform {
         };
         transform.visit_body(body);
 
+        // 添加注释: 更新我们的MIR结构以反映我们所做的更改
         // Update our MIR struct to reflect the changes we've made
         body.arg_count = 2; // self, resume arg
         body.spread_arg = None;
@@ -1361,6 +1384,7 @@ impl<'tcx> MirPass<'tcx> for StateTransform {
 
         dump_mir(tcx, None, "generator_post-transform", &0, body, |_, _| Ok(()));
 
+        // 添加注释: 创建我们的MIR副本并使用它为生成器创建放置垫片
         // Create a copy of our MIR and use it to create the drop shim for the generator
         let drop_shim = create_generator_drop_shim(tcx, &transform, gen_ty, body, drop_clean);
 

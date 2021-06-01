@@ -465,6 +465,7 @@ impl SelfProfiler {
         self.profiler.alloc_string(s)
     }
 
+    // 添加注释: 获取给定字符串的`StringId`. 经方法确保通过它的任何字符串只会在分析数据中分配一次.
     /// Gets a `StringId` for the given string. This method makes sure that
     /// any strings going through it will only be allocated once in the
     /// profiling data.
@@ -472,17 +473,20 @@ impl SelfProfiler {
     where
         A: Borrow<str> + Into<String>,
     {
+        // 添加注释: 因为我们假设字符串已经存在于普通情况下, 所以只先获取一个读锁
         // Only acquire a read-lock first since we assume that the string is
         // already present in the common case.
         {
             let string_cache = self.string_cache.read();
 
+            // 添加注释: 如果存在则直接返回
             if let Some(&id) = string_cache.get(s.borrow()) {
                 return id;
             }
         }
 
         let mut string_cache = self.string_cache.write();
+        // 添加注释: 检查字符串是否已在删除读锁和获取写锁之间的小时间窗口中添加.
         // Check if the string has already been added in the small time window
         // between dropping the read lock and acquiring the write lock.
         match string_cache.entry(s.into()) {
@@ -503,6 +507,7 @@ impl SelfProfiler {
     where
         I: Iterator<Item = QueryInvocationId> + ExactSizeIterator,
     {
+        // 添加注释: 将from转换为Map<I, fn(?) -> StringId>类型
         let from = from.map(|qid| StringId::new_virtual(qid.0));
         self.profiler.bulk_map_virtual_to_single_concrete_string(from, to);
     }
