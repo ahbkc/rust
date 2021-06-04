@@ -1230,6 +1230,7 @@ impl<'tcx> TyCtxt<'tcx> {
         self.get_lib_features(LOCAL_CRATE)
     }
 
+    // 添加注释: 获取此crate的所有lang项和所有依赖项(递归)
     /// Obtain all lang items of this crate and all dependencies (recursively)
     pub fn lang_items(self) -> &'tcx rustc_hir::lang_items::LanguageItems {
         self.get_lang_items(LOCAL_CRATE)
@@ -2230,6 +2231,7 @@ impl<'tcx> TyCtxt<'tcx> {
 
     #[inline]
     pub fn mk_adt(self, def: &'tcx AdtDef, substs: SubstsRef<'tcx>) -> Ty<'tcx> {
+        // 添加注释: 获取substs的副本, 以便我们拥有其中的向量
         // Take a copy of substs so that we own the vectors inside.
         self.mk_ty(Adt(def, substs))
     }

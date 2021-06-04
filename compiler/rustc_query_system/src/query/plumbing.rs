@@ -47,12 +47,15 @@ impl<C: QueryCache + Default> Default for QueryCacheStore<C> {
     }
 }
 
+// 添加注释: 检查查询缓存时使用的值, 可在缓存未命中时重用以执行查询.
 /// Values used when checking a query cache which can be reused on a cache-miss to execute the query.
 pub struct QueryLookup {
     pub(super) key_hash: u64,
     shard: usize,
 }
 
+// 添加注释: 我们计算一次键的散列, 然后将其用于分片查询和散列图查找. 这依赖于他们都使用
+// `FxHasher`的事实.
 // We compute the key's hash once and then use it for both the
 // shard lookup and the hashmap lookup. This relies on the fact
 // that both of them use `FxHasher`.
@@ -95,11 +98,14 @@ pub struct QueryState<D, K> {
     shards: Sharded<QueryStateShard<D, K>>,
 }
 
+// 添加注释: 指示查询映射中给定键的查询状态.
 /// Indicates the state of a query for a given key in a query map.
 enum QueryResult<D> {
+    // 添加注释: 一个已经在执行的查询. 查询作业可用于等待其完成.
     /// An already executing query. The query job can be used to await for its completion.
     Started(QueryJob<D>),
 
+    // 添加注释: 查询是`panic`. 试图等待这个查询将引发一个致命的错误, 它会默默的`panic`.
     /// The query panicked. Queries trying to wait on this will raise a fatal error which will
     /// silently panic.
     Poisoned,
@@ -188,12 +194,17 @@ where
     D: Copy + Clone + Eq + Hash,
     C: QueryCache,
 {
+    // 添加注释: 要么获取与查询对应的`JobOwner`, 允许我们开始执行查询, 或者返回查询结果.
+    // 这个函数假设`try_get_cached`已经被调用并返回`lookup`.
+    // 如果查询正在其它地方执行, 它将等待它并返回结果.
+    // 如果查询是`panic`, 这将默默地`panic`.
     /// Either gets a `JobOwner` corresponding the query, allowing us to
     /// start executing the query, or returns with the result of the query.
     /// This function assumes that `try_get_cached` is already called and returned `lookup`.
     /// If the query is executing elsewhere, this will wait for it and return the result.
     /// If the query panicked, this will silently panic.
     ///
+    // 添加注释: 这个函数是内联的, 因为这会显着提高某些编译时基准测试的速度.
     /// This function is inlined because that results in a noticeable speed-up
     /// for some compile-time benchmarks.
     #[inline(always)]
@@ -214,22 +225,28 @@ where
         let lock = &mut *state_lock;
 
         match lock.active.entry(key) {
+            // 添加注释: 根据`key`获取没有获取到条目
             Entry::Vacant(entry) => {
+                // 添加注释: 在此分片中生成唯一的id
                 // Generate an id unique within this shard.
                 let id = lock.jobs.checked_add(1).unwrap();
                 lock.jobs = id;
                 let id = QueryShardJobId(NonZeroU32::new(id).unwrap());
 
+                // 添加注释: 从TLS上下文中获取查询信息
                 let job = tcx.current_query_job();
+                // 添加注释: 创建一个新的查询job
                 let job = QueryJob::new(id, span, job);
 
                 let key = entry.key().clone();
+                // 添加注释: `entry.insert`将使用VacantEntry的键设置条目的值, 并返回对它的可变引用
                 entry.insert(QueryResult::Started(job));
 
                 let global_id = QueryJobId::new(id, shard, query.dep_kind);
                 let owner = JobOwner { state, cache, id: global_id, key };
                 return TryGetJob::NotYetStarted(owner);
             }
+            // 添加注释: 根据`key`获取到了条目
             Entry::Occupied(mut entry) => {
                 match entry.get_mut() {
                     #[cfg(not(parallel_compiler))]
@@ -238,6 +255,7 @@ where
 
                         drop(state_lock);
 
+                        // 添加注释: 如果我们是单线程的, 我们知道我们有循环错误, 所以我们只返回错误.
                         // If we are single-threaded we know that we have cycle error,
                         // so we just return the error.
                         return TryGetJob::Cycle(mk_cycle(
@@ -296,6 +314,8 @@ where
         }
     }
 
+    // 添加注释: 通过使用`result`更新查询缓存来完成查询, 向`waiter`发出信号并忘记JobOwner,
+    // 因此它不会poison查询
     /// Completes the query by updating the query cache with the `result`,
     /// signals the waiter and forgets the JobOwner, so it won't poison the query
     fn complete(self, result: C::Value, dep_node_index: DepNodeIndex) -> C::Stored {
@@ -304,6 +324,7 @@ where
         let state = self.state;
         let cache = self.cache;
 
+        // 添加注释: 忘记`self`, 这样`destructor`就不会`poison`查询
         // Forget ourself so our destructor won't poison the query
         mem::forget(self);
 
@@ -324,6 +345,7 @@ where
             (job, result)
         };
 
+        // 添加注释: 非并行下不会有任何操作
         job.signal_complete();
         result
     }
@@ -371,12 +393,14 @@ pub(crate) struct CycleError {
     pub cycle: Vec<QueryInfo>,
 }
 
+// 添加注释: `try_start`的结果
 /// The result of `try_start`.
 enum TryGetJob<'tcx, D, C>
 where
     D: Copy + Clone + Eq + Hash,
     C: QueryCache,
 {
+    // 添加注释: 查询尚未开始. 包含对最终用于启动它的缓存的保护.
     /// The query is not yet started. Contains a guard to the cache eventually used to start it.
     NotYetStarted(JobOwner<'tcx, D, C>),
 
@@ -386,10 +410,13 @@ where
     #[cfg(parallel_compiler)]
     JobCompleted((C::Stored, DepNodeIndex)),
 
+    // 添加注释: 尝试执行查询导致循环.
     /// Trying to execute the query resulted in a cycle.
     Cycle(C::Stored),
 }
 
+// 添加注释: 检查查询是否已经计算并在缓存中. 它将分片索引和锁保护返加给分片, 如果
+// 查询不在缓存中并且我们需要计算它, 它将被使用.
 /// Checks if the query is already computed and in the cache.
 /// It returns the shard index and a lock guard to the shard,
 /// which will be used if the query is not in the cache and we need
@@ -399,6 +426,7 @@ pub fn try_get_cached<'a, CTX, C, R, OnHit>(
     tcx: CTX,
     cache: &'a QueryCacheStore<C>,
     key: &C::Key,
+    // 添加注释: `on_hit`可以在持有查询缓存锁时调用
     // `on_hit` can be called while holding a lock to the query cache
     on_hit: OnHit,
 ) -> Result<R, QueryLookup>
@@ -434,6 +462,7 @@ where
     C::Key: crate::dep_graph::DepNodeParams<CTX::DepContext>,
     CTX: QueryContext,
 {
+    // 添加注释: 调用`try_start`函数, 如果返回`TryGetJob::Cycle`类型时则直接return
     let job = match JobOwner::<'_, CTX::DepKind, C>::try_start(
         tcx,
         state,
@@ -452,8 +481,10 @@ where
         }
     };
 
+    // 添加注释: 当`incr.`, `comp.`关闭时的快速路径. `to_dep_node`对于某些`DepKind`来说是昂贵的.
     // Fast path for when incr. comp. is off. `to_dep_node` is
     // expensive for some `DepKind`s.
+    // 添加注释: `is_fully_enabled`表示如果我们正在构建完整的深度图, 则返回`true`, 否则返回`false`
     if !tcx.dep_context().dep_graph().is_fully_enabled() {
         let null_dep_node = DepNode::new_no_params(DepKind::NULL);
         return force_query_with_job(tcx, key, job, null_dep_node, query).0;
@@ -486,6 +517,8 @@ where
     let dep_node = query.to_dep_node(*tcx.dep_context(), &key);
 
     if !query.eval_always {
+        // 添加注释: 此查询的诊断将在`try_mark_green()`期间提升到当前会话, 因此我们可以在此处
+        // 忽略它们.
         // The diagnostics for this query will be
         // promoted to the current session during
         // `try_mark_green()`, so we can ignore them here.
@@ -614,6 +647,7 @@ fn incremental_verify_ich<CTX, K, V: Debug>(
     );
 }
 
+// 添加注释: 强制查询job
 fn force_query_with_job<C, CTX>(
     tcx: CTX,
     key: C::Key,
@@ -625,6 +659,9 @@ where
     C: QueryCache,
     CTX: QueryContext,
 {
+    // 添加注释: 如果下面的断言触发, 可能有两个原因:
+    //           1. DepNode创建有问题, 无论是在此处还是在`DepGraph::try_mark_green()`中.
+    //           2. 两个不同的查询键被映射到同一个`DepNode`(参见示例#48923).
     // If the following assertion triggers, it can have two reasons:
     // 1. Something is wrong with DepNode creation, either here or
     //    in `DepGraph::try_mark_green()`.
@@ -643,6 +680,7 @@ where
 
     let ((result, dep_node_index), diagnostics) = with_diagnostics(|diagnostics| {
         tcx.start_query(job.id, diagnostics, || {
+            // 添加注释: 根据query.eval_always来判断走哪个分支
             if query.eval_always {
                 tcx.dep_context().dep_graph().with_eval_always_task(
                     dep_node,
@@ -692,6 +730,11 @@ where
     try_execute_query(tcx, state, cache, span, key, lookup, query)
 }
 
+// 添加注释: 确保此查询具有所有绿色输入或已执行.
+// 执行`query::ensure(D)`被认为是对dep-node `D`的读取.
+// 如果查询仍应运行, 则返回true.
+
+// 添加注释: 这个函数在执行副作用传递时特别有用 --例如, 为了报告错误程序的错误.
 /// Ensure that either this query has all green inputs or been executed.
 /// Executing `query::ensure(D)` is considered a read of the dep-node `D`.
 /// Returns true if the query should still run.
@@ -699,6 +742,7 @@ where
 /// This function is particularly useful when executing passes for their
 /// side-effects -- e.g., in order to report errors for erroneous programs.
 ///
+// 添加注释: 优化仅在incr期间可用.
 /// Note: The optimization is only available during incr. comp.
 #[inline(never)]
 fn ensure_must_run<CTX, K, V>(tcx: CTX, key: &K, query: &QueryVtable<CTX, K, V>) -> bool
@@ -710,6 +754,7 @@ where
         return true;
     }
 
+    // 添加注释: 确保匿名查询毫无意义
     // Ensuring an anonymous query makes no sense
     assert!(!query.anon);
 
@@ -717,6 +762,10 @@ where
 
     match tcx.dep_context().dep_graph().try_mark_green_and_read(tcx, &dep_node) {
         None => {
+            // 添加注释: 从`try_mark_green_and_read`返回None意味着这是一个新的dep节点或者
+            // dep节点已经被标记为红色. 无论哪种方式, 我们都不能调用`dep_graph.read()`, 因为我们
+            // 没有DepNodeIndex. 我们必须调用查询本身. 这引入的性能成本应该可以忽略不计, 因为我们将
+            // 立即访问内存缓存, 或者下一个查询.
             // A None return from `try_mark_green_and_read` means that this is either
             // a new dep node or that the dep node has already been marked red.
             // Either way, we can't call `dep_graph.read()` as we don't have the
@@ -798,6 +847,7 @@ where
     CTX: QueryContext,
 {
     let query = &Q::VTABLE;
+    // 添加注释: 判断查询模式
     if let QueryMode::Ensure = mode {
         if !ensure_must_run(tcx, &key, query) {
             return None;

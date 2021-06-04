@@ -15,6 +15,8 @@ use rustc_span::Span;
 use rustc_target::spec::PanicStrategy;
 
 impl<'tcx> TyCtxt<'tcx> {
+    // 添加注释: 返回给定`LangItem`的`DefId`.
+    // 如果未找到, 则致使地中止编译.
     /// Returns the `DefId` for a given `LangItem`.
     /// If not found, fatally aborts compilation.
     pub fn require_lang_item(self, lang_item: LangItem, span: Option<Span>) -> DefId {

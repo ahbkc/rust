@@ -297,6 +297,7 @@ impl SelfProfilerRef {
         })
     }
 
+    // 添加注释: 开始分析查询提供程序. 分析将继续, 直到从此调用返回的TimingGuard被丢弃.
     /// Start profiling a query provider. Profiling continues until the
     /// TimingGuard returned from this call is dropped.
     #[inline(always)]

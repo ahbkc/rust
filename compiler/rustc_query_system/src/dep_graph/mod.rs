@@ -31,6 +31,7 @@ pub trait DepContext: Copy {
 
     fn register_reused_dep_node(&self, dep_node: &DepNode<Self::DepKind>);
 
+    // 添加注释: 访问探查器
     /// Access the profiler.
     fn profiler(&self) -> &SelfProfilerRef;
 

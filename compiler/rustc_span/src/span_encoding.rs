@@ -66,6 +66,7 @@ const LEN_TAG: u16 = 0b1000_0000_0000_0000;
 const MAX_LEN: u32 = 0b0111_1111_1111_1111;
 const MAX_CTXT: u32 = 0b1111_1111_1111_1111;
 
+// 添加注释: 虚拟跨度, 位置和长度都为零, 语法上下文也为零.
 /// Dummy span, both position and length are zero, syntax context is zero as well.
 pub const DUMMY_SP: Span = Span { base_or_index: 0, len_or_tag: 0, ctxt_or_zero: 0 };
 

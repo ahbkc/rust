@@ -68,6 +68,7 @@ pub trait QueryAccessors<CTX: QueryContext>: QueryConfig {
 
     type Cache: QueryCache<Key = Self::Key, Stored = Self::Stored, Value = Self::Value>;
 
+    // 添加注释: 不要使用这种方法访问查询结果, 而是使用TyCtxt上的方法.
     // Don't use this method to access query results, instead use the methods on TyCtxt
     fn query_state<'a>(tcx: CTX) -> &'a QueryState<CTX::DepKind, Self::Key>
     where

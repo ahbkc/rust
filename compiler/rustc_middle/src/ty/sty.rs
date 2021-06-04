@@ -441,6 +441,7 @@ impl<'tcx> ClosureSubsts<'tcx> {
     }
 }
 
+// 添加注释: 类似于`ClosureSubsts`;
 /// Similar to `ClosureSubsts`; see the above documentation for more.
 #[derive(Copy, Clone, Debug, TypeFoldable)]
 pub struct GeneratorSubsts<'tcx> {
@@ -480,10 +481,19 @@ impl<'tcx> GeneratorSubsts<'tcx> {
         }
     }
 
+    // 添加注释: 将生成器substs分成各自的组件.
+    // 此处假定的顺序必须与上面的`GeneratorSubsts::new`使用的顺序匹配.
     /// Divides the generator substs into their respective components.
     /// The ordering assumed here must match that used by `GeneratorSubsts::new` above.
     fn split(self) -> GeneratorSubstsParts<'tcx, GenericArg<'tcx>> {
         match self.substs[..] {
+            // 添加注释: 此处匹配的是数组, 以下将进行举例进行解释
+            // match [&1, &2, &3, &4, &5, &6] {
+            //    [ref parent_substs @ .., a, b, c, d] => {
+            //       parent_substs = [&1, &2];
+            //       a = &3, b = &4, c = &5, d = &6
+            //    }
+            // }
             [ref parent_substs @ .., resume_ty, yield_ty, return_ty, witness, tupled_upvars_ty] => {
                 GeneratorSubstsParts {
                     parent_substs,
@@ -513,6 +523,10 @@ impl<'tcx> GeneratorSubsts<'tcx> {
         self.split().parent_substs
     }
 
+    // 添加注释: 这描述了可以包含在生成器中的类型.
+    // 它最初是一个类型变量, 并在body的typeck的最后阶段统一.
+    // 它包含可能在生成器框架上结束的所有类型的元组.
+    // 状态转换MIR pass可能只生成提及此元组中的类型的布局. Unvars不计算在内.
     /// This describes the types that can be contained in a generator.
     /// It will be a type variable initially and unified in the last stages of typeck of a body.
     /// It contains a tuple of all the types that could end up on a generator frame.
@@ -522,6 +536,8 @@ impl<'tcx> GeneratorSubsts<'tcx> {
         self.split().witness.expect_ty()
     }
 
+    // 添加注释: 在生成器捕获的路径类型列表上返回迭代器.
+    // 如果在确定捕获路径的类型时出现类型错误, 则返回一个空的迭代器.
     /// Returns an iterator over the list of types of captured paths by the generator.
     /// In case there was a type error in figuring out the types of the captured path, an
     /// empty iterator is returned.
@@ -537,6 +553,7 @@ impl<'tcx> GeneratorSubsts<'tcx> {
         .flatten()
     }
 
+    // 添加注释: 返回表示此生成器的upvar的元组类型.
     /// Returns the tuple type representing the upvars for this generator.
     #[inline]
     pub fn tupled_upvars_ty(self) -> Ty<'tcx> {
@@ -638,6 +655,7 @@ impl<'tcx> GeneratorSubsts<'tcx> {
         }
     }
 
+    // 添加注释: 生成器类型中使用的状态判别式的类型.
     /// The type of the state discriminant used in the generator type.
     #[inline]
     pub fn discr_ty(&self, tcx: TyCtxt<'tcx>) -> Ty<'tcx> {
@@ -1960,6 +1978,8 @@ impl<'tcx> TyS<'tcx> {
         }
     }
 
+    // 添加注释: 迭代元组字段.
+    // 当调用元组以外的任何东西时出现panic
     /// Iterates over tuple fields.
     /// Panics when called on anything but a tuple.
     pub fn tuple_fields(&self) -> impl DoubleEndedIterator<Item = Ty<'tcx>> {

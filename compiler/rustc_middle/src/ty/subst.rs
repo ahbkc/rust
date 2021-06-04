@@ -20,6 +20,9 @@ use std::mem;
 use std::num::NonZeroUsize;
 use std::ops::ControlFlow;
 
+// 添加注释: Rust类型系统中的一个实体, 可以是多种类型(类型, 生命周期和常量)中的一种.
+// 为了减少内存使用, `GenericArg`是一个内部指针, 最低2位被保留用于标记以指示它指向
+// 的类型(`Ty`, `Region`, 或 `Const`).
 /// An entity in the Rust type system, which can be one of
 /// several kinds (types, lifetimes, and consts).
 /// To reduce memory usage, a `GenericArg` is a interned pointer,
@@ -112,6 +115,8 @@ impl<'tcx> GenericArg<'tcx> {
     pub fn unpack(self) -> GenericArgKind<'tcx> {
         let ptr = self.ptr.get();
         unsafe {
+            // 添加注释: `ptr & TAG_MASK`运算是用于计算当前是什么类型,
+            // 因为最低2位被保留用于标记以指示它指向的类型(`Ty`, `Region`, 或 `Const`)
             match ptr & TAG_MASK {
                 REGION_TAG => GenericArgKind::Lifetime(&*((ptr & !TAG_MASK) as *const _)),
                 TYPE_TAG => GenericArgKind::Type(&*((ptr & !TAG_MASK) as *const _)),
@@ -121,6 +126,8 @@ impl<'tcx> GenericArg<'tcx> {
         }
     }
 
+    // 添加注释: 将`GenericArg`解包为一个类型, 当它肯定是一个类型时.
+    // 在`Substs`用于已知种类有限的地方(例如, 在元组中, 唯一的参数是类型参数)的情况下, 这是正确的.
     /// Unpack the `GenericArg` as a type when it is known certainly to be a type.
     /// This is true in cases where `Substs` is used in places where the kinds are known
     /// to be limited (e.g. in tuples, where the only parameters are type parameters).
@@ -196,6 +203,9 @@ impl<'a, 'tcx> InternalSubsts<'tcx> {
     pub fn as_closure(&'a self) -> ClosureSubsts<'a> {
         ClosureSubsts { substs: self }
     }
+
+    // 添加注释: 将这些替换解释为生成器类型的替换.
+    // 闭包替换具有由编译器控制的特定结构, 该结构对签名和生成器类型等信息进行编码;
 
     /// Interpret these substitutions as the substitutions of a generator type.
     /// Closure substitutions have a particular structure controlled by the

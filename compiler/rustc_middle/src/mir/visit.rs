@@ -233,6 +233,7 @@ macro_rules! make_mir_visitor {
                 self.super_source_scope(scope);
             }
 
+            // 添加注释: `super_xxx`方法包含默认行为, 不应被覆盖.
             // The `super_xxx` methods comprise the default behavior and are
             // not meant to be overridden.
 

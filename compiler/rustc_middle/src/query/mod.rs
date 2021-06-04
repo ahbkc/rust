@@ -1412,7 +1412,9 @@ rustc_queries! {
         -> &'tcx [(Symbol, Option<Symbol>)] {
         desc { "calculating the lib features defined in a crate" }
     }
+    // 添加注释: 通过从元数据加载另一个包中定义的lang项目.
     /// Returns the lang items defined in another crate by loading it from metadata.
+    // 添加注释: FIXME: 在这里传递`LOCAL_CRATE`以外的`CrateNum`是非法的, 只是去掉那个参数?
     // FIXME: It is illegal to pass a `CrateNum` other than `LOCAL_CRATE` here, just get rid
     // of that argument?
     query get_lang_items(_: CrateNum) -> LanguageItems {

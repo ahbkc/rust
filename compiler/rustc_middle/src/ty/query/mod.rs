@@ -223,11 +223,13 @@ macro_rules! define_callbacks {
                     value.clone()
                 });
 
+                // 添加注释: 如果从cache中查询出来的话, 则直接返回
                 let lookup = match cached {
                     Ok(value) => return value,
                     Err(lookup) => lookup,
                 };
 
+                // 添加注释: 否则再去查询...
                 self.tcx.queries.$name(self.tcx, self.span, key, lookup, QueryMode::Get).unwrap()
             })*
         }

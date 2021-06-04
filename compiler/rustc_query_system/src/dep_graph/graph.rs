@@ -140,6 +140,7 @@ impl<K: DepKind> DepGraph<K> {
         DepGraph { data: None, virtual_dep_node_index: Lrc::new(AtomicU32::new(0)) }
     }
 
+    // 添加注释: 如果我们正在构建完整的深度图, 则返回`true`, 否则返回`false`
     /// Returns `true` if we are actually building the full dep-graph, and `false` otherwise.
     #[inline]
     pub fn is_fully_enabled(&self) -> bool {

@@ -25,9 +25,11 @@ use {
     std::{mem, process},
 };
 
+// 添加注释: 代表一个跨度和一个查询键
 /// Represents a span and a query key.
 #[derive(Clone, Debug)]
 pub struct QueryInfo {
+    // 添加注释: 与需要此查询的原因相对应的跨度.
     /// The span corresponding to the reason for which this query was required.
     pub span: Span,
     pub query: QueryStackFrame,
@@ -35,19 +37,24 @@ pub struct QueryInfo {
 
 pub type QueryMap<D> = FxHashMap<QueryJobId<D>, QueryJobInfo<D>>;
 
+// 添加注释: 唯一标识查询缓存中分片内的活动查询作业的值
 /// A value uniquely identifying an active query job within a shard in the query cache.
 #[derive(Copy, Clone, Eq, PartialEq, Hash)]
 pub struct QueryShardJobId(pub NonZeroU32);
 
+// 添加注释: 唯一标识活动查询作业的值
 /// A value uniquely identifying an active query job.
 #[derive(Copy, Clone, Eq, PartialEq, Hash)]
 pub struct QueryJobId<D> {
+    // 添加注释: 这是分片中的哪个工作
     /// Which job within a shard is this
     pub job: QueryShardJobId,
 
+    // 添加注释: 这个工作在哪个分片中
     /// In which shard is this job
     pub shard: u16,
 
+    // 添加注释: 这个工作是什么类型的查询.
     /// What kind of query this job is.
     pub kind: D,
 }
@@ -105,6 +112,7 @@ impl<D> QueryJob<D>
 where
     D: Copy + Clone + Eq + Hash,
 {
+    // 添加注释: 创建一个新的查询作业
     /// Creates a new query job.
     pub fn new(id: QueryShardJobId, span: Span, parent: Option<QueryJobId<D>>) -> Self {
         QueryJob {
@@ -124,8 +132,10 @@ where
         self.latch.as_ref().unwrap().clone()
     }
 
+    // 添加注释: 向`waiters`发出查询完成的信号
     /// Signals to waiters that the query is complete.
     ///
+    // 添加注释: 这对单线程rustc没有任何作用, 因为没有并发作业可以等待我们
     /// This does nothing for single threaded rustc,
     /// as there are no concurrent jobs which could be waiting on us
     pub fn signal_complete(self) {

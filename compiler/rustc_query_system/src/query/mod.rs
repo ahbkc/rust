@@ -67,6 +67,7 @@ pub trait QueryContext: HasDepContext {
     /// Get string representation from DefPath.
     fn def_path_str(&self, def_id: DefId) -> String;
 
+    // 添加注释: 从TLS上下文中获取查询信息.
     /// Get the query information from the TLS context.
     fn current_query_job(&self) -> Option<QueryJobId<Self::DepKind>>;
 
@@ -81,6 +82,7 @@ pub trait QueryContext: HasDepContext {
     /// Load diagnostics associated to the node in the previous session.
     fn load_diagnostics(&self, prev_dep_node_index: SerializedDepNodeIndex) -> Vec<Diagnostic>;
 
+    // 添加注释: 为给定节点注册诊断, 以供下一个会话使用.
     /// Register diagnostics for the given node, for use in next session.
     fn store_diagnostics(&self, dep_node_index: DepNodeIndex, diagnostics: ThinVec<Diagnostic>);
 

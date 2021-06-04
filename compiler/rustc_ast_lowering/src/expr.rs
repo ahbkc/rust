@@ -630,6 +630,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
         hir::Arm { hir_id, pat, guard, body: self.lower_expr(&arm.body), span: arm.span }
     }
 
+    // 添加注释: 将`async`构造降低到一个生成器, 然后将其包装起来以实现`Future`
     /// Lower an `async` construct to a generator that is then wrapped so it implements `Future`.
     ///
     /// This results in:

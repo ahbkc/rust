@@ -415,10 +415,13 @@ fn make_generator_state_argument_pinned<'tcx>(tcx: TyCtxt<'tcx>, body: &mut Body
     PinArgVisitor { ref_gen_ty, tcx }.visit_body(body);
 }
 
+// 添加注释: 分配一个新的local并用它替换所有`local`的引用. 返回新的本地.
 /// Allocates a new local and replaces all references of `local` with it. Returns the new local.
 ///
+// 添加注释: `local`将更改为类型为`ty`的新本地声明.
 /// `local` will be changed to a new local decl with type `ty`.
 ///
+// 添加注释: 请注意, 新的local将未初始化. 调用者有责任在第一次使用之前为其分配一些有效值.
 /// Note that the new local will be uninitialized. It is the caller's responsibility to assign some
 /// valid value to it before its first use.
 fn replace_local<'tcx>(
@@ -427,6 +430,7 @@ fn replace_local<'tcx>(
     body: &mut Body<'tcx>,
     tcx: TyCtxt<'tcx>,
 ) -> Local {
+    // 添加注释: 根据`ty`和`body.span`创建一个新的local, 并使用新的local替换旧的local
     let new_decl = LocalDecl::new(ty, body.span);
     let new_local = body.local_decls.push(new_decl);
     body.local_decls.swap(local, new_local);
@@ -1286,8 +1290,11 @@ impl<'tcx> MirPass<'tcx> for StateTransform {
 
         // 添加注释: 计算 GeneratorState<yield_ty, return_ty>
         // Compute GeneratorState<yield_ty, return_ty>
+        // 添加注释: 获取LangItem对应的DefId
         let state_did = tcx.require_lang_item(LangItem::GeneratorState, None);
+        // 添加注释: `adt_def`表示计算`state_did`的ADT定义
         let state_adt_ref = tcx.adt_def(state_did);
+        // 添加注释: 获取&List<GenericArg>
         let state_substs = tcx.intern_substs(&[yield_ty.into(), body.return_ty().into()]);
         let ret_ty = tcx.mk_adt(state_adt_ref, state_substs);
 
