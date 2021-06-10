@@ -369,6 +369,7 @@ impl OutputTypes {
         })
     }
 
+    // 添加注释: 如果任何输出类型需要链接, 则返回`true`
     // Returns `true` if any of the output types require linking.
     pub fn should_link(&self) -> bool {
         self.0.keys().any(|k| match *k {

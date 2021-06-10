@@ -111,6 +111,7 @@ impl Mul<usize> for Limit {
     }
 }
 
+// 添加注释: 表示与单个crate的编译会话关联的数据.
 /// Represents the data associated with a compilation
 /// session for a single crate.
 pub struct Session {
@@ -118,13 +119,17 @@ pub struct Session {
     pub host: Target,
     pub opts: config::Options,
     pub host_tlib_path: SearchPath,
+    // 添加注释: 如果主机和目标相同, 则该字段值为`None`
     /// `None` if the host and target are the same.
     pub target_tlib_path: Option<SearchPath>,
     pub parse_sess: ParseSess,
     pub sysroot: PathBuf,
+    // 添加注释: 本地文件系统中crate的根源文件的名称.
+    // 如果该字段值为`None`表示没有源文件.
     /// The name of the root source file of the crate, in the local file system.
     /// `None` means that there is no source file.
     pub local_crate_source_file: Option<PathBuf>,
+    // 添加注释: 编译器在其中执行的目录加上一个标志, 指示存储在此处的值是否受到路径重新映射的影响.
     /// The directory the compiler has been executed in plus a flag indicating
     /// if the value stored here has been affected by path remapping.
     pub working_dir: (PathBuf, bool),
@@ -134,6 +139,8 @@ pub struct Session {
     /// in order to avoid redundantly verbose output (Issue #24690, #44953).
     pub one_time_diagnostics: Lock<FxHashSet<(DiagnosticMessageId, Option<Span>, String)>>,
     crate_types: OnceCell<Vec<CrateType>>,
+    // 添加注释: `crate_disambiguator`由传递给编译器的所有`-C metadata`参数构成. 它的值与crate-name一起构成了
+    // crate的唯一全局标识符. 它用于允许多个同名的crate共存. 更多信息请参考`rustc_codegen_llvm::back::symbol_names`
     /// The `crate_disambiguator` is constructed out of all the `-C metadata`
     /// arguments passed to the compiler. Its value together with the crate-name
     /// forms a unique global identifier for the crate. It is used to allow
@@ -145,6 +152,7 @@ pub struct Session {
 
     lint_store: OnceCell<Lrc<dyn SessionLintStore>>,
 
+    // 添加注释: 潜在元限递归操作的最大递归限制, 例如自动取消引用和单态化.
     /// The maximum recursion limit for potentially infinitely recursive
     /// operations such as auto-dereference and monomorphization.
     pub recursion_limit: OnceCell<Limit>,
@@ -153,35 +161,45 @@ pub struct Session {
     /// being emitted.
     pub move_size_limit: OnceCell<usize>,
 
+    // 添加注释: 单态化期间类型的最大长度.
     /// The maximum length of types during monomorphization.
     pub type_length_limit: OnceCell<Limit>,
 
+    // 添加注释: const表达式可以计算的最大块数.
     /// The maximum blocks a const expression can evaluate.
     pub const_eval_limit: OnceCell<Limit>,
 
     incr_comp_session: OneThread<RefCell<IncrCompSession>>,
+    // 添加注释: 用于增量编译测试. 仅当指定了`-Zquery-dep-graph`时才会填充
     /// Used for incremental compilation tests. Will only be populated if
     /// `-Zquery-dep-graph` is specified.
     pub cgu_reuse_tracker: CguReuseTracker,
 
+    // 添加注释: 使用`-Z self-profile`参数时
     /// Used by `-Z self-profile`.
     pub prof: SelfProfilerRef,
 
+    // 添加注释: 在编译期间收集的一些测量值
     /// Some measurements that are being gathered during compilation.
     pub perf_stats: PerfStats,
 
+    // 添加注释: 有关正在编译的代码的数据, 在编译期间收集
     /// Data about code being compiled, gathered during compilation.
     pub code_stats: CodeStats,
 
+    // 添加注释: 如果`-zfuel=crate=n`参数指定了, 则该字段值为`Some(crate)`
     /// If `-zfuel=crate=n` is specified, `Some(crate)`.
     optimization_fuel_crate: Option<String>,
 
+    // 添加注释: 如果`-zfuel=crate=n`参数指定了, 则跟踪fuel信息
     /// Tracks fuel info if `-zfuel=crate=n` is specified.
     optimization_fuel: Lock<OptimizationFuel>,
 
+    // 添加注释: 接下来的两个是pub的, 因为driver需要读取它们.
     // The next two are public because the driver needs to read them.
     /// If `-zprint-fuel=crate`, `Some(crate)`.
     pub print_fuel_crate: Option<String>,
+    // 添加注释: 始终设置为零并递增, 以便我们可以打印crate消耗的fuel
     /// Always set to zero and incremented so that we can print fuel expended by a crate.
     pub print_fuel: AtomicU64,
 
@@ -189,16 +207,20 @@ pub struct Session {
     /// false positives about a job server in our environment.
     pub jobserver: Client,
 
+    // 添加注释: 由driver专门指定的Cap lint级别.
     /// Cap lint level specified by a driver specifically.
     pub driver_lint_caps: FxHashMap<lint::LintId, lint::Level>,
 
     /// `Span`s of trait methods that weren't found to avoid emitting object safety errors
     pub trait_methods_not_found: Lock<FxHashSet<Span>>,
 
+    // 添加注释: 对于不存在但存在于`std`下的路径, 从ident span到path span的映射. 例如, 写了`str::from_utf8`而不是
+    // `std::str::from_utf8`
     /// Mapping from ident span to path span for paths that don't exist as written, but that
     /// exist under `std`. For example, wrote `str::from_utf8` instead of `std::str::from_utf8`.
     pub confused_type_with_std_module: Lock<FxHashMap<Span, Span>>,
 
+    // 添加注释: 优先于Rust提供的库的库的路径. windows-gnu目标使用它来确定系统mingw-w64库的优先级
     /// Path for libraries that will take preference over libraries shipped by Rust.
     /// Used by windows-gnu targets to priortize system mingw-w64 libraries.
     pub system_library_path: OneThread<RefCell<Option<Option<PathBuf>>>>,
@@ -214,15 +236,18 @@ pub struct Session {
     /// drown everything else in noise.
     miri_unleashed_features: Lock<Vec<(Span, Option<Symbol>)>>,
 
+    // 添加注释: 用于解释asm!的架构
     /// Architecture to use for interpreting asm!.
     pub asm_arch: Option<InlineAsmArch>,
 
+    // 添加注释: 为当前目标启用的功能集.
     /// Set of enabled features for the current target.
     pub target_features: FxHashSet<Symbol>,
 
     known_attrs: Lock<MarkedAttrs>,
     used_attrs: Lock<MarkedAttrs>,
 
+    // 添加注释: 我们建议将`if`条件转换为`if let`的`Span`
     /// `Span`s for `if` conditions that we have suggested turning into `if let`.
     pub if_let_suggestions: Lock<FxHashSet<Span>>,
 }
@@ -646,8 +671,10 @@ impl Session {
             .expect("`lint_store` was initialized twice");
     }
 
+    // 添加注释: 计算用于此编译的LTO风格
     /// Calculates the flavor of LTO to use for this compilation.
     pub fn lto(&self) -> config::Lto {
+        // 添加注释: 如果我们的目标有代码生成要求, 请忽略命令行.
         // If our target has codegen requirements ignore the command line
         if self.target.requires_lto {
             return config::Lto::Fat;
@@ -842,6 +869,7 @@ impl Session {
             )
     }
 
+    // 添加注释: 返回注册器函数的符号名称, 给定crate`Svn`和函数`DefIndex`
     /// Returns the symbol name for the registrar function,
     /// given the crate `Svh` and the function `DefIndex`.
     pub fn generate_plugin_registrar_symbol(&self, disambiguator: CrateDisambiguator) -> String {
@@ -910,6 +938,7 @@ impl Session {
             _ => panic!("trying to invalidate `IncrCompSession` `{:?}`", *incr_comp_session),
         };
 
+        // 添加注释: 这也会删除锁定文件, 从而解锁目录.
         // Note: this will also drop the lock file, thus unlocking the directory.
         *incr_comp_session = IncrCompSession::InvalidBecauseOfErrors { session_directory };
     }
@@ -1076,6 +1105,7 @@ impl Session {
         self.opts.edition
     }
 
+    // 添加注释: 如果我们不能跳过共享库调用的PLT, 则返回`true`
     /// Returns `true` if we cannot skip the PLT for shared library calls.
     pub fn needs_plt(&self) -> bool {
         // Check if the current target usually needs PLT to be enabled.
@@ -1096,6 +1126,7 @@ impl Session {
         dbg_opts.plt.unwrap_or(needs_plt || !full_relro)
     }
 
+    // 添加注释: 检查是否应该发出LLVM生命周期标记
     /// Checks if LLVM lifetime markers should be emitted.
     pub fn emit_lifetime_markers(&self) -> bool {
         self.opts.optimize != config::OptLevel::No
@@ -1140,6 +1171,7 @@ impl Session {
         self.used_attrs.lock().is_marked(attr)
     }
 
+    // 添加注释: 如果属性的路径与参数匹配, 则返回`true`. 如果匹配, 则将该属性标记为已使用.
     /// Returns `true` if the attribute's path matches the argument. If it
     /// matches, then the attribute is marked as used.
     ///

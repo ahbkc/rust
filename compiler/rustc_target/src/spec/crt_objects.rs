@@ -1,8 +1,12 @@
+// 添加注释: Object files为基本运行时工具提供支持, 并在链接开始和结束时添加到生成的二进制文件中.
 //! Object files providing support for basic runtime facilities and added to the produced binaries
 //! at the start and at the end of linking.
 //!
+// 添加注释: 流行工具链的CRT对象表.
 //! Table of CRT objects for popular toolchains.
+// 添加注释: `crtx`通常与lic一起发布, 而`begin/end`与gcc一起发布.
 //! The `crtx` ones are generally distributed with libc and the `begin/end` ones with gcc.
+// 添加注释: 更多详情查看<https://dev.gentoo.org/~vapier/crt.txt>
 //! See <https://dev.gentoo.org/~vapier/crt.txt> for some more details.
 //!
 //! | Pre-link CRT objects | glibc                  | musl                   | bionic           | mingw             | wasi         |
@@ -31,6 +35,11 @@
 //!     - gcc wrapper cannot be used for some reason and linker like ld or lld is used directly.
 //!     - gcc wrapper pulls wrong CRT objects (e.g. from glibc when we are targeting musl).
 //!
+// 添加注释: 一般来说, 最好依靠目标的本机工具链来拉取对象.
+// 但是, 对于某些目标(musl, mingw), rustc历史上提供了更独立的安装, 不需要用户安装本机目标的工具链.
+// 在这种情况下, rustc将对象作为目标Rust工具链的一部分进行分发, 并回退到手动链接它们.
+// 与原生工具链不同, rustc目前只在链接期间添加libc的对象, 而不是gcc的. 因此, 在自包含模式下链接时, rustc无法
+// 与C++静态库(#36710)链接.
 //! In general it is preferable to rely on the target's native toolchain to pull the objects.
 //! However, for some targets (musl, mingw) rustc historically provides a more self-contained
 //! installation not requiring users to install the native target's toolchain.
@@ -123,6 +132,7 @@ pub(super) fn post_wasi_fallback() -> CrtObjects {
     new(&[])
 }
 
+// 添加注释: 使用哪种逻辑来确定是否回退到"self-contained"模式
 /// Which logic to use to determine whether to fall back to the "self-contained" mode or not.
 #[derive(Clone, Copy, PartialEq, Hash, Debug)]
 pub enum CrtObjectsFallback {

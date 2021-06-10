@@ -899,20 +899,27 @@ supported_targets! {
     ("aarch64_be-unknown-linux-gnu_ilp32", aarch64_be_unknown_linux_gnu_ilp32),
 }
 
+// 添加注释: `rustc`知道如何为特定目标编译
 /// Everything `rustc` knows about how to compile for a specific target.
 ///
+// 添加注释: 这里的每个字段都必须指定, 并且没有默认值
 /// Every field here must be specified, and has no default value.
 #[derive(PartialEq, Clone, Debug)]
 pub struct Target {
+    // 添加注释: 要传递给LLVM的目标三元组
     /// Target triple to pass to LLVM.
     pub llvm_target: String,
+    // 添加注释: 指针中的位数, 影响`target_pointer_width` `cfg`变量
     /// Number of bits in a pointer. Influences the `target_pointer_width` `cfg` variable.
     pub pointer_width: u32,
+    // 添加注释: 用于ABI考虑的架构. 有效选项包括: `x86`, `x86_64`, `arm`, `aarch64`, `mips`, `powerpc`, `powerpc64`等
     /// Architecture to use for ABI considerations. Valid options include: "x86",
     /// "x86_64", "arm", "aarch64", "mips", "powerpc", "powerpc64", and others.
     pub arch: String,
+    // 添加注释: 数据布局, 传递给LLVM
     /// [Data layout](http://llvm.org/docs/LangRef.html#data-layout) to pass to LLVM.
     pub data_layout: String,
+    // 添加注释: 带有默认值的可选设置
     /// Optional settings with defaults.
     pub options: TargetOptions,
 }
@@ -927,45 +934,62 @@ impl HasTargetSpec for Target {
     }
 }
 
+// 添加注释: 目标规范的可选方面.
 /// Optional aspects of a target specification.
 ///
+// 添加注释: 这有一个`Default`的实现, 请参阅每个字段以了解默认值. 通常, 这些尝试采用`minimal defaults`, 即不对
+// 它们运行的运行时做任何假设.
 /// This has an implementation of `Default`, see each field for what the default is. In general,
 /// these try to take "minimal defaults" that don't assume anything about the runtime they run in.
 ///
+// 添加注释: `TargetOptions`作为一个单独的结构, 主要是`Target`构造的一个实现细节, 它的所有字段在逻辑上都属于`Target`,
+// 并且可以从`Target`到`Deref`实现.
 /// `TargetOptions` as a separate structure is mostly an implementation detail of `Target`
 /// construction, all its fields logically belong to `Target` and available from `Target`
 /// through `Deref` impls.
 #[derive(PartialEq, Clone, Debug)]
 pub struct TargetOptions {
+    // 添加注释: 目标是内置的还是从自定义目标规范加载的
     /// Whether the target is built-in or loaded from a custom target specification.
     pub is_builtin: bool,
 
+    // 添加注释: 用作`target_endian` `cfg`变量, 默认为小端
     /// Used as the `target_endian` `cfg` variable. Defaults to little endian.
     pub endian: Endian,
+    // 添加注释: c_int类型的宽度, 默认为"32"
     /// Width of c_int type. Defaults to "32".
     pub c_int_width: String,
+    // 添加注释: 用于条件编译的操作系统名(`target_os`). 默认为`none`.
+    // `none`意味着没有`std`库的裸机目标. 一些具有`std`的目标也使用"unknown"作为`os`值, 但它们是例外.
     /// OS name to use for conditional compilation (`target_os`). Defaults to "none".
     /// "none" implies a bare metal target without `std` library.
     /// A couple of targets having `std` also use "unknown" as an `os` value,
     /// but they are exceptions.
     pub os: String,
+    // 添加注释: 用于条件编译的环境名称(`target_env`). 默值为""
     /// Environment name to use for conditional compilation (`target_env`). Defaults to "".
     pub env: String,
+    // 添加注释: 用于条件编译的供应商名称(`target_vendor`). 默认为"unknown".
     /// Vendor name to use for conditional compilation (`target_vendor`). Defaults to "unknown".
     pub vendor: String,
+    // 添加注释: 如果`-C linker-flavor`或`-C linker`未在命令行上传递, 则使用默认链接器. 默认为`LinkerFlavor::Gcc`.
     /// Default linker flavor used if `-C linker-flavor` or `-C linker` are not passed
     /// on the command line. Defaults to `LinkerFlavor::Gcc`.
     pub linker_flavor: LinkerFlavor,
 
+    // 添加注释: 要调用的链接器
     /// Linker to invoke
     pub linker: Option<String>,
 
+    // 添加注释: 如果`lld`(或 `rust-lld`)被指定为链接器而没有以任何方式阐明其flavor, 则使用LLD flavor
     /// LLD flavor used if `lld` (or `rust-lld`) is specified as a linker
     /// without clarifying its flavor in any way.
     pub lld_flavor: LldFlavor,
 
+    // 在任何用户定义的库前传递的链接器参数.
     /// Linker arguments that are passed *before* any user-defined libraries.
     pub pre_link_args: LinkArgs,
+    // 添加注释: 在所有其他对象代码之前和之后链接的对象.
     /// Objects to link before and after all other object code.
     pub pre_link_objects: CrtObjects,
     pub post_link_objects: CrtObjects,

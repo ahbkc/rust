@@ -43,6 +43,7 @@ pub fn ensure_removed(diag_handler: &Handler, path: &Path) {
     }
 }
 
+// 添加注释: 执行编译阶段的链接部分. 这将为此编译会话生成所有请求的输出.
 /// Performs the linkage portion of the compilation phase. This will generate all
 /// of the requested outputs for this compilation session.
 pub fn link_binary<'a, B: ArchiveBuilder<'a>>(
@@ -55,6 +56,7 @@ pub fn link_binary<'a, B: ArchiveBuilder<'a>>(
     let _timer = sess.timer("link_binary");
     let output_metadata = sess.opts.output_types.contains_key(&OutputType::Metadata);
     for &crate_type in sess.crate_types().iter() {
+        // 添加注释: 如果我们有 -Z no-codegen, 请忽略可执行的crate, 因为它们会出错.
         // Ignore executable crates if we have -Z no-codegen, as they will error.
         if (sess.opts.debugging_opts.no_codegen || !sess.opts.output_types.should_codegen())
             && !output_metadata
@@ -77,6 +79,7 @@ pub fn link_binary<'a, B: ArchiveBuilder<'a>>(
             }
         });
 
+        // 添加注释: 当`outputs.outputs.should_link()`返回true, 则代表输出类型为`OutputType::Exe`
         if outputs.outputs.should_link() {
             let tmpdir = TempFileBuilder::new()
                 .prefix("rustc")
@@ -110,6 +113,7 @@ pub fn link_binary<'a, B: ArchiveBuilder<'a>>(
         }
     }
 
+    // 添加注释: 如果我们不保存临时文件, 请删除临时对象文件和元数据
     // Remove the temporary object file and metadata if we aren't saving temps
     sess.time("link_binary_remove_temps", || {
         if !sess.opts.cg.save_temps {
@@ -391,6 +395,7 @@ fn link_rlib<'a, B: ArchiveBuilder<'a>>(
     ab
 }
 
+// 添加注释: 创建一个静态存档
 /// Create a static archive.
 ///
 /// This is essentially the same thing as an rlib, but it also involves adding all of the upstream

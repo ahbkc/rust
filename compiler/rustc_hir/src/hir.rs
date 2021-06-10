@@ -774,21 +774,28 @@ impl MacroDef<'_> {
     }
 }
 
+// 添加注释: 语句块 `{ .. }`, 它可能有下一个标签(在这种情况下, `targeted_by_break`字段将是`true`)并且
+// 可能是`unsafe`, 因为`rules`不是`DefaultBlock`.
 /// A block of statements `{ .. }`, which may have a label (in this case the
 /// `targeted_by_break` field will be `true`) and may be `unsafe` by means of
 /// the `rules` being anything but `DefaultBlock`.
 #[derive(Debug, HashStable_Generic)]
 pub struct Block<'hir> {
+    // 添加注释: 块中的语句
     /// Statements in a block.
     pub stmts: &'hir [Stmt<'hir>],
+    // 添加注释: 块末尾的表达式, 如果有的话, 不带分号.
     /// An expression at the end of the block
     /// without a semicolon, if any.
     pub expr: Option<&'hir Expr<'hir>>,
     #[stable_hasher(ignore)]
     pub hir_id: HirId,
+    // 添加注释: 区分`unsafe { ... }`和`{ ... }`
     /// Distinguishes between `unsafe { ... }` and `{ ... }`.
     pub rules: BlockCheckMode,
     pub span: Span,
+    // 添加注释: 如果为true, 则可能存在旨在尽早突破此块的`break 'a`值. 由
+    // `'label: {}`块和`try {}`块使用.
     /// If true, then there may exist `break 'a` values that aim to
     /// break out of this block early.
     /// Used by `'label: {}` blocks and by `try {}` blocks.
@@ -1654,21 +1661,32 @@ pub fn is_range_literal(expr: &Expr<'_>) -> bool {
 
 #[derive(Debug, HashStable_Generic)]
 pub enum ExprKind<'hir> {
+    // 添加注释: 一个`box x`表达式
     /// A `box x` expression.
     Box(&'hir Expr<'hir>),
+    // 添加注释: 允许来自内联`const`块的匿名常量
     /// Allow anonymous constants from an inline `const` block
     ConstBlock(AnonConst),
+    // 添加注释: 一个数组(例如, `[a, b, c, d]`)
     /// An array (e.g., `[a, b, c, d]`).
     Array(&'hir [Expr<'hir>]),
+    // 添加注释: 一个函数调用
     /// A function call.
     ///
+    // 添加注释: 第一个字段解析为函数本身(通常是`ExprKind::Path`), 第二个字段是参数列表. 这也表示
+    // 调用类似元组的AST的构造函数, 例如元组结构和枚举变体
     /// The first field resolves to the function itself (usually an `ExprKind::Path`),
     /// and the second field is the list of arguments.
     /// This also represents calling the constructor of
     /// tuple-like ADTs such as tuple structs and enum variants.
     Call(&'hir Expr<'hir>, &'hir [Expr<'hir>]),
+    // 添加注释: 方法调用(例如, `x.foo::<'static, Bar, Baz>(a, b, c, d)`)
     /// A method call (e.g., `x.foo::<'static, Bar, Baz>(a, b, c, d)`).
     ///
+    // 添加注释: `PathSegment`/`Span`表示方法名称及其通用参数(在尖括号内).
+    // `Expr`s向量的第一个元素是计算方法被调用的对象(接收者)的表达式, 其余元素是其余的参数.
+    // 因此, `x.foo::<Bar, Baz>(a, b, c, d)`表示为`ExprKind::MethodCall(PathSegment { foo, [Bar, Baz] }, [x, a, b, c, d])`.
+    // 最后的`Span`表示函数和参数的跨度(例如, `x.foo::<Bar, Baz>(a, b)`中的`foo::<Bar, Baz>(a, b)`)
     /// The `PathSegment`/`Span` represent the method name and its generic arguments
     /// (within the angle brackets).
     /// The first element of the vector of `Expr`s is the expression that evaluates
@@ -1684,87 +1702,124 @@ pub enum ExprKind<'hir> {
     ///
     /// [`type_dependent_def_id`]: ../ty/struct.TypeckResults.html#method.type_dependent_def_id
     MethodCall(&'hir PathSegment<'hir>, Span, &'hir [Expr<'hir>], Span),
+    // 添加注释: 元组(例如, `(a, b, c, d)`)
     /// A tuple (e.g., `(a, b, c, d)`).
     Tup(&'hir [Expr<'hir>]),
+    // 添加注释: 二元运算(例如, `a + b`, `a * b`)
     /// A binary operation (e.g., `a + b`, `a * b`).
     Binary(BinOp, &'hir Expr<'hir>, &'hir Expr<'hir>),
+    // 添加注释: 一元运算(例如, `!x`, `*x`)
     /// A unary operation (e.g., `!x`, `*x`).
     Unary(UnOp, &'hir Expr<'hir>),
+    // 添加注释: 文字(例如, `1`, `"foo"`)
     /// A literal (e.g., `1`, `"foo"`).
     Lit(Lit),
+    // 添加注释: 强制转换(例如, `foo as f64`)
     /// A cast (e.g., `foo as f64`).
     Cast(&'hir Expr<'hir>, &'hir Ty<'hir>),
+    // 添加注释: 类型引用(例如, `Foo`)
     /// A type reference (e.g., `Foo`).
     Type(&'hir Expr<'hir>, &'hir Ty<'hir>),
+    // 添加注释: 将表达式包装在终止作用域中.
     /// Wraps the expression in a terminating scope.
+    // 添加注释: 这使得它在语义上等同于`{ let _t = expr; _t }`
     /// This makes it semantically equivalent to `{ let _t = expr; _t }`.
     ///
+    // 添加注释: 此构造仅用于调整HIR降低中的放置顺序.
     /// This construct only exists to tweak the drop order in HIR lowering.
+    // 添加注释: 一个例子是`for`循环的脱糖
     /// An example of that is the desugaring of `for` loops.
     DropTemps(&'hir Expr<'hir>),
+    // 添加注释: 一个`if`块, 带有一个可选的else选
     /// An `if` block, with an optional else block.
     ///
+    // 添加注释: 即, `if <expr> { <expr> } else { <expr> }`
     /// I.e., `if <expr> { <expr> } else { <expr> }`.
     If(&'hir Expr<'hir>, &'hir Expr<'hir>, Option<&'hir Expr<'hir>>),
+    // 添加注释: 一个无条件循环(可以用`break`, `continue`, 或`return`退出)
     /// A conditionless loop (can be exited with `break`, `continue`, or `return`).
     ///
+    // 添加注释: 即, `'label: loop { <block> }`
     /// I.e., `'label: loop { <block> }`.
     ///
+    // 添加注释: `Span`是循环头(`for x in y`/`while let pat = expr`)
     /// The `Span` is the loop header (`for x in y`/`while let pat = expr`).
     Loop(&'hir Block<'hir>, Option<Label>, LoopSource, Span),
+    // 添加注释: 一个`match`块, 其来源表明它是否是脱糖的结果, 如果是, 则是哪种
     /// A `match` block, with a source that indicates whether or not it is
     /// the result of a desugaring, and if so, which kind.
     Match(&'hir Expr<'hir>, &'hir [Arm<'hir>], MatchSource),
+    // 添加注释: 一个闭包(例如, `move |a, b, c| {a + b + c}`)
     /// A closure (e.g., `move |a, b, c| {a + b + c}`).
     ///
+    // 添加注释: `Span`是参数块`|...|`
     /// The `Span` is the argument block `|...|`.
     ///
+    // 添加注释: 这也可能是一个生成器文字或一个由`Option<Movability>`指示的`async block`
     /// This may also be a generator literal or an `async block` as indicated by the
     /// `Option<Movability>`.
     Closure(CaptureBy, &'hir FnDecl<'hir>, BodyId, Span, Option<Movability>),
+    // 添加注释: 一个块(例如, `'label: { ... }`)
     /// A block (e.g., `'label: { ... }`).
     Block(&'hir Block<'hir>, Option<Label>),
 
+    // 添加注释: 一个赋值(例如, `a = foo()`)
     /// An assignment (e.g., `a = foo()`).
     Assign(&'hir Expr<'hir>, &'hir Expr<'hir>, Span),
+    // 添加注释: 带有运算符的赋值.
     /// An assignment with an operator.
+    // 例如: `a += a`
     ///
     /// E.g., `a += 1`.
     AssignOp(BinOp, &'hir Expr<'hir>, &'hir Expr<'hir>),
+    // 添加注释: 访问命名(例如, `obj.foo`)或未命名(例如, `obj.0`)字段
     /// Access of a named (e.g., `obj.foo`) or unnamed (e.g., `obj.0`) struct or tuple field.
     Field(&'hir Expr<'hir>, Ident),
+    // 添加注释: 索引操作(例如, `foo[2]`)
     /// An indexing operation (`foo[2]`).
     Index(&'hir Expr<'hir>, &'hir Expr<'hir>),
 
+    // 添加注释: 定义的路径, 可能包含生命周期或类型参数.
     /// Path to a definition, possibly containing lifetime or type parameters.
     Path(QPath<'hir>),
 
+    // 添加注释: 一个引用操作(例如, `&a`或`&mut a`)
     /// A referencing operation (i.e., `&a` or `&mut a`).
     AddrOf(BorrowKind, Mutability, &'hir Expr<'hir>),
+    // 添加注释: 带有可选标签的`break`
     /// A `break`, with an optional label to break.
     Break(Destination, Option<&'hir Expr<'hir>>),
+    // 添加注释: 带有可选标签的`continue`
     /// A `continue`, with an optional label.
     Continue(Destination),
+    // 添加注释: 一个`return`, 带有一个要返回的可选值.
     /// A `return`, with an optional value to be returned.
     Ret(Option<&'hir Expr<'hir>>),
 
+    // 添加注释: 内联汇编(来自`asm!`), 及其输入和输出
     /// Inline assembly (from `asm!`), with its outputs and inputs.
     InlineAsm(&'hir InlineAsm<'hir>),
+    // 添加注释: 内联汇编(来自`llvm_asm!`), 及其输入和输出
     /// Inline assembly (from `llvm_asm!`), with its outputs and inputs.
     LlvmInlineAsm(&'hir LlvmInlineAsm<'hir>),
 
+    // 添加注释: 结构体或类似结构体的变体字面量表达式.
     /// A struct or struct-like variant literal expression.
     ///
+    // 添加注释: 例如, `Foo {x: 1, y: 2}` or `Foo {x: 1, .. base}`, 其中`base`是`Option<Expr>`
     /// E.g., `Foo {x: 1, y: 2}`, or `Foo {x: 1, .. base}`,
     /// where `base` is the `Option<Expr>`.
     Struct(&'hir QPath<'hir>, &'hir [ExprField<'hir>], Option<&'hir Expr<'hir>>),
 
+    // 添加注释: 从一个重复元素构造的数组文字
     /// An array literal constructed from one repeated element.
     ///
+    // 添加注释: 例如, `[1; 5]`. 第一个表达式是要重复的元素, 第二个元素是重复的次数.
     /// E.g., `[1; 5]`. The first expression is the element
     /// to be repeated; the second is the number of times to repeat it.
     Repeat(&'hir Expr<'hir>, AnonConst),
 
+    // 添加注释: 生成器的暂停点(例如, `yield <expr>`)
     /// A suspension point for generators (i.e., `yield <expr>`).
     Yield(&'hir Expr<'hir>, YieldSource),
 

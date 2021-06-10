@@ -441,6 +441,7 @@ pub fn lower_to_hir<'res, 'tcx>(
     // incr. comp. yet.
     dep_graph.assert_ignored();
 
+    // 添加注释: AST 降低为 HIR
     // Lower AST to HIR.
     let hir_crate = rustc_ast_lowering::lower_crate(
         sess,

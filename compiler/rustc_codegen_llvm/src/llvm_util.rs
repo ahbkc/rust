@@ -279,6 +279,7 @@ pub(crate) fn print(req: PrintRequest, sess: &Session) {
 }
 
 fn handle_native(name: &str) -> &str {
+    // 添加注释: 如果`name`不等于`native`则直接return
     if name != "native" {
         return name;
     }
@@ -291,6 +292,7 @@ fn handle_native(name: &str) -> &str {
 }
 
 pub fn target_cpu(sess: &Session) -> &str {
+    // 添加注释: 获取`sess.opts.cg.target_cpu`值, 如果获取不到, 则取默认的`&sess.target.cpu`
     let name = sess.opts.cg.target_cpu.as_ref().unwrap_or(&sess.target.cpu);
     handle_native(name)
 }

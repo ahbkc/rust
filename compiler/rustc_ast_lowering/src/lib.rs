@@ -1,24 +1,40 @@
+// 添加注释: 将AST降低到HIR
 //! Lowers the AST to the HIR.
 //!
+// 添加注释: 由于AST和HIR非常相似, 这主要是一个简单的过程, 很像折叠.
+// 在不降低涉及更多工作的地方, 事情变得更有趣, 并且你应该了解一些不变量. 这主要涉及跨度和ID
 //! Since the AST and HIR are fairly similar, this is mostly a simple procedure,
 //! much like a fold. Where lowering involves a bit more work things get more
 //! interesting and there are some invariants you should know about. These mostly
 //! concern spans and IDs.
 //!
+// 添加注释: Span在解析过程中被分配给AST节点, 然后在扩展过程中被修改以指示节点的起源和它经历的
+// 扩展过程. 在降低之前将ID分配给AST节点.
 //! Spans are assigned to AST nodes during parsing and then are modified during
 //! expansion to indicate the origin of a node and the process it went through
 //! being expanded. IDs are assigned to AST nodes just before lowering.
 //!
+// 添加注释: 对于更简单的降低步骤, 应保留ID和跨度. 与扩展不同, 我们不保留跨度降低的过程, 因此
+// 不应在此处修跨度. 创建新节点时(与`折叠`现有节点相反), 使用`next_id()`创建一个新ID.
 //! For the simpler lowering steps, IDs and spans should be preserved. Unlike
 //! expansion we do not preserve the process of lowering in the spans, so spans
 //! should not be modified here. When creating a new node (as opposed to
 //! "folding" an existing one), create a new ID using `next_id()`.
 //!
+// 添加注释: 您必须确保ID是唯一的. 这意味着您应该只在单个HIR节点中使用来自AST节点的ID(您可以
+// 假设AST节点是唯一的). 每个新节点都必须有一个唯一的ID. 避免克隆HIR节点. 如果这样做, 则必须
+// 将新节点的ID设置为新节点.
 //! You must ensure that IDs are unique. That means that you should only use the
 //! ID from an AST node in a single HIR node (you can assume that AST node-IDs
 //! are unique). Every new node must have a unique ID. Avoid cloning HIR nodes.
 //! If you do, you must then set the new node's ID to a fresh one.
 //!
+// 添加注释: Span用于错误消息和将语义映射回源代码的工具. 因此, 对于跨度而言, 严格使用ID并
+// 不像ID那样重要(您不能通过搞砸跨度来破坏编译器). 显然, 一个HIR节点只能有一个跨度. 但是多个节
+// 点可以具有相同的跨度, 跨度不需要保持顺序等. 通过降低保留代码的地方, 它应该具有与AST中相同的
+// 跨度. 如果HIR节点是新节点, 最好为整个AST节点提供一个跨度. 所有节点都应该有真实的跨度; 不要
+// 使用虚拟跨度. 如果叶AST节点的跨度出现在HIR中的多个位置, 尤其是多个标识符, 则工具可能会感到
+// 困惑.
 //! Spans are used for error messages and for tools to map semantics back to
 //! source code. It is therefore not as important with spans as IDs to be strict
 //! about use (you can't break the compiler by screwing up a span). Obviously, a
@@ -87,19 +103,24 @@ const HIR_ID_COUNTER_LOCKED: u32 = 0xFFFFFFFF;
 rustc_hir::arena_types!(rustc_arena::declare_arena, [], 'tcx);
 
 struct LoweringContext<'a, 'hir: 'a> {
+    // 添加注释: 用于为不直接对应AST节点的HIR节点分配ID.
     /// Used to assign IDs to HIR nodes that do not directly correspond to AST nodes.
     sess: &'a Session,
 
     resolver: &'a mut dyn ResolverAstLowering,
 
+    // 添加注释: HACK(Centril): 如果我们没有这个函数指针, 解析器和降低之间存在循环依赖. 为了避免这
+    // 种依赖性, 以便`rustc_middle`独立于解析器, 我们在这里使用动态调度.
     /// HACK(Centril): there is a cyclic dependency between the parser and lowering
     /// if we don't have this function pointer. To avoid that dependency so that
     /// `rustc_middle` is independent of the parser, we use dynamic dispatch here.
     nt_to_tokenstream: NtToTokenstream,
 
+    // 添加注释: 用于分配HIR节点
     /// Used to allocate HIR nodes.
     arena: &'hir Arena<'hir>,
 
+    // 添加注释: 被降低转换后的条目被收集到这里
     /// The items being lowered are collected here.
     items: BTreeMap<hir::ItemId, hir::Item<'hir>>,
 
@@ -118,10 +139,12 @@ struct LoweringContext<'a, 'hir: 'a> {
 
     attrs: BTreeMap<hir::HirId, &'hir [Attribute]>,
 
+    // 添加注释: 在`async`上下文中, 这是绑定到生成器resume参数的`task_context`本地的`HirId`
     /// When inside an `async` context, this is the `HirId` of the
     /// `task_context` local bound to the resume argument of the generator.
     task_context: Option<hir::HirId>,
 
+    // 添加注释: 在`async fn`之外使用`await`时, 用于获取当前`fn`的def跨度指向
     /// Used to get the current `fn`'s def span to point to when using `await`
     /// outside of an `async fn`.
     current_item: Option<Span>,
@@ -132,12 +155,18 @@ struct LoweringContext<'a, 'hir: 'a> {
     is_in_trait_impl: bool,
     is_in_dyn_type: bool,
 
+    // 添加注释: 当我们遇到`匿名生命周期引用`时该怎么办. 术语`匿名`旨在包含`'_`生命周
+    // 期以及完全省略的情况, 其中根本不写任何内容(例如, `&T` 或 `std::cell::Ref<T>`)
     /// What to do when we encounter an "anonymous lifetime
     /// reference". The term "anonymous" is meant to encompass both
     /// `'_` lifetimes as well as fully elided cases where nothing is
     /// written at all (e.g., `&T` or `std::cell::Ref<T>`).
     anonymous_lifetime_mode: AnonymousLifetimeMode,
 
+    // 添加注释: 用于从带内生命周期使用创建生命周期定义.
+    // 例如, `fn foo(x: &'x u8) -> &'x u8` to `fn foo<'x>(x: &'x u8) -> &'x u8`
+    // 一个函数或impl头并且没有被定义(即它没有出现在 in_scope_lifetimes 列表中), 它被添加到
+    // 这个列表中. 然后将此列表的结果添加到相应impl或函数泛型的生命周期定义列表中.
     /// Used to create lifetime definitions from in-band lifetime usages.
     /// e.g., `fn foo(x: &'x u8) -> &'x u8` to `fn foo<'x>(x: &'x u8) -> &'x u8`
     /// When a named lifetime is encountered in a function or impl header and
@@ -147,12 +176,15 @@ struct LoweringContext<'a, 'hir: 'a> {
     /// lifetime definitions in the corresponding impl or function generics.
     lifetimes_to_define: Vec<(Span, ParamName)>,
 
+    // 添加注释: `true`代表正在收集带内生命周期
     /// `true` if in-band lifetimes are being collected. This is used to
     /// indicate whether or not we're in a place where new lifetimes will result
     /// in in-band lifetime definitions, such a function or an impl header,
     /// including implicit lifetimes from `impl_header_lifetime_elision`.
     is_collecting_in_band_lifetimes: bool,
 
+    // 添加注释: 当前在impl标头, fn标头或HRTB中定义的范围内生命周期. 当`is_collecting_in_band_lifetimes`
+    // 为true时, 每个生命周期都会根据此列表进行检查, 以查看它是否已经在范围内, 或者否需要为其创建定义.
     /// Currently in-scope lifetimes defined in impl headers, fn headers, or HRTB.
     /// When `is_collecting_in_band_lifetimes` is true, each lifetime is checked
     /// against this list to see if it is already in-scope, or if a definition
@@ -214,28 +246,38 @@ pub trait ResolverAstLowering {
     ) -> LocalDefId;
 }
 
+// 添加注释: 代码中`impl Trait`的上下文, 它决定了它是否被允许出现在HIR子树中, 如果允许, 它的含义是什么.
 /// Context of `impl Trait` in code, which determines whether it is allowed in an HIR subtree,
 /// and if so, what meaning it has.
 #[derive(Debug)]
 enum ImplTraitContext<'b, 'a> {
+    // 将`impl Trait`视为新的通用泛型参数的简写. 例如: `fn foo(x: impl Debug)`, 其中`impl Debug`在概念
+    // 上等同于一个新的通用参数, 如`fn foo<T: Debug>(x: T)`
     /// Treat `impl Trait` as shorthand for a new universal generic parameter.
     /// Example: `fn foo(x: impl Debug)`, where `impl Debug` is conceptually
     /// equivalent to a fresh universal parameter like `fn foo<T: Debug>(x: T)`.
     ///
+    // 添加注释: 新生成的参数应该插入到给定的`Vec`中
     /// Newly generated parameters should be inserted into the given `Vec`.
     Universal(&'b mut Vec<hir::GenericParam<'a>>, LocalDefId),
 
+    // 添加注释: 将`impl Trait`视为新的不透明类型的简写.
+    // 例如: `fn foo() -> impl Debug`, 其中`impl Debug`在概念上等同于一个新的不透明类型,
+    // 如`type T = impl Debug; fn foo() -> T`.
     /// Treat `impl Trait` as shorthand for a new opaque type.
     /// Example: `fn foo() -> impl Debug`, where `impl Debug` is conceptually
     /// equivalent to a new opaque type like `type T = impl Debug; fn foo() -> T`.
     ///
     ReturnPositionOpaqueTy {
+        // 添加注释: `DefId`为父函数, 用于稍后查找必要信息.
         /// `DefId` for the parent function, used to look up necessary
         /// information later.
         fn_def_id: DefId,
+        // 添加注释: 任何一个`OpaqueTyOrigin::FnReturn` 或 `OpaqueTyOrigin::AsyncFn`
         /// Origin: Either OpaqueTyOrigin::FnReturn or OpaqueTyOrigin::AsyncFn,
         origin: hir::OpaqueTyOrigin,
     },
+    // 添加注释: 类型别名, 常量和静态中的impl trait
     /// Impl trait in type aliases, consts and statics.
     OtherOpaqueTy {
         /// Set of lifetimes that this opaque type can capture, if it uses
@@ -259,12 +301,15 @@ enum ImplTraitContext<'b, 'a> {
     Disallowed(ImplTraitPosition),
 }
 
+// 添加注释: 不允许使用`impl Trait`的位置
 /// Position in which `impl Trait` is disallowed.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 enum ImplTraitPosition {
+    // 添加注释: 不允许在`let` / `const` / `static`中使用.
     /// Disallowed in `let` / `const` / `static` bindings.
     Binding,
 
+    // 添加注释: 所有其它位置.
     /// All other positions.
     Other,
 }
@@ -2425,6 +2470,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
         }
     }
 
+    // 添加注释: 构建HIR的辅助方法
     // Helper methods for building HIR.
 
     fn stmt(&mut self, span: Span, kind: hir::StmtKind<'hir>) -> hir::Stmt<'hir> {

@@ -233,6 +233,7 @@ impl<'tcx> Queries<'tcx> {
             let resolver = peeked.1.steal();
             let lint_store = &peeked.2;
             let hir = resolver.borrow_mut().access(|resolver| {
+                // 添加注释: `passes::lower_to_hir`函数将执行转换为HIR
                 Ok(passes::lower_to_hir(
                     self.session(),
                     lint_store,
@@ -268,6 +269,7 @@ impl<'tcx> Queries<'tcx> {
             let crate_name = self.crate_name()?.peek().clone();
             let outputs = self.prepare_outputs()?.peek().clone();
             let lint_store = self.expansion()?.peek().2.clone();
+            // `self.lower_to_hir`方法将会执行转换为hir
             let hir = self.lower_to_hir()?.peek();
             let dep_graph = self.dep_graph()?.peek().clone();
             let (ref krate, ref resolver_outputs) = &*hir;
@@ -290,6 +292,7 @@ impl<'tcx> Queries<'tcx> {
     pub fn ongoing_codegen(&'tcx self) -> Result<&Query<Box<dyn Any>>> {
         self.ongoing_codegen.compute(|| {
             let outputs = self.prepare_outputs()?;
+            // `self.global_ctxt`方法内将会执行转换为HIR操作
             self.global_ctxt()?.peek_mut().enter(|tcx| {
                 tcx.analysis(LOCAL_CRATE).ok();
 
@@ -352,6 +355,7 @@ impl<'tcx> Queries<'tcx> {
     pub fn linker(&'tcx self) -> Result<Linker> {
         let dep_graph = self.dep_graph()?;
         let prepare_outputs = self.prepare_outputs()?;
+        // `self.global_ctxt`方法内将会执行转换为HIR操作
         let crate_hash = self.global_ctxt()?.peek_mut().enter(|tcx| tcx.crate_hash(LOCAL_CRATE));
         let ongoing_codegen = self.ongoing_codegen()?;
 
@@ -394,6 +398,7 @@ impl Linker {
         let prof = self.sess.prof.clone();
         prof.generic_activity("drop_dep_graph").run(move || drop(dep_graph));
 
+        // 添加注释: 现在我们不会再接触增量编译目录中的任何内容, 我们可以完成它(这涉及重命名)
         // Now that we won't touch anything in the incremental compilation directory
         // any more, we can finalize it (which involves renaming it)
         rustc_incremental::finalize_session_directory(&self.sess, self.crate_hash);
@@ -409,6 +414,7 @@ impl Linker {
         }
 
         if sess.opts.debugging_opts.no_link {
+            // 添加注释: FIXME: 使用二进制格式对`.rlink`文件进行编码
             // FIXME: use a binary format to encode the `.rlink` file
             let rlink_data = json::encode(&codegen_results).map_err(|err| {
                 sess.fatal(&format!("failed to encode rlink: {}", err));

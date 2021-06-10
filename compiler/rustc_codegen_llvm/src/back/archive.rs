@@ -164,6 +164,7 @@ impl<'a> ArchiveBuilder<'a> for LlvmArchiveBuilder<'a> {
         self.should_update_symbols = true;
     }
 
+    // 添加注释: 将提供的文件, rlib和native库合并到一个`Archive`中
     /// Combine the provided files, rlibs, and native libraries into a single
     /// `Archive`.
     fn build(mut self) {

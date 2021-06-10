@@ -458,6 +458,7 @@ fn run_compiler(
                 sess.code_stats.print_type_sizes();
             }
 
+            // 添加注释: `queries.linker()`方法内会有转换为HIR操作
             let linker = queries.linker()?;
             Ok(Some(linker))
         })?;

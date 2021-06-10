@@ -305,6 +305,8 @@ impl CodegenBackend for LlvmCodegenBackend {
         use crate::back::archive::LlvmArchiveBuilder;
         use rustc_codegen_ssa::back::link::link_binary;
 
+        // 添加注释: 在LLVM运行产生的任何工件上运行链接器.
+        // 这应该生成一个完成的可执行文件或库.
         // Run the linker on any artifacts that resulted from the LLVM run.
         // This should produce either a finished executable or library.
         let target_cpu = crate::llvm_util::target_cpu(sess);

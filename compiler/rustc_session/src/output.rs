@@ -190,6 +190,7 @@ pub fn default_output_for_target(sess: &Session) -> CrateType {
     if !sess.target.executables { CrateType::Staticlib } else { CrateType::Executable }
 }
 
+// 添加注释: 检查目标是否支持crate_type作为输出
 /// Checks if target supports crate_type as output
 pub fn invalid_output_for_target(sess: &Session, crate_type: CrateType) -> bool {
     match crate_type {
