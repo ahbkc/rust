@@ -64,6 +64,7 @@ impl Level {
         }
     }
 
+    // 添加注释: 转换小写字符串到Level
     /// Converts a lower-case string to a level.
     pub fn from_str(x: &str) -> Option<Level> {
         match x {

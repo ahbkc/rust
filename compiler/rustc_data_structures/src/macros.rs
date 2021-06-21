@@ -1,3 +1,4 @@
+// 添加注释: 类型大小断言. 第一个参数是一个类型, 第二个参数是它的预期大小.
 /// Type size assertion. The first argument is a type and the second argument is its expected size.
 #[macro_export]
 macro_rules! static_assert_size {

@@ -80,6 +80,7 @@ impl<'a> Parser<'a> {
         })
     }
 
+    // 添加注释: 解析生命周期和类型参数的(可能为空)列表, 可能包括尾随逗号和错误的尾随属性.
     /// Parses a (possibly empty) list of lifetime and type parameters, possibly including
     /// a trailing comma and erroneous trailing attributes.
     pub(super) fn parse_generic_params(&mut self) -> PResult<'a, Vec<ast::GenericParam>> {
@@ -200,6 +201,7 @@ impl<'a> Parser<'a> {
         })
     }
 
+    // 添加注释: 解析一个可选的where子句并将其放在`generics`中.
     /// Parses an optional where-clause and places it in `generics`.
     ///
     /// ```ignore (only-for-syntax-highlight)

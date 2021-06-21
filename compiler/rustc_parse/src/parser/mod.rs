@@ -441,7 +441,9 @@ impl<'a> Parser<'a> {
             },
         };
 
+        // 添加注释: 使解析器指向第一个标记.
         // Make parser point to the first token.
+        // 添加注释: `bump`函数会将解析器向前推进一个标记.
         parser.bump();
 
         parser
@@ -916,6 +918,7 @@ impl<'a> Parser<'a> {
         self.expected_tokens.clear();
     }
 
+    // 添加注释: 将解析器推进一个标记.
     /// Advance the parser by one token.
     pub fn bump(&mut self) {
         let next_token = self.next_tok(self.token.span);

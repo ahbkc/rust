@@ -98,6 +98,7 @@ impl<'a> DerefMut for DiagnosticBuilder<'a> {
 }
 
 impl<'a> DiagnosticBuilder<'a> {
+    // 添加注释: 发出诊断信息.
     /// Emit the diagnostic.
     pub fn emit(&mut self) {
         self.0.handler.emit_diagnostic(&self);

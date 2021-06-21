@@ -54,9 +54,12 @@ use std::rc::Rc;
 use std::{env, fs, iter, mem};
 
 pub fn parse<'a>(sess: &'a Session, input: &Input) -> PResult<'a, ast::Crate> {
+    // 添加注释: 以下将开始解析
     let krate = sess.time("parse_crate", || match input {
+        // 添加注释: 从文件加载源代码
         Input::File(file) => parse_crate_from_file(file, &sess.parse_sess),
         Input::Str { input, name } => {
+            // 添加注释: 从字符串加载源代码
             parse_crate_from_source_str(name.clone(), input.clone(), &sess.parse_sess)
         }
     })?;
@@ -466,6 +469,7 @@ pub fn lower_to_hir<'res, 'tcx>(
         )
     });
 
+    // 添加注释: 丢弃卫生数据, 降低到HIR后不需要这些数据.
     // Discard hygiene data, which isn't required after lowering to HIR.
     if !sess.opts.debugging_opts.keep_hygiene_data {
         rustc_span::hygiene::clear_syntax_context_map();

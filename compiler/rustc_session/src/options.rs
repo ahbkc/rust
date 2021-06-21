@@ -94,36 +94,48 @@ macro_rules! top_level_options {
     );
 }
 
+// 添加注释: `top_level_options`宏用于定义结构体`Options`, 并为该结构体实现`dep_tracking_hash`方法
 top_level_options!(
+    // 添加注释: 顶级命令行选项结构.
     /// The top-level command-line options struct.
     ///
+    // 添加注释: 对于每个选项, 必须指定它在增量编译的依赖性跟踪方面的行为方式. 这是通过字段类型后的
+    // 方括号指令完成的. 选项是:
     /// For each option, one has to specify how it behaves with regard to the
     /// dependency tracking system of incremental compilation. This is done via the
     /// square-bracketed directive after the field type. The options are:
     ///
     /// - `[TRACKED]`
+    // 添加注释: 给定字段的更改将导致编译器在继续之前完全清除增量编译缓存.
     /// A change in the given field will cause the compiler to completely clear the
     /// incremental compilation cache before proceeding.
     ///
     /// - `[TRACKED_NO_CRATE_HASH]`
+    // 添加注释: 与`[TRACKED]`相同, 但不会影响crate哈希. 这对于仅影响增量缓存的选项很有用.
     /// Same as `[TRACKED]`, but will not affect the crate hash. This is useful for options that only
     /// affect the incremental cache.
     ///
     /// - `[UNTRACKED]`
+    // 添加注释: 增量编译不受此选项的影响.
     /// Incremental compilation is not influenced by this option.
     ///
     /// - `[SUBSTRUCT]`
+    // 添加注释: 包含更多选项的二级子结构.
     /// Second-level sub-structs containing more options.
     ///
+    // 添加注释: 如果您向该结构体或向`CodegenOptions`这样的子结构体之一添加新选项, 请考虑它如何影响
+    // 增量编译. 如有疑问, 请指定`[TRACKED]`, 因为它总是正确的, 但是可能会导致不必要的重新编译.
     /// If you add a new option to this struct or one of the sub-structs like
     /// `CodegenOptions`, think about how it influences incremental compilation. If in
     /// doubt, specify `[TRACKED]`, which is always "correct" but might lead to
     /// unnecessary re-compilation.
     pub struct Options {
+        // 添加注释: 为会话请求的crate配置, 在编译过程中可能会与其它crate配置结合使用.
         /// The crate config requested for the session, which may be combined
         /// with additional crate configurations during the compile process.
         crate_types: Vec<CrateType> [TRACKED],
         optimize: OptLevel [TRACKED],
+        // 添加注释: 在依赖项跟踪中包含`debug_assertions`标志, 因为它会影响是否完成溢出检查.
         /// Include the `debug_assertions` flag in dependency tracking, since it
         /// can influence whether overflow checks are done or not.
         debug_assertions: bool [TRACKED],
@@ -141,12 +153,14 @@ top_level_options!(
         test: bool [TRACKED],
         error_format: ErrorOutputType [UNTRACKED],
 
+        // 添加注释: 如果是`some`则代表开启增量编译, 将会使用给定的目录来存储中间结果.
         /// If `Some`, enable incremental compilation, using the given
         /// directory to store intermediate results.
         incremental: Option<PathBuf> [UNTRACKED],
 
         debugging_opts: DebuggingOptions [SUBSTRUCT],
         prints: Vec<PrintRequest> [UNTRACKED],
+        // 添加注释: 确定要运行的借用检查器. 这是`debugging_opts.borrowck`的解析, 清理版本, 它是一个普通的字符串.
         /// Determines which borrow checker(s) to run. This is the parsed, sanitized
         /// version of `debugging_opts.borrowck`, which is just a plain string.
         borrowck_mode: BorrowckMode [UNTRACKED],
@@ -154,18 +168,24 @@ top_level_options!(
         externs: Externs [UNTRACKED],
         extern_dep_specs: ExternDepSpecs [UNTRACKED],
         crate_name: Option<String> [TRACKED],
+        // 添加注释: 在std注入期间用作std的crate的可选名称, 写为`extern crate name as std`. 默认为`std`.
+        // 由`out-of-tree`drivers使用
         /// An optional name to use as the crate for std during std injection,
         /// written `extern crate name as std`. Defaults to `std`. Used by
         /// out-of-tree drivers.
         alt_std_name: Option<String> [TRACKED],
+        // 添加注释: 指示编译器应如何处理不稳定的特性.
         /// Indicates how the compiler should treat unstable features.
         unstable_features: UnstableFeatures [TRACKED],
 
+        // 添加注释: 指示编译器的这次运行是否实际上是rustdoc. 这目前是一个hack, 最终会被删除,
+        // 所以请尽量不要过分依赖它.
         /// Indicates whether this run of the compiler is actually rustdoc. This
         /// is currently just a hack and will be removed eventually, so please
         /// try to not rely on this too much.
         actually_rustdoc: bool [TRACKED],
 
+        // 添加注释: 控制路径修剪
         /// Control path trimming.
         trimmed_def_paths: TrimmedDefPaths [TRACKED],
 
@@ -177,38 +197,60 @@ top_level_options!(
         cli_forced_codegen_units: Option<usize> [UNTRACKED],
         cli_forced_thinlto_off: bool [UNTRACKED],
 
+        // 添加注释: 在所有输出中(消息, 对象文件, debug等)重新映射源路径前缀.
         /// Remap source path prefixes in all output (messages, object files, debug, etc.).
         remap_path_prefix: Vec<(PathBuf, PathBuf)> [TRACKED_NO_CRATE_HASH],
+        // 添加注释: 包含Rust标准库的`src/`的基本目录, 如果我们能找到它, 也可能包含`rustc`. 现在它总是
+        // `$sysroot/lib/rustlib/src/rust`(即`rustup` `rust-src`组件).
         /// Base directory containing the `src/` for the Rust standard library, and
         /// potentially `rustc` as well, if we can can find it. Right now it's always
         /// `$sysroot/lib/rustlib/src/rust` (i.e. the `rustup` `rust-src` component).
         ///
+        // 添加注释: 这个路径是虚拟的`/rustc/$hash`被转换回的目录, 如果Rust构建时启用了路径重映射到
+        // `/rustc/$hash`(`config.toml`中的`rust.remap-debuginfo`)
         /// This directory is what the virtual `/rustc/$hash` is translated back to,
         /// if Rust was built with path remapping to `/rustc/$hash` enabled
         /// (the `rust.remap-debuginfo` option in `config.toml`).
         real_rust_source_base_dir: Option<PathBuf> [TRACKED_NO_CRATE_HASH],
 
+        // 添加注释: `config.toml`中的`edition`字段值
         edition: Edition [TRACKED],
 
+        // 添加注释: `true`, 如果我们针对编译器的每个artifact发出JSON blob
         /// `true` if we're emitting JSON blobs about each artifact produced
         /// by the compiler.
         json_artifact_notifications: bool [TRACKED],
 
+        // 添加注释: `true`, 如果我们发出的JSON blob中包含未使用的extern
         /// `true` if we're emitting a JSON blob containing the unused externs
         json_unused_externs: bool [UNTRACKED],
 
+        // 添加注释: 打印源代码的选项
         pretty: Option<PpMode> [UNTRACKED],
     }
 );
 
+// 添加注释: 一次性定义所有`CodegenOptions`/`DebuggingOptions`字段和解析器. 这个宏的目标是定义一个接口, 选项解析器
+// 可以以编程方式使用该接口来初始化结构, 而无需到处硬编码字段名称.
 /// Defines all `CodegenOptions`/`DebuggingOptions` fields and parsers all at once. The goal of this
 /// macro is to define an interface that can be programmatically used by the option parser
 /// to initialize the struct without hardcoding field names all over the place.
 ///
+// 添加注释: 目标是使用正确的字段调用此宏一次, 然后此宏生成所有必需的代码. 这个宏的主要问题是`cgsetters`模块, 它是一堆
+// 生成的代码, 用于将选项解析为结构中的相应字段. 有一些手写解析器用于解析此模块中的特定类型的值.
 /// The goal is to invoke this macro once with the correct fields, and then this macro generates all
 /// necessary code. The main gotcha of this macro is the `cgsetters` module which is a bunch of
 /// generated code to parse an option into its respective field in the struct. There are a few
 /// hand-written parsers for parsing specific types of values in this module.
+// 添加注释: options!宏使用传参如下:
+//
+//          options! {CodegenOptions, CodegenSetter, basic_codegen_options,
+//           build_codegen_options, "C", "codegen",
+//           CG_OPTIONS,
+//
+//              ar: String = (String::new(), parse_string, [UNTRACKED],
+//              "this option is deprecated and does nothing"),
+//                  }
 macro_rules! options {
     ($struct_name:ident, $setter_name:ident, $defaultfn:ident,
      $buildfn:ident, $prefix:expr, $outputname:expr,
@@ -223,10 +265,12 @@ macro_rules! options {
     #[derive(Clone)]
     pub struct $struct_name { $(pub $opt: $t),* }
 
+    // 添加注释: 该方法相关于`$struct_name`结构的new方法, 返回`$struct_name`结构体默认值
     pub fn $defaultfn() -> $struct_name {
         $struct_name { $( $( #[$attr] )* $opt: $init),* }
     }
 
+    // 添加注释: 实现的`$buildfn`方法
     pub fn $buildfn(matches: &getopts::Matches, error_format: ErrorOutputType) -> $struct_name
     {
         let mut op = $defaultfn();
@@ -267,6 +311,7 @@ macro_rules! options {
     }
 
     impl $struct_name {
+        // 添加注释: 为结构体`$struct_name`实现`dep_tracking_hash`方法
         fn dep_tracking_hash(&self, _for_crate_hash: bool, error_format: ErrorOutputType) -> u64 {
             let mut sub_hashes = BTreeMap::new();
             $({
@@ -284,10 +329,14 @@ macro_rules! options {
         }
     }
 
+    // 添加注释: 构建类型别名
     pub type $setter_name = fn(&mut $struct_name, v: Option<&str>) -> bool;
+    // 添加注释: 构建slice
     pub const $stat: &[(&str, $setter_name, &str, &str)] =
         &[ $( (stringify!($opt), $crate::options::parse::$opt, $crate::options::desc::$parse, $desc) ),* ];
 
+    // 添加注释: 有时不同的选项需要建立一个共同的结构.
+    // 该结构可以保留在其中一个选项的字段中, 而其它的则变为虚设的
     // Sometimes different options need to build a common structure.
     // That structure can kept in one of the options' fields, the others become dummy.
     macro_rules! redirect_field {
@@ -296,6 +345,7 @@ macro_rules! options {
         ($cg:ident.$field:ident) => { $cg.$field };
     }
 
+    // 添加注释: 通过列表的`$opt`值创建函数
     $(
         pub fn $opt(cg: &mut $struct_name, v: Option<&str>) -> bool {
             $crate::options::parse::$parse(&mut redirect_field!(cg.$opt), v)
@@ -851,8 +901,10 @@ options! {CodegenOptions, CodegenSetter, basic_codegen_options,
           build_codegen_options, "C", "codegen",
           CG_OPTIONS,
 
+    // 添加注释: 此列表按字母顺序排列.
     // This list is in alphabetical order.
     //
+    // 添加注释: 如果你添加新的option, 请更新以下文件:
     // If you add a new option, please update:
     // - compiler/rustc_interface/src/tests.rs
     // - src/doc/rustc/src/codegen-options/index.md
@@ -1140,6 +1192,7 @@ options! {DebuggingOptions, DebuggingSetter, basic_debugging_options,
         "pass `-install_name @rpath/...` to the macOS linker (default: no)"),
     panic_abort_tests: bool = (false, parse_bool, [TRACKED],
         "support compiling tests with panic=abort (default: no)"),
+    // 添加注释: `parse_only`参数代表仅解析; 不编译, 汇编或链接(默认为否)
     parse_only: bool = (false, parse_bool, [UNTRACKED],
         "parse only; do not compile, assemble, or link (default: no)"),
     perf_stats: bool = (false, parse_bool, [UNTRACKED],
@@ -1275,6 +1328,7 @@ options! {DebuggingOptions, DebuggingSetter, basic_debugging_options,
         `mir` (the MIR), or `mir-cfg` (graphviz formatted MIR)"),
     unsound_mir_opts: bool = (false, parse_bool, [TRACKED],
         "enable unsound and buggy MIR optimizations (default: no)"),
+    // 添加注释: `unstable_options`表示向rustc界面添加了不稳定的命令行选项
     unstable_options: bool = (false, parse_bool, [UNTRACKED],
         "adds unstable command line options to rustc interface (default: no)"),
     use_ctors_section: Option<bool> = (None, parse_opt_bool, [TRACKED],

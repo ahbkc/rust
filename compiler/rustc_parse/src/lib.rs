@@ -38,6 +38,7 @@ pub mod validate_attr;
 // uses a HOF to parse anything, and <source> includes file and
 // `source_str`.
 
+// 添加注释: `panictry!`的变种, 适用于Vec<Diagnostic>而不是单个DiagnosticBuilder.
 /// A variant of 'panictry!' that works on a Vec<Diagnostic> instead of a single DiagnosticBuilder.
 macro_rules! panictry_buffer {
     ($handler:expr, $e:expr) => {{
@@ -55,6 +56,7 @@ macro_rules! panictry_buffer {
     }};
 }
 
+// 添加注释: 从文件加载源代码
 pub fn parse_crate_from_file<'a>(input: &Path, sess: &'a ParseSess) -> PResult<'a, ast::Crate> {
     // 添加注释: 传入输入文件路径, ParseSess
     let mut parser = new_parser_from_file(sess, input, None);
@@ -69,6 +71,7 @@ pub fn parse_crate_attrs_from_file<'a>(
     parser.parse_inner_attributes()
 }
 
+// 添加注释: 从字符串加载源代码
 pub fn parse_crate_from_source_str(
     name: FileName,
     source: String,
@@ -125,6 +128,7 @@ fn source_file_to_parser(sess: &ParseSess, source_file: Lrc<SourceFile>) -> Pars
     panictry_buffer!(&sess.span_diagnostic, maybe_source_file_to_parser(sess, source_file))
 }
 
+// 添加注释: 给定一个`source_file`和配置, 返回一个解析器.
 /// Given a `source_file` and config, return a parser. Returns any buffered errors from lexing the
 /// initial token stream.
 fn maybe_source_file_to_parser(
@@ -132,6 +136,7 @@ fn maybe_source_file_to_parser(
     source_file: Lrc<SourceFile>,
 ) -> Result<Parser<'_>, Vec<Diagnostic>> {
     let end_pos = source_file.end_pos;
+    // 添加注释: `maybe_file_to_stream`函数将给定一个源文件, 生成一系列令牌树.
     let (stream, unclosed_delims) = maybe_file_to_stream(sess, source_file, None)?;
     let mut parser = stream_to_parser(sess, stream, None);
     parser.unclosed_delims = unclosed_delims;
@@ -186,6 +191,7 @@ pub fn source_file_to_stream(
     panictry_buffer!(&sess.span_diagnostic, maybe_file_to_stream(sess, source_file, override_span))
 }
 
+// 添加注释: 给定一个源文件, 生成一系列令牌树. 从解析令牌流返回任何缓冲错误.
 /// Given a source file, produces a sequence of token trees. Returns any buffered errors from
 /// parsing the token stream.
 pub fn maybe_file_to_stream(
@@ -217,6 +223,7 @@ pub fn maybe_file_to_stream(
     }
 }
 
+// 添加注释: 给定一个流和`ParseSess`, 生成一个解析器.
 /// Given a stream and the `ParseSess`, produces a parser.
 pub fn stream_to_parser<'a>(
     sess: &'a ParseSess,
@@ -241,6 +248,8 @@ pub fn parse_in<'a, T>(
     Ok(result)
 }
 
+// 添加注释: 注意(Centril): 以下内容可能不应该在这里, 但它承认在架构上, 我们正在使用解析(请继续阅读以下内容以了解原因)
+// 这一事实.
 // NOTE(Centril): The following probably shouldn't be here but it acknowledges the
 // fact that architecturally, we are using parsing (read on below to understand why).
 
@@ -249,15 +258,21 @@ pub fn nt_to_tokenstream(
     sess: &ParseSess,
     synthesize_tokens: CanSynthesizeMissingTokens,
 ) -> TokenStream {
+    // 添加注释: `Nonterminal`通常是解析后的AST项. 在这一点上, 我们需要将解析后的AST转换为实际的令牌流,
+    // 例如, 基本上取消解析它.
     // A `Nonterminal` is often a parsed AST item. At this point we now
     // need to convert the parsed AST to an actual token stream, e.g.
     // un-parse it basically.
     //
+    // 添加注释: 不幸的是, 目前并没有真正的以保证无损的方式做到这一点的好方法. 这里的回退是将AST节点
+    // 字符串化并重新解析它, 但这会丢失所有span信息.
     // Unfortunately there's not really a great way to do that in a
     // guaranteed lossless fashion right now. The fallback here is to just
     // stringify the AST node and reparse it, but this loses all span
     // information.
     //
+    // 添加注释: 因此, 一些AST节点使用它们来自的令牌流进行注释. 在这里, 我们尝试在回退到字符串化之前
+    // 提取这些无损令牌流.
     // As a result, some AST nodes are annotated with the token stream they
     // came from. Here we attempt to extract these lossless token streams
     // before we fall back to the stringification.

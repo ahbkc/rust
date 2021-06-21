@@ -11,6 +11,7 @@ use rustc_errors::{pluralize, struct_span_err, Applicability, PResult};
 use rustc_span::source_map::Span;
 use rustc_span::symbol::{kw, sym};
 
+// 添加注释: 任何出现在边界开始处的`?`或`?const`修饰符
 /// Any `?` or `?const` modifiers that appear at the start of a bound.
 struct BoundModifiers {
     /// `?Trait`.
@@ -43,6 +44,7 @@ pub(super) enum RecoverQPath {
     No,
 }
 
+// 添加注释: 表示解析类型是否应该恢复 `->`.
 /// Signals whether parsing a type should recover `->`.
 ///
 /// More specifically, when parsing a function like:
@@ -91,6 +93,7 @@ fn can_continue_type_after_non_fn_ident(t: &Token) -> bool {
 }
 
 impl<'a> Parser<'a> {
+    // 添加注释: 格式化一个类型.
     /// Parses a type.
     pub fn parse_ty(&mut self) -> PResult<'a, P<Ty>> {
         self.parse_ty_common(
@@ -101,6 +104,8 @@ impl<'a> Parser<'a> {
         )
     }
 
+    // 添加注释: 解析适合函数或函数指针参数的类型. 与`parse_ty`的不同之处在于该版本允许在类型的顶层使用`...`(`CVarArgs`)
+    //
     /// Parse a type suitable for a function or function pointer parameter.
     /// The difference from `parse_ty` is that this version allows `...`
     /// (`CVarArgs`) at the top level of the type.
@@ -113,6 +118,7 @@ impl<'a> Parser<'a> {
         )
     }
 
+    // 添加注释: 在不允许使用`+`的受限上下文中解析类型.
     /// Parses a type in restricted contexts where `+` is not permitted.
     ///
     /// Example 1: `&'a TYPE`
@@ -128,6 +134,7 @@ impl<'a> Parser<'a> {
         )
     }
 
+    // 添加注释: 解析类型而不将`:`恢复为`->`以避免破坏代码, 例如`where fn() : for<'a>`
     /// Parse a type without recovering `:` as `->` to avoid breaking code such as `where fn() : for<'a>`
     pub(super) fn parse_ty_for_where_clause(&mut self) -> PResult<'a, P<Ty>> {
         self.parse_ty_common(
@@ -138,6 +145,7 @@ impl<'a> Parser<'a> {
         )
     }
 
+    // 添加注释: 解析函数声明中的可选返回类型`[-> TY]`.
     /// Parses an optional return type `[ -> TY ]` in a function declaration.
     pub(super) fn parse_ret_ty(
         &mut self,
@@ -262,8 +270,11 @@ impl<'a> Parser<'a> {
         self.maybe_recover_from_bad_qpath(ty, allow_qpath_recovery)
     }
 
+    // 添加注释: 解析:
     /// Parses either:
+    // `(TYPE)`, 一个带括号的类型.
     /// - `(TYPE)`, a parenthesized type.
+    // `(TYPE,)`, 一个具有单个TYPE类型字段的元组.
     /// - `(TYPE,)`, a tuple with a single field of type TYPE.
     fn parse_ty_tuple_or_parens(&mut self, lo: Span, allow_plus: AllowPlus) -> PResult<'a, TyKind> {
         let mut trailing_plus = false;
@@ -315,6 +326,7 @@ impl<'a> Parser<'a> {
         self.parse_remaining_bounds(bounds, parse_plus)
     }
 
+    // 添加注释: 给定已解析的列表, 解析裸特征对象类型的其余部分.
     /// Parse the remainder of a bare trait object type given an already parsed list.
     fn parse_remaining_bounds(
         &mut self,
@@ -329,6 +341,7 @@ impl<'a> Parser<'a> {
         Ok(TyKind::TraitObject(bounds, TraitObjectSyntax::None))
     }
 
+    // 添加注释: 解析原始指针类型: `*[const | mut] $type`.
     /// Parses a raw pointer type: `*[const | mut] $type`.
     fn parse_ty_ptr(&mut self) -> PResult<'a, TyKind> {
         let mutbl = self.parse_const_or_mut().unwrap_or_else(|| {
@@ -344,7 +357,9 @@ impl<'a> Parser<'a> {
         Ok(TyKind::Ptr(MutTy { ty, mutbl }))
     }
 
+    // 添加注释: 解析数组(`[TYPE; EXPR]`)或切片(`[TYPE]`)类型.
     /// Parses an array (`[TYPE; EXPR]`) or slice (`[TYPE]`) type.
+    // 添加注释: 开头的`[`括号已经被吃掉了.
     /// The opening `[` bracket is already eaten.
     fn parse_array_or_slice_ty(&mut self) -> PResult<'a, TyKind> {
         let elt_ty = match self.parse_ty() {
@@ -410,7 +425,9 @@ impl<'a> Parser<'a> {
         Ok(TyKind::Rptr(opt_lifetime, MutTy { ty, mutbl }))
     }
 
+    // 添加注释: 解析`typeof(EXPR)`.
     // Parses the `typeof(EXPR)`.
+    // 添加注释: 为了避免歧义, 类型用括号括起来.
     // To avoid ambiguity, the type is surrounded by parenthesis.
     fn parse_typeof_ty(&mut self) -> PResult<'a, TyKind> {
         self.expect(&token::OpenDelim(token::Paren))?;
@@ -419,6 +436,7 @@ impl<'a> Parser<'a> {
         Ok(TyKind::Typeof(expr))
     }
 
+    // 添加注释: 解析函数指针类型(`TyKind::BareFn`).
     /// Parses a function pointer type (`TyKind::BareFn`).
     /// ```
     /// [unsafe] [extern "ABI"] fn (S) -> T
@@ -459,6 +477,7 @@ impl<'a> Parser<'a> {
             .emit();
     }
 
+    // 添加注释: 解析`impl B0 + ... + Bn`类型.
     /// Parses an `impl B0 + ... + Bn` type.
     fn parse_impl_ty(&mut self, impl_dyn_multi: &mut bool) -> PResult<'a, TyKind> {
         // Always parse bounds greedily for better error recovery.
@@ -467,6 +486,7 @@ impl<'a> Parser<'a> {
         Ok(TyKind::ImplTrait(ast::DUMMY_NODE_ID, bounds))
     }
 
+    // 添加注释: 此处允许使用`dyn B0 + ... + Bn`类型吗?
     /// Is a `dyn B0 + ... + Bn` type allowed here?
     fn is_explicit_dyn_type(&mut self) -> bool {
         self.check_keyword(kw::Dyn)
@@ -476,6 +496,7 @@ impl<'a> Parser<'a> {
                 }))
     }
 
+    // 添加注释: 解析一个`dyn B0 + ... + Bn`类型.
     /// Parses a `dyn B0 + ... + Bn` type.
     ///
     /// Note that this does *not* parse bare trait objects.
@@ -487,6 +508,7 @@ impl<'a> Parser<'a> {
         Ok(TyKind::TraitObject(bounds, TraitObjectSyntax::Dyn))
     }
 
+    // 添加注释: 解析以路径开头的类型.
     /// Parses a type starting with a path.
     ///
     /// This can be:
@@ -529,8 +551,10 @@ impl<'a> Parser<'a> {
         self.parse_generic_bounds_common(AllowPlus::Yes, colon_span)
     }
 
+    // 添加注释: 解析类型参数`BOUND + BOUND + ...`的边界, 可能带有尾随的`+`.
     /// Parses bounds of a type parameter `BOUND + BOUND + ...`, possibly with trailing `+`.
     ///
+    // 添加注释: 有关`BOUND`语法, 请参见`parse_generic_bound`.
     /// See `parse_generic_bound` for the `BOUND` grammar.
     fn parse_generic_bounds_common(
         &mut self,
@@ -570,6 +594,7 @@ impl<'a> Parser<'a> {
         Ok(bounds)
     }
 
+    // 添加注释: 当前令牌可以开始绑定吗?
     /// Can the current token begin a bound?
     fn can_begin_bound(&mut self) -> bool {
         // This needs to be synchronized with `TokenKind::can_begin_bound`.
@@ -612,6 +637,7 @@ impl<'a> Parser<'a> {
         err.emit();
     }
 
+    // 添加注释: 根据语法解析边界:
     /// Parses a bound according to the grammar:
     /// ```
     /// BOUND = TY_BOUND | LT_BOUND
@@ -634,6 +660,7 @@ impl<'a> Parser<'a> {
         Ok(if is_negative { Err(anchor_lo.to(self.prev_token.span)) } else { Ok(bound) })
     }
 
+    // 添加注释: 解析生命周期("outlives")界限, 例如`'a`, 根据:
     /// Parses a lifetime ("outlives") bound, e.g. `'a`, according to:
     /// ```
     /// LT_BOUND = LIFETIME
@@ -719,6 +746,7 @@ impl<'a> Parser<'a> {
         BoundModifiers { maybe: Some(second_question), maybe_const: Some(maybe_const) }
     }
 
+    // 添加注释: 根据以下内容解析类型绑定:
     /// Parses a type bound according to:
     /// ```
     /// TY_BOUND = TY_BOUND_NOPAREN | (TY_BOUND_NOPAREN)
@@ -762,6 +790,7 @@ impl<'a> Parser<'a> {
         Ok(GenericBound::Trait(poly_trait, modifier))
     }
 
+    // 添加注释: 可选地解析`for<$generic_params>`.
     /// Optionally parses `for<$generic_params>`.
     pub(super) fn parse_late_bound_lifetime_defs(&mut self) -> PResult<'a, Vec<GenericParam>> {
         if self.eat_keyword(kw::For) {
@@ -781,6 +810,7 @@ impl<'a> Parser<'a> {
         self.token.is_lifetime()
     }
 
+    // 添加注释: 解析单个生命周期或panic
     /// Parses a single lifetime `'a` or panics.
     pub(super) fn expect_lifetime(&mut self) -> Lifetime {
         if let Some(ident) = self.token.lifetime() {

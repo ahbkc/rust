@@ -109,6 +109,7 @@ impl Diagnostic {
         }
     }
 
+    // 添加注释: 取消诊断(必须发出或取消结构化诊断, 否则丢弃时会发生panic)
     /// Cancel the diagnostic (a structured diagnostic must either be emitted or
     /// canceled or it will panic when dropped).
     pub fn cancel(&mut self) {

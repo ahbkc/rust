@@ -1,3 +1,4 @@
+// 添加注释: 用于将转义序列错误呈现为诊断的实用程序.
 //! Utilities for rendering escape sequence errors as diagnostics.
 
 use std::iter::once;
@@ -256,6 +257,7 @@ pub(crate) fn emit_unescape_error(
     }
 }
 
+// 添加注释: 将字符推送到消息字符串以进行错误报告.
 /// Pushes a character to a message string for error reporting
 pub(crate) fn escaped_char(c: char) -> String {
     match c {

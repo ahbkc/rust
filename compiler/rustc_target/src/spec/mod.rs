@@ -917,6 +917,53 @@ pub struct Target {
     /// "x86_64", "arm", "aarch64", "mips", "powerpc", "powerpc64", and others.
     pub arch: String,
     // 添加注释: 数据布局, 传递给LLVM
+    // 该布局规范包括由减号字符(`-`)分隔的规格列表. 每个规范都以一个字母开头, 并且可能在字母后包含其它信息来定义数据布局的某些方面.
+    // 接受的规格如下:
+    //      E
+    //          指定目标以大端格式布置数据. 也就是说, 最重要的位具有最低地址位置.
+    //      e
+    //          指定目标以小端格式布置数据. 也就是说, 最不重要的位具有最低地址位置.
+    //      S<size>
+    //          以位为单位指定堆栈的自然对齐方式. 堆栈变量的对齐提升仅限于自然堆栈对齐, 以避免动态堆栈重新对齐.堆栈对齐必须是8位的倍数.
+    //        如果省略, 自然堆栈对齐默认为`未指定`, 这不会阻止任何对齐提升.
+    //      P<address size>
+    //          指定程序存储器对应的地址空间。哈佛架构可以使用它来指定 LLVM 应该将函数等内容放入哪个空间。
+    //        如果省略，程序内存空间默认为默认地址空间0，对应于冯诺依曼架构，代码和数据在同一个空间中。
+    //      G<address size>
+    //          指定创建全局变量时默认使用的地址空间。如果省略，全局地址空间默认为默认地址空间 0。
+    //        注意：没有地址空间的变量声明总是在地址空间 0 中创建，此属性仅影响创建没有附加上下文信息的全局变量时使用的默认值（例如在 LLVM 中）。
+    //      A<address size>
+    //          指定由“ alloca”创建的对象的地址空间。默认为默认地址空间 0。
+    //      p[n]:<size>:<abi>:<pref>:<idx>
+    //          这将指定大小的指针和它的<abi>和 <pref>犯错的地址的空间序列n。第四个参数 <idx>是用于地址计算的索引大小。
+    //        如果未指定，则默认索引大小等于指针大小。所有大小都以位为单位。地址空间 ,n是可选的，如果不指定，则表示默认地址空间 0。 的值n必须在 [1,2^23) 范围内。
+    //      i<size>:<abi>:<pref>
+    //          这指定给定位的整数类型的对齐方式 <size>。的值<size>必须在 [1,2^23) 范围内。
+    //      v<size>:<abi>:<pref>
+    //          这指定给定位的向量类型的对齐方式 <size>。
+    //      f<size>:<abi>:<pref>
+    //          这指定给定位的浮点类型的对齐方式 <size>。只有<size>目标支持的值才会起作用。
+    //        所有目标都支持 32（浮动）和 64（双）；一些目标也支持 80 或 128（不同风格的 long double）。
+    //      a:<abi>:<pref>
+    //          这指定了聚合类型对象的对齐方式。
+    //      F<type>:<abi>
+    //          这指定了函数指针的对齐方式。的选项<type>是：
+    //              i：函数指针的对齐方式与函数的对齐方式无关，是 的倍数<abi>。
+    //              n: 函数指针的对齐方式是函数上指定的显式对齐方式的倍数，并且是 的倍数<abi>。
+    //      m<mangling>
+    //          如果存在，则指定 llvm 名称在输出中被修改。以重整转义字符\01为前缀的符号直接传递给汇编程序，而没有转义字符。重整样式选项是
+    //              e: ELF mangling: 私有符号得到一个.L前缀。
+    //              m：Mips mangling：私有符号获得$前缀。
+    //              o：Mach-O mangling：私有符号获得L前缀。其他符号获得_前缀。
+    //              x: Windows x86 COFF mangling：私有符号获得通常的前缀。常规 C 符号获得_前缀。带有__stdcall、 __fastcall和 的函数具有__vectorcall附加的自定义修改， @N其中 N 是用于传递参数的字节数。以 开头的 C++ 符号?不会以任何方式被破坏。
+    //              w: Windows COFF mangling：类似于x，除了普通的 C 符号不接收_前缀。
+    //              a: XCOFF mangling: 私有符号得到一个L..前缀。
+    //      n<size1>:<size2>:<size3>...
+    //          这以位为单位为目标 CPU 指定了一组本机整数宽度。例如，它可能包含n3232 位 PowerPC、 n32:64PowerPC 64 或n8:16:32:64X86-64。该集合的元素被认为有效地支持大多数通用算术运算。
+    //      ni:<address space0>:<address space1>:<address space2>...
+    //          这将具有指定地址空间的指针类型指定为非整数指针类型。该0 地址空间不能被指定为非积分。
+
+    // 如示例: e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128
     /// [Data layout](http://llvm.org/docs/LangRef.html#data-layout) to pass to LLVM.
     pub data_layout: String,
     // 添加注释: 带有默认值的可选设置
@@ -1464,6 +1511,8 @@ impl Target {
         abi.generic() || !self.unsupported_abis.contains(&abi)
     }
 
+    // 添加注释: 当命令行参数包含`--target`, 且指定的值是路径时, 将会读取该json文件的内容.
+    // 添加注释: 从JSON对象加载目标描述符
     /// Loads a target descriptor from a JSON object.
     pub fn from_json(obj: Json) -> Result<Target, String> {
         // While ugly, this code must remain this way to retain
@@ -1891,21 +1940,24 @@ impl Target {
         key!(supported_sanitizers, SanitizerSet)?;
         key!(default_adjusted_cabi, Option<Abi>)?;
 
+        // 添加注释: 注意: 旧名称已弃用, 但为了兼容性保留了对它的支持.
         // NB: The old name is deprecated, but support for it is retained for
         // compatibility.
         for name in ["abi-blacklist", "unsupported-abis"].iter() {
             if let Some(array) = obj.find(name).and_then(Json::as_array) {
                 for name in array.iter().filter_map(|abi| abi.as_string()) {
+                    // 添加注释: 查找给定的name是否存在
                     match lookup_abi(name) {
                         Some(abi) => {
                             if abi.generic() {
+                                // 添加注释: 当前ABI被认为在所有目标上都受支持并且不能被标记为不受支持.
                                 return Err(format!(
                                     "The ABI \"{}\" is considered to be supported on all \
                                     targets and cannot be marked unsupported",
                                     abi
                                 ));
                             }
-
+                            // 添加注释: 否则, push到不支持ABI集合中
                             base.unsupported_abis.push(abi)
                         }
                         None => {
@@ -1922,11 +1974,14 @@ impl Target {
         Ok(base)
     }
 
+    // 添加注释: 在 RUST_TARGET_PATH 中搜索指定给定目标三元组的 JSON 文件. 请注意,它也可能只是一个空文件名,
+    // 所以也要检查一下. 如果我们知道的硬编码目标之一,则直接返回它.
     /// Search RUST_TARGET_PATH for a JSON file specifying the given target
     /// triple. Note that it could also just be a bare filename already, so also
     /// check for that. If one of the hardcoded targets we know about, just
     /// return it directly.
     ///
+    // 添加注释: 错误字符串可能来自任何调用的 API,包括文件系统访问和 JSON 解码.
     /// The error string could come from any of the APIs called, including
     /// filesystem access and JSON decoding.
     pub fn search(target_triple: &TargetTriple) -> Result<Target, String> {
@@ -1942,11 +1997,13 @@ impl Target {
 
         match *target_triple {
             TargetTriple::TargetTriple(ref target_triple) => {
+                // 添加注释: 检查三元组(`triple`)是否在内置目标列表中.
                 // check if triple is in list of built-in targets
                 if let Some(t) = load_builtin(target_triple) {
                     return Ok(t);
                 }
 
+                // 添加注释: 在RUST_TARGET_PATH中搜索名为`target_triple`.json的文件
                 // search for a file named `target_triple`.json in RUST_TARGET_PATH
                 let path = {
                     let mut target = target_triple.to_string();
@@ -1967,6 +2024,7 @@ impl Target {
                 Err(format!("Could not find specification for target {:?}", target_triple))
             }
             TargetTriple::TargetPath(ref target_path) => {
+                // 添加注释: 如果TargetTriple是路径类型, 且对应值是文件的话, 将进行加载文件操作.
                 if target_path.is_file() {
                     return load_file(&target_path);
                 }
@@ -2170,6 +2228,7 @@ impl TargetTriple {
 
     /// Returns a string triple for this target.
     ///
+    // 添加注释: 如果target是path值, 则将返回文件名(不包含扩展名)
     /// If this target is a path, the file name (without extension) is returned.
     pub fn triple(&self) -> &str {
         match *self {

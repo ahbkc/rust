@@ -10,28 +10,38 @@ use rustc_span::{sym, Span, DUMMY_SP};
 use std::convert::TryInto;
 use std::ops::Range;
 
+// 添加注释: 一种包装器类型, 用于确保解析器正确处理外部属性.
+// 当我们解析外部属性时, 我们需要确保我们为属性目标捕获令牌. 这允许我们在调用派生过程宏之前对令牌执行cfg-expansion
 /// A wrapper type to ensure that the parser handles outer attributes correctly.
 /// When we parse outer attributes, we need to ensure that we capture tokens
 /// for the attribute target. This allows us to perform cfg-expansion on
 /// a token stream before we invoke a derive proc-macro.
 ///
+// 添加注释: 此包装器可防止直接访问底层`Vec<ast::Attribute>`.
 /// This wrapper prevents direct access to the underlying `Vec<ast::Attribute>`.
+// 添加注释: 解析代码只能通过将`AttrWrapper`传递给`collect_tokens_trailing_tokens`来访问底层属性.
+// 这使得在不首先收集令牌的情况下意外构建AST节点(存储`Vec<ast::Attribute>`)变得困难.
 /// Parsing code can only get access to the underlying attributes
 /// by passing an `AttrWrapper` to `collect_tokens_trailing_tokens`.
 /// This makes it difficult to accidentally construct an AST node
 /// (which stores a `Vec<ast::Attribute>`) without first collecting tokens.
 ///
+// 添加注释: 这个struct有自已的模块, 保存解析器代码不能直接访问`attrs`字段.
 /// This struct has its own module, to ensure that the parser code
 /// cannot directly access the `attrs` field
 #[derive(Debug, Clone)]
 pub struct AttrWrapper {
     attrs: AttrVec,
+    // 添加注释: 标记游标中外部属性的开始.
+    // 添加注释: 这允许我们为整个属性目标创建一个`ReplaceRange`, 包括外部属性.
     // The start of the outer attributes in the token cursor.
     // This allows us to create a `ReplaceRange` for the entire attribute
     // target, including outer attributes.
     start_pos: usize,
 }
 
+// 添加注释: `rustc_data_structures::static_assert_size!`宏是一个类型大小断言.
+// 添加注释: 这个结构体经常被传递, 所以确保它不会意外变大.
 // This struct is passed around very frequently,
 // so make sure it doesn't accidentally get larger
 #[cfg(target_arch = "x86_64")]
@@ -65,6 +75,7 @@ impl AttrWrapper {
     }
 }
 
+// 添加注释: 如果`attrs`包含`cfg`或`cfg_attr`属性, 则返回`true`
 /// Returns `true` if `attrs` contains a `cfg` or `cfg_attr` attribute
 fn has_cfg_or_cfg_attr(attrs: &[Attribute]) -> bool {
     // NOTE: Builtin attributes like `cfg` and `cfg_attr` cannot be renamed via imports.

@@ -23,6 +23,7 @@ use std::mem;
 use tracing::debug;
 
 impl<'a> Parser<'a> {
+    // 添加注释: 将源模块解析为crate. 这是解析器的主要入口.
     /// Parses a source module as a crate. This is the main entry point for the parser.
     pub fn parse_crate_mod(&mut self) -> PResult<'a, ast::Crate> {
         let (attrs, items, span) = self.parse_mod(&token::Eof)?;
@@ -30,6 +31,7 @@ impl<'a> Parser<'a> {
         Ok(ast::Crate { attrs, items, span, proc_macros })
     }
 
+    // 添加注释: 格式化`mod <foo> { ... }` 或 `mod <foo>;`项目.
     /// Parses a `mod <foo> { ... }` or `mod <foo>;` item.
     fn parse_item_mod(&mut self, attrs: &mut Vec<Attribute>) -> PResult<'a, ItemInfo> {
         let unsafety = self.parse_unsafety();
@@ -47,6 +49,7 @@ impl<'a> Parser<'a> {
         Ok((id, ItemKind::Mod(unsafety, mod_kind)))
     }
 
+    // 添加注释: 解析模块的内容(内部属性后跟模块项),
     /// Parses the contents of a module (inner attributes followed by module items).
     pub fn parse_mod(
         &mut self,
@@ -185,6 +188,7 @@ impl<'a> Parser<'a> {
         }
     }
 
+    // 添加注释: 解析标志允许的项目之一.
     /// Parses one of the items allowed by the flags.
     fn parse_item_kind(
         &mut self,
@@ -295,6 +299,7 @@ impl<'a> Parser<'a> {
         Ok(Some(info))
     }
 
+    // 添加注释: 解析语句时, 路径的开头会是一个项目吗?
     /// When parsing a statement, would the start of a path be an item?
     pub(super) fn is_path_start_item(&mut self) -> bool {
         self.is_crate_vis() // no: `crate::b`, yes: `crate $item`
@@ -304,11 +309,13 @@ impl<'a> Parser<'a> {
         || self.is_macro_rules_item() // no: `macro_rules::b`, yes: `macro_rules! mac`
     }
 
+    // 添加注释: 我们确定这不可能是宏调用吗?
     /// Are we sure this could not possibly be a macro invocation?
     fn isnt_macro_invocation(&mut self) -> bool {
         self.check_ident() && self.look_ahead(1, |t| *t != token::Not && *t != token::ModSep)
     }
 
+    // 添加注释: 遇到结构或方法定义时恢复, 其中用户在编写`pub`后忘记添加`struct`或`fn`关键字: `put S {}`
     /// Recover on encountering a struct or method definition where the user
     /// forgot to add the `struct` or `fn` keyword after writing `pub`: `pub S {}`.
     fn recover_missing_kw_before_item(&mut self) -> PResult<'a, ()> {
@@ -404,6 +411,7 @@ impl<'a> Parser<'a> {
         }
     }
 
+    // 添加注释: 解析一个宏项目, 例如, `item!();`
     /// Parses an item macro, e.g., `item!();`.
     fn parse_item_macro(&mut self, vis: &Visibility) -> PResult<'a, MacCall> {
         let path = self.parse_path(PathStyle::Mod)?; // `foo::bar`
@@ -414,6 +422,7 @@ impl<'a> Parser<'a> {
         Ok(MacCall { path, args, prior_type_ascription: self.last_type_ascription })
     }
 
+    // 添加注释: 如果我们解析了属性并期望有一个项目但没有时, 则恢复.
     /// Recover if we parsed attributes and expected an item but there was none.
     fn recover_attrs_no_item(&mut self, attrs: &[Attribute]) -> PResult<'a, ()> {
         let (start, end) = match attrs {
@@ -449,6 +458,7 @@ impl<'a> Parser<'a> {
         }
     }
 
+    // 添加注释: 解析一个 `implementation`项.
     /// Parses an implementation item.
     ///
     /// ```
@@ -616,6 +626,7 @@ impl<'a> Parser<'a> {
         Ok(items)
     }
 
+    // 添加注释: 在`}`之前恢复文档注释.
     /// Recover on a doc comment before `}`.
     fn recover_doc_comment_before_brace(&mut self) -> bool {
         if let token::DocComment(..) = self.token.kind {
@@ -639,6 +650,7 @@ impl<'a> Parser<'a> {
         false
     }
 
+    // 添加注释: 解析默认值(即, `default` 或 什么都没有).
     /// Parses defaultness (i.e., `default` or nothing).
     fn parse_defaultness(&mut self) -> Defaultness {
         // We are interested in `default` followed by another identifier.
@@ -654,6 +666,7 @@ impl<'a> Parser<'a> {
         }
     }
 
+    // 添加注释: 这是一个`(unsafe auto? | auto) trait`项目吗?
     /// Is this an `(unsafe auto? | auto) trait` item?
     fn check_auto_or_unsafe_trait_item(&mut self) -> bool {
         // auto trait
@@ -662,6 +675,7 @@ impl<'a> Parser<'a> {
             || self.check_keyword(kw::Unsafe) && self.is_keyword_ahead(1, &[kw::Trait, kw::Auto])
     }
 
+    // 添加注释: 解析 `unsafe? auto? trait Foo { ... }` 或 `trait Foo = Bar;`.
     /// Parses `unsafe? auto? trait Foo { ... }` or `trait Foo = Bar;`.
     fn parse_item_trait(&mut self, attrs: &mut Vec<Attribute>, lo: Span) -> PResult<'a, ItemInfo> {
         let unsafety = self.parse_unsafety();
@@ -728,6 +742,7 @@ impl<'a> Parser<'a> {
         self.parse_assoc_item(|edition| edition >= Edition::Edition2018, force_collect)
     }
 
+    // 添加注释: 解析关联items.
     /// Parses associated items.
     fn parse_assoc_item(
         &mut self,
@@ -752,10 +767,12 @@ impl<'a> Parser<'a> {
         ))
     }
 
+    // 添加注释: 使用以下语法解析 `type`别名:
     /// Parses a `type` alias with the following grammar:
     /// ```
     /// TypeAlias = "type" Ident Generics {":" GenericBounds}? {"=" Ty}? ";" ;
     /// ```
+    // 添加注释: `"type"`已经被吃掉了.
     /// The `"type"` has already been eaten.
     fn parse_type_alias(&mut self, def: Defaultness) -> PResult<'a, ItemInfo> {
         let ident = self.parse_ident()?;
@@ -772,6 +789,7 @@ impl<'a> Parser<'a> {
         Ok((ident, ItemKind::TyAlias(box TyAliasKind(def, generics, bounds, default))))
     }
 
+    // 添加注释: 解析`UseTree`.
     /// Parses a `UseTree`.
     ///
     /// ```text
@@ -812,6 +830,7 @@ impl<'a> Parser<'a> {
         Ok(UseTree { prefix, kind, span: lo.to(self.prev_token.span) })
     }
 
+    // 添加注释: 解析 `*` 或 `{...}`.
     /// Parses `*` or `{...}`.
     fn parse_use_tree_glob_or_nested(&mut self) -> PResult<'a, UseTreeKind> {
         Ok(if self.eat(&token::BinOp(token::Star)) {
@@ -845,6 +864,7 @@ impl<'a> Parser<'a> {
         }
     }
 
+    // 添加注释: 解析`extern crate` links.
     /// Parses `extern crate` links.
     ///
     /// # Examples
@@ -903,8 +923,10 @@ impl<'a> Parser<'a> {
         Ok(ident)
     }
 
+    // 添加注释: 解析外部ABI模块的`extern`.
     /// Parses `extern` for foreign ABIs modules.
     ///
+    // 添加注释: `extern`预计在调用此方法之前已被消耗.
     /// `extern` is expected to have been consumed before calling this method.
     ///
     /// # Examples
@@ -924,6 +946,7 @@ impl<'a> Parser<'a> {
         Ok((Ident::invalid(), ItemKind::ForeignMod(module)))
     }
 
+    // 添加注释: 解析一个外部项目(一个在`extern { ... }`块中).
     /// Parses a foreign item (one in an `extern { ... }` block).
     pub fn parse_foreign_item(
         &mut self,
@@ -990,6 +1013,7 @@ impl<'a> Parser<'a> {
         }
     }
 
+    // 添加注释: 在已经吃掉`const`的`const mut`上恢复.
     /// Recover on `const mut` with `const` already eaten.
     fn recover_const_mut(&mut self, const_span: Span) {
         if self.eat_keyword(kw::Mut) {
@@ -1006,6 +1030,7 @@ impl<'a> Parser<'a> {
         }
     }
 
+    // 添加注释: 在已经吃掉`const`的`const impl`上恢复
     /// Recover on `const impl` with `const` already eaten.
     fn recover_const_impl(
         &mut self,
@@ -1071,7 +1096,9 @@ impl<'a> Parser<'a> {
         Ok((id, ty, expr))
     }
 
+    // 添加注释: 我们应该解析`:`, 但缺少`:`.
     /// We were supposed to parse `:` but the `:` was missing.
+    // 添加注释: 这意味着缺少类型.
     /// This means that the type is missing.
     fn recover_missing_const_type(&mut self, id: Ident, m: Option<Mutability>) -> P<Ty> {
         // Construct the error and stash it away with the hope
@@ -1095,6 +1122,7 @@ impl<'a> Parser<'a> {
         P(Ty { kind: TyKind::Infer, span: id.span, id: ast::DUMMY_NODE_ID, tokens: None })
     }
 
+    // 添加注释: 解析枚举声明
     /// Parses an enum declaration.
     fn parse_item_enum(&mut self) -> PResult<'a, ItemInfo> {
         let id = self.parse_ident()?;
@@ -1293,6 +1321,7 @@ impl<'a> Parser<'a> {
         .map(|(r, _)| r)
     }
 
+    // 添加注释: 解析结构声明的元素.
     /// Parses an element of a struct declaration.
     fn parse_field_def(&mut self) -> PResult<'a, FieldDef> {
         let attrs = self.parse_outer_attributes()?;
@@ -1303,6 +1332,7 @@ impl<'a> Parser<'a> {
         })
     }
 
+    // 添加注释: 解析结构字段声明.
     /// Parses a structure field declaration.
     fn parse_single_struct_field(
         &mut self,
@@ -1395,6 +1425,7 @@ impl<'a> Parser<'a> {
         Ok(a_var)
     }
 
+    // 添加注释: 解析结构字段.
     /// Parses a structure field.
     fn parse_name_and_ty(
         &mut self,
@@ -1416,7 +1447,9 @@ impl<'a> Parser<'a> {
         })
     }
 
+    // 添加注释: 解析声明性宏2.0定义.
     /// Parses a declarative macro 2.0 definition.
+    // 添加注释: `macro`关键字已经被解析.
     /// The `macro` keyword has already been parsed.
     /// ```
     /// MacBody = "{" TOKEN_STREAM "}" ;
@@ -1448,6 +1481,7 @@ impl<'a> Parser<'a> {
         Ok((ident, ItemKind::MacroDef(ast::MacroDef { body, macro_rules: false })))
     }
 
+    // 添加注释: 这是否是明确是`macro_rules! foo`项目定义?
     /// Is this unambiguously the start of a `macro_rules! foo` item definition?
     fn is_macro_rules_item(&mut self) -> bool {
         self.check_keyword(kw::MacroRules)
@@ -1455,6 +1489,7 @@ impl<'a> Parser<'a> {
             && self.look_ahead(2, |t| t.is_ident())
     }
 
+    // 添加注释: 解析`macro_rules! foo { ... }`声明宏.
     /// Parses a `macro_rules! foo { ... }` declarative macro.
     fn parse_item_macro_rules(&mut self, vis: &Visibility) -> PResult<'a, ItemInfo> {
         self.expect_keyword(kw::MacroRules)?; // `macro_rules`
@@ -1468,6 +1503,7 @@ impl<'a> Parser<'a> {
         Ok((ident, ItemKind::MacroDef(ast::MacroDef { body, macro_rules: true })))
     }
 
+    // 添加注释: 项目宏调用或`macro_rules!`定义需要继承可见性. 如果不是这种情况, 则发出错误.
     /// Item macro invocations or `macro_rules!` definitions need inherited visibility.
     /// If that's not the case, emit an error.
     fn complain_if_pub_macro(&self, vis: &Visibility, macro_rules: bool) {
@@ -1569,11 +1605,14 @@ impl<'a> Parser<'a> {
     }
 }
 
+// 添加注释: 用于解析参数列表的解析配置(参见`parse_fn_params`).
 /// The parsing configuration used to parse a parameter list (see `parse_fn_params`).
 ///
+// 添加注释: 函数决定每个参数`p`, `p`是否必须有一个模式或只是一个类型.
 /// The function decides if, per-parameter `p`, `p` must have a pattern or just a type.
 type ReqName = fn(Edition) -> bool;
 
+// 添加注释: 解析函数和方法
 /// Parsing of functions and methods.
 impl<'a> Parser<'a> {
     /// Parse a function starting from the front matter (`const ...`) to the body `{ ... }` or `;`.
@@ -1729,6 +1768,7 @@ impl<'a> Parser<'a> {
         Ok(FnHeader { constness, unsafety, asyncness, ext })
     }
 
+    // 添加注释: 我们在解析`async fn`. 如果当前是Rust 2015时, 发出一个错误.
     /// We are parsing `async fn`. If we are on Rust 2015, emit an error.
     fn ban_async_in_2015(&self, span: Span) {
         if span.rust_2015() {
@@ -1741,6 +1781,7 @@ impl<'a> Parser<'a> {
         }
     }
 
+    // 添加注释: 解析函数声明的参数列表和结果类型.
     /// Parses the parameter list and result type of a function declaration.
     pub(super) fn parse_fn_decl(
         &mut self,
@@ -1754,6 +1795,7 @@ impl<'a> Parser<'a> {
         }))
     }
 
+    // 添加注释: 解析函数的参数列表, 包括`(`和`)`分隔符.
     /// Parses the parameter list of a function, including the `(` and `)` delimiters.
     fn parse_fn_params(&mut self, req_name: ReqName) -> PResult<'a, Vec<Param>> {
         let mut first_param = true;
@@ -1776,8 +1818,10 @@ impl<'a> Parser<'a> {
         Ok(params)
     }
 
+    // 添加注释: 解析单个函数参数.
     /// Parses a single function parameter.
     ///
+    // 添加注释: 当`first_para`成立时, 在语法上允许`self`.
     /// - `self` is syntactically allowed when `first_param` holds.
     fn parse_param_general(&mut self, req_name: ReqName, first_param: bool) -> PResult<'a, Param> {
         let lo = self.token.span;
@@ -1859,6 +1903,7 @@ impl<'a> Parser<'a> {
         })
     }
 
+    // 添加注释: 返回解析的可选self参数以及是否使用了self快捷方式.
     /// Returns the parsed optional self parameter and whether a self shortcut was used.
     fn parse_self_param(&mut self) -> PResult<'a, Option<Param>> {
         // Extract an identifier *after* having confirmed that the token is one.

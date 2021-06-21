@@ -48,9 +48,11 @@ pub enum Abi {
 pub struct AbiData {
     abi: Abi,
 
+    // 添加注释: 我们喜欢的这个ABI的名称
     /// Name of this ABI as we like it called.
     name: &'static str,
 
+    // 添加注释: 所有平台都支持通用ABI
     /// A generic ABI is supported on all platforms.
     generic: bool,
 }
@@ -94,6 +96,7 @@ const AbiDatas: &[AbiData] = &[
     AbiData { abi: Abi::Unadjusted, name: "unadjusted", generic: true },
 ];
 
+// 添加注释: 返回具有给定名称的ABI(如果有)
 /// Returns the ABI with the given name (if any).
 pub fn lookup(name: &str) -> Option<Abi> {
     AbiDatas.iter().find(|abi_data| name == abi_data.name).map(|&x| x.abi)

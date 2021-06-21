@@ -53,6 +53,7 @@ impl<'a> StringReader<'a> {
         self.override_span.unwrap_or_else(|| Span::with_root_ctxt(lo, hi))
     }
 
+    // 添加注释: 返回下一个标记, 以及有关前一个空格的信息(如果有).
     /// Returns the next token, and info about preceding whitespace, if any.
     fn next_token(&mut self) -> (Spacing, Token) {
         let mut spacing = Spacing::Joint;

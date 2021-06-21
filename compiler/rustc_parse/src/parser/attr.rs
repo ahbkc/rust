@@ -9,6 +9,7 @@ use std::convert::TryInto;
 
 use tracing::debug;
 
+// 添加注释: 公开供rustfmt使用
 // Public for rustfmt usage
 #[derive(Debug)]
 pub enum InnerAttrPolicy<'a> {
@@ -26,6 +27,7 @@ pub(super) const DEFAULT_INNER_ATTR_FORBIDDEN: InnerAttrPolicy<'_> = InnerAttrPo
 };
 
 impl<'a> Parser<'a> {
+    // 添加注释: 解析出现在项目之前的属性.
     /// Parses attributes that appear before an item.
     pub(super) fn parse_outer_attributes(&mut self) -> PResult<'a, AttrWrapper> {
         let mut attrs: Vec<ast::Attribute> = Vec::new();

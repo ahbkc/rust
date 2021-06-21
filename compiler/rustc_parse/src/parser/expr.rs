@@ -86,12 +86,14 @@ impl From<P<Expr>> for LhsExpr {
 }
 
 impl<'a> Parser<'a> {
+    // 添加注释: 解析一个表达式.
     /// Parses an expression.
     #[inline]
     pub fn parse_expr(&mut self) -> PResult<'a, P<Expr>> {
         self.parse_expr_res(Restrictions::empty(), None)
     }
 
+    // 添加注释: 解析表达式, 强制收集令牌.
     /// Parses an expression, forcing tokens to be collected
     pub fn parse_expr_force_collect(&mut self) -> PResult<'a, P<Expr>> {
         // If we have outer attributes, then the call to `collect_tokens_trailing_token`
@@ -143,8 +145,10 @@ impl<'a> Parser<'a> {
         self.with_res(r, |this| this.parse_assoc_expr(already_parsed_attrs))
     }
 
+    // 添加注释: 解析一个关联表达式.
     /// Parses an associative expression.
     ///
+    // 添加注释: 这将解析一个表达式, 其中考虑了表达式中运算符的关联性和优先级.
     /// This parses an expression accounting for associativity and precedence of the operators in
     /// the expression.
     #[inline]
@@ -417,6 +421,7 @@ impl<'a> Parser<'a> {
             .emit();
     }
 
+    // 添加注释: 检查此表达式是否是成功解析的语句.
     /// Checks if this expression is a successfully parsed statement.
     fn expr_is_complete(&self, e: &Expr) -> bool {
         self.restrictions.contains(Restrictions::STMT_EXPR)
@@ -493,6 +498,7 @@ impl<'a> Parser<'a> {
         })
     }
 
+    // 添加注释: 解析前缀一元运算符 expr
     /// Parses a prefix-unary-operator expr.
     fn parse_prefix_expr(&mut self, attrs: Option<AttrWrapper>) -> PResult<'a, P<Expr>> {
         let attrs = self.parse_or_use_outer_attributes(attrs)?;
@@ -558,6 +564,7 @@ impl<'a> Parser<'a> {
         self.parse_unary_expr(lo, UnOp::Not)
     }
 
+    // 添加注释: 解析`box expr`.
     /// Parse `box expr`.
     fn parse_box_expr(&mut self, lo: Span) -> PResult<'a, (Span, ExprKind)> {
         let (span, expr) = self.parse_prefix_expr_common(lo)?;
@@ -598,6 +605,7 @@ impl<'a> Parser<'a> {
         self.parse_unary_expr(lo, UnOp::Not)
     }
 
+    // 添加注释: 返回expr的跨度, 如果它没有被插值或被插值标记的跨度.
     /// Returns the span of expr, if it was not interpolated or the span of the interpolated token.
     fn interpolated_or_expr_span(
         &self,
@@ -737,6 +745,8 @@ impl<'a> Parser<'a> {
         self.parse_and_disallow_postfix_after_cast(cast_expr)
     }
 
+    // 添加注释: 在强制转换后解析后缀运算符, 例如,  `.`或`?`或索引(`[]`), 然后发出错误并返回新解析的树.
+    // 添加注释: `&x as T[0]`的结果解析树的优先级为`((&x) as T)[0]`.
     /// Parses a postfix operators such as `.`, `?`, or index (`[]`) after a cast,
     /// then emits an error and returns the newly parsed tree.
     /// The resulting parse tree for `&x as T[0]` has a precedence of `((&x) as T)[0]`.
@@ -797,6 +807,7 @@ impl<'a> Parser<'a> {
         Ok(lhs)
     }
 
+    // 添加注释: 解析`&mut? <expr>`或 `& raw [ const | mut ] <expr>`
     /// Parse `& mut? <expr>` or `& raw [ const | mut ] <expr>`.
     fn parse_borrow_expr(&mut self, lo: Span) -> PResult<'a, (Span, ExprKind)> {
         self.expect_and()?;

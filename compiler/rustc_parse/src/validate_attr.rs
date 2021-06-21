@@ -1,3 +1,4 @@
+// 添加注释: 扩展后属性的元语法验证逻辑.
 //! Meta-syntax validation logic of attributes for post-expansion.
 
 use crate::parse_in;
@@ -73,6 +74,7 @@ pub fn check_meta_bad_delim(sess: &ParseSess, span: DelimSpan, delim: MacDelimit
         .emit();
 }
 
+// 添加注释: 检查给定的元项目是否与此`AttributeTemplate`兼容.
 /// Checks that the given meta-item is compatible with this `AttributeTemplate`.
 fn is_attr_template_compatible(template: &AttributeTemplate, meta: &ast::MetaItemKind) -> bool {
     match meta {

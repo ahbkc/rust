@@ -22,6 +22,7 @@ use tracing::{debug, trace};
 const TURBOFISH_SUGGESTION_STR: &str =
     "use `::<...>` instead of `<...>` to specify type or const arguments";
 
+// 添加注释: 创建占位符参数
 /// Creates a placeholder argument.
 pub(super) fn dummy_arg(ident: Ident) -> Param {
     let pat = P(Pat {

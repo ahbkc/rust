@@ -57,6 +57,7 @@ pub trait CodegenBackend {
     fn print_passes(&self) {}
     fn print_version(&self) {}
 
+    // 添加注释: 如果此插件提供其它内置目标, 请提供此处选项启用的目标. 小心: 这被称为*before* init() 被调用
     /// If this plugin provides additional builtin targets, provide the one enabled by the options here.
     /// Be careful: this is called *before* init() is called.
     fn target_override(&self, _opts: &config::Options) -> Option<Target> {

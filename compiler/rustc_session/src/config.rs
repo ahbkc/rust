@@ -323,6 +323,7 @@ impl Default for TrimmedDefPaths {
     }
 }
 
+// 添加注释: 使用基于BTreeMap来廉价地获得确定性的`Hash`实现
 /// Use tree-based collections to cheaply get a deterministic `Hash` implementation.
 /// *Do not* switch `BTreeMap` out for an unsorted container type! That would break
 /// dependency tracking for command-line arguments.
@@ -532,12 +533,16 @@ impl BorrowckMode {
 }
 
 pub enum Input {
+    // 添加注释: 从文件加载源代码
     /// Load source code from a file.
     File(PathBuf),
+    // 添加注释: 从字符串加载源代码
     /// Load source code from a string.
     Str {
+        // 添加注释: 代替文件名显示的字符串
         /// A string that is shown in place of a filename.
         name: FileName,
+        // 添加注释: 包含源代码的匿名字符串
         /// An anonymous string containing the source code.
         input: String,
     },
@@ -901,7 +906,9 @@ pub fn build_configuration(sess: &Session, mut user_cfg: CrateConfig) -> CrateCo
 }
 
 pub(super) fn build_target_config(opts: &Options, target_override: Option<Target>) -> Target {
+    // 添加注释: 当LLVM作为代码生成后台时, `target_override`字段值为None, 一定会执行`Target::search`函数
     let target_result = target_override.map_or_else(|| Target::search(&opts.target_triple), Ok);
+    // 添加注释: 判断指定目标是否有效, 如果无效则直接返回错误信息
     let target = target_result.unwrap_or_else(|e| {
         early_error(
             opts.error_format,
@@ -913,6 +920,7 @@ pub(super) fn build_target_config(opts: &Options, target_override: Option<Target
         )
     });
 
+    // 添加注释: 判断目标指针宽度是否有效, 如果不是16, 32, 64时则返回错误信息
     if !matches!(target.pointer_width, 16 | 32 | 64) {
         early_error(
             opts.error_format,
@@ -1165,6 +1173,7 @@ pub fn get_cmd_lint_options(
     for &level in &[lint::Allow, lint::Warn, lint::Deny, lint::Forbid] {
         for (passed_arg_pos, lint_name) in matches.opt_strs_pos(level.as_str()) {
             let arg_pos = if let lint::Forbid = level {
+                // 添加注释: HACK: forbid 总是最后指定, 所以它不能被覆盖.
                 // HACK: forbid is always specified last, so it can't be overridden.
                 // FIXME: remove this once <https://github.com/rust-lang/rust/issues/70819> is
                 // fixed and `forbid` works as expected.
@@ -1187,6 +1196,7 @@ pub fn get_cmd_lint_options(
         .map(|(_, lint_name, level)| (lint_name, level))
         .collect();
 
+    // 添加注释: `cap-lints`参数表示设置最严格的lint级别. 更严格的lints被限制在这个级别.
     let lint_cap = matches.opt_str("cap-lints").map(|cap| {
         lint::Level::from_str(&cap)
             .unwrap_or_else(|| early_error(error_format, &format!("unknown lint level: `{}`", cap)))
@@ -1377,14 +1387,22 @@ fn parse_output_types(
     error_format: ErrorOutputType,
 ) -> OutputTypes {
     let mut output_types = BTreeMap::new();
+    // 添加注释: `debugging_opts.parse_only`值为false代表没有开启`仅解析`选项
     if !debugging_opts.parse_only {
+        // 添加注释: 获取emit参数
         for list in matches.opt_strs("emit") {
             for output_type in list.split(',') {
+                // 添加注释: `split_once`方法的使用示例如下:
+                //                          assert_eq!("".split_once("->"), None);
+                //                          assert_eq!("a->b".split_once("->"), Some(("a", "b")));
                 let (shorthand, path) = match output_type.split_once('=') {
                     None => (output_type, None),
+                    // 添加注释: 如果匹配到了Some, 则代表output_type的值为`a=b`的形式
                     Some((shorthand, path)) => (shorthand, Some(PathBuf::from(path))),
                 };
+                // 添加注释: `OutputType::from_shorthand(shorthand)`表示将字符串转换为OutputType类型
                 let output_type = OutputType::from_shorthand(shorthand).unwrap_or_else(|| {
+                    // 添加注释: 返回错误: 未知`emission`类型
                     early_error(
                         error_format,
                         &format!(
@@ -1398,6 +1416,7 @@ fn parse_output_types(
             }
         }
     };
+    // 添加注释: 如果`output_types`集合为空, 则添加默认值OutputType::Exe
     if output_types.is_empty() {
         output_types.insert(OutputType::Exe, None);
     }
@@ -1411,13 +1430,16 @@ fn should_override_cgus_and_disable_thinlto(
     mut codegen_units: Option<usize>,
 ) -> (bool, Option<usize>) {
     let mut disable_thinlto = false;
+    // 添加注释: Issue #30063. 如果用户请求一个特定路径的LLVM相关输出, 请禁用代码生成单元.
     // Issue #30063: if user requests LLVM-related output to one
     // particular path, disable codegen-units.
     let incompatible: Vec<_> = output_types
         .0
         .iter()
         .map(|ot_path| ot_path.0)
+        // 添加注释: 如果ot是`OutputType::Exe | OutputType::DepInfo | OutputType::Metadata`中的其中一个时, 才会返回true, 其它情况下都将返回false.
         .filter(|ot| !ot.is_compatible_with_codegen_units_and_single_output_file())
+        // 添加注释: ot.shorthand()方法将OutputType类型转换为&str类型
         .map(|ot| ot.shorthand())
         .collect();
     if !incompatible.is_empty() {
@@ -1447,6 +1469,7 @@ fn should_override_cgus_and_disable_thinlto(
     }
 
     if codegen_units == Some(0) {
+        // 添加注释: 代码生成单元的值必须是非零正整数
         early_error(error_format, "value for codegen units must be a positive non-zero integer");
     }
 
@@ -1513,12 +1536,23 @@ fn parse_target_triple(matches: &getopts::Matches, error_format: ErrorOutputType
     match matches.opt_str("target") {
         Some(target) if target.ends_with(".json") => {
             let path = Path::new(&target);
+            // FIXME
+            let f = std::fs::write("C:\\Users\\ahbkc\\Desktop\\hello.txt", format!("Path: {}", &target));
+            if let Ok(_f) = f {};
             TargetTriple::from_path(&path).unwrap_or_else(|_| {
                 early_error(error_format, &format!("target file {:?} does not exist", path))
             })
         }
-        Some(target) => TargetTriple::TargetTriple(target),
-        _ => TargetTriple::from_triple(host_triple()),
+        Some(target) => {
+            let f = std::fs::write("C:\\Users\\ahbkc\\Desktop\\hello.txt", format!("String: {}", &target));
+            if let Ok(_f) = f {};
+            TargetTriple::TargetTriple(target)
+        },
+        _ => {
+            let f = std::fs::write("C:\\Users\\ahbkc\\Desktop\\hello.txt", format!("other: {}", host_triple()));
+            if let Ok(_f) = f {};
+            TargetTriple::from_triple(host_triple())
+        },
     }
 }
 
@@ -1912,24 +1946,33 @@ fn parse_remap_path_prefix(
 }
 
 pub fn build_session_options(matches: &getopts::Matches) -> Options {
+    // 添加注释: 格式化`--color` 参数
     let color = parse_color(matches);
 
+    // 添加注释: 格式化`--edition`参数
     let edition = parse_crate_edition(matches);
 
+    // 添加注释: 格式化`--json`参数
     let JsonConfig { json_rendered, json_artifact_notifications, json_unused_externs } =
         parse_json(matches);
 
+    // 添加注释: 格式化`--error-format`参数
     let error_format = parse_error_format(matches, color, json_rendered);
 
+    // 添加注释: 格式化`crate-type`参数
     let unparsed_crate_types = matches.opt_strs("crate-type");
     let crate_types = parse_crate_types_from_list(unparsed_crate_types)
         .unwrap_or_else(|e| early_error(error_format, &e[..]));
 
+    // 添加注释: 格式化`cap-lints`参数
     let (lint_opts, describe_lints, lint_cap) = get_cmd_lint_options(matches, error_format);
 
+    // 添加注释: 构建debugging选项参数
     let mut debugging_opts = build_debugging_options(matches, error_format);
+    // 添加注释: 判断是否在非`unstable_options`的环境下使用了unstable_options
     check_debug_option_stability(&debugging_opts, error_format, json_rendered);
 
+    // 添加注释: 判断是否在非`unstable_options`的环境下使用了unstable_options
     if !debugging_opts.unstable_options && json_unused_externs {
         early_error(
             error_format,
@@ -1938,8 +1981,10 @@ pub fn build_session_options(matches: &getopts::Matches) -> Options {
         );
     }
 
+    // 添加注释: 格式化`emit`参数, 获取输出类型
     let output_types = parse_output_types(&debugging_opts, matches, error_format);
 
+    // 添加注释: 构建代码生成相关参数
     let mut cg = build_codegen_options(matches, error_format);
     let (disable_thinlto, mut codegen_units) = should_override_cgus_and_disable_thinlto(
         &output_types,
@@ -2336,10 +2381,12 @@ pub enum PpHirMode {
 
 #[derive(Copy, Clone, PartialEq, Debug)]
 pub enum PpMode {
+    // 添加注释: 打印源代码的选项, 即: `--pretty` and `-Zunpretty=everybody_loops`
     /// Options that print the source code, i.e.
     /// `--pretty` and `-Zunpretty=everybody_loops`
     Source(PpSourceMode),
     AstTree(PpAstTreeMode),
+    // 添加注释: 打印HIR的选项, 即`-Zunpretty=hir`
     /// Options that print the HIR, i.e. `-Zunpretty=hir`
     Hir(PpHirMode),
     /// `-Zunpretty=hir-tree`

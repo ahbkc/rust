@@ -23,6 +23,7 @@ impl<'a> StringReader<'a> {
             last_delim_empty_block_spans: FxHashMap::default(),
             matching_block_spans: Vec::new(),
         };
+        // `parse_all_token_trees`将令牌流解析为`TokenTree`列表, 直到`EOF`.
         let res = tt_reader.parse_all_token_trees();
         (res, tt_reader.unmatched_braces)
     }
@@ -47,6 +48,7 @@ struct TokenTreesReader<'a> {
 }
 
 impl<'a> TokenTreesReader<'a> {
+    // 添加注释: 将令牌流解析为`TokenTree`列表, 直到`EOF`.
     // Parse a stream of tokens into a list of `TokenTree`s, up to an `Eof`.
     fn parse_all_token_trees(&mut self) -> PResult<'a, TokenStream> {
         let mut buf = TokenStreamBuilder::default();

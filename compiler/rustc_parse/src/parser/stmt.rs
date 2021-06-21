@@ -33,6 +33,7 @@ impl<'a> Parser<'a> {
         }))
     }
 
+    // 添加注释: 如果`force_capture`是true, 则不管我们是否有属性, 都强制收集令牌.
     /// If `force_capture` is true, forces collection of tokens regardless of whether
     /// or not we have attributes
     crate fn parse_stmt_without_recovery(
@@ -137,6 +138,7 @@ impl<'a> Parser<'a> {
         }
     }
 
+    // 添加注释: 解析语句宏`mac!(args)`提供了一个表示`mac`的`path`. 此时, 路径后面的`!`标记已经被吃掉了.
     /// Parses a statement macro `mac!(args)` provided a `path` representing `mac`.
     /// At this point, the `!` token after the path has already been eaten.
     fn parse_stmt_mac(&mut self, lo: Span, attrs: AttrVec, path: ast::Path) -> PResult<'a, Stmt> {
@@ -219,6 +221,7 @@ impl<'a> Parser<'a> {
         })
     }
 
+    // 添加注释: 解析局部变量声明.
     /// Parses a local variable declaration.
     fn parse_local(&mut self, attrs: AttrVec) -> PResult<'a, P<Local>> {
         let lo = self.prev_token.span;
@@ -291,6 +294,7 @@ impl<'a> Parser<'a> {
         Ok(P(ast::Local { ty, pat, init, id: DUMMY_NODE_ID, span: lo.to(hi), attrs, tokens: None }))
     }
 
+    // 添加注释: 解析局部变量声明的RHS(例如, `= 14;`)
     /// Parses the RHS of a local variable declaration (e.g., `= 14;`).
     fn parse_initializer(&mut self, eq_optional: bool) -> PResult<'a, Option<P<Expr>>> {
         let eq_consumed = match self.token.kind {
@@ -317,6 +321,7 @@ impl<'a> Parser<'a> {
         Ok(if eq_consumed || eq_optional { Some(self.parse_expr()?) } else { None })
     }
 
+    // 添加注释: 解析一个块. 不允许使用内部属性.
     /// Parses a block. No inner attributes are allowed.
     pub(super) fn parse_block(&mut self) -> PResult<'a, P<Block>> {
         let (attrs, block) = self.parse_inner_attrs_and_block()?;
@@ -372,6 +377,7 @@ impl<'a> Parser<'a> {
         Err(e)
     }
 
+    // 添加注释: 解析一个块. 允许内部属性.
     /// Parses a block. Inner attributes are allowed.
     pub(super) fn parse_inner_attrs_and_block(
         &mut self,
@@ -379,6 +385,7 @@ impl<'a> Parser<'a> {
         self.parse_block_common(self.token.span, BlockCheckMode::Default)
     }
 
+    // 添加注释: 解析一个块. 内部属性是允许的.
     /// Parses a block. Inner attributes are allowed.
     pub(super) fn parse_block_common(
         &mut self,
@@ -400,7 +407,9 @@ impl<'a> Parser<'a> {
         Ok((attrs, tail))
     }
 
+    // 添加注释: 解析块表达式或函数体的其余部分.
     /// Parses the rest of a block expression or function body.
+    // 添加注释: 前提条件: 已经解析了`{`
     /// Precondition: already parsed the '{'.
     crate fn parse_block_tail(
         &mut self,
@@ -433,6 +442,7 @@ impl<'a> Parser<'a> {
         Ok(self.mk_block(stmts, s, lo.to(self.prev_token.span)))
     }
 
+    // 添加注释: 解析语句, 包括尾随的分号.
     /// Parses a statement, including the trailing semicolon.
     pub fn parse_full_stmt(
         &mut self,

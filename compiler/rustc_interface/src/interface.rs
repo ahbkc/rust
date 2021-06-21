@@ -122,11 +122,14 @@ pub fn parse_cfgspecs(cfgspecs: Vec<String>) -> FxHashSet<(String, Option<String
     })
 }
 
+// 添加注释: 编译器配置项相关
 /// The compiler configuration
 pub struct Config {
+    // 添加注释: 命令行选项相关
     /// Command line options
     pub opts: config::Options,
 
+    // 添加注释: 除了默认配置之前的 cfg! 配置
     /// cfg! configuration in addition to the default ones
     pub crate_cfg: FxHashSet<(String, Option<String>)>,
 
@@ -137,32 +140,40 @@ pub struct Config {
     pub file_loader: Option<Box<dyn FileLoader + Send + Sync>>,
     pub diagnostic_output: DiagnosticOutput,
 
+    // 添加注释: 设置为在编译器执行期间捕获stderr输出
     /// Set to capture stderr output during compiler execution
     pub stderr: Option<Arc<Mutex<Vec<u8>>>>,
 
     pub lint_caps: FxHashMap<lint::LintId, lint::Level>,
 
+    // 添加注释: 这是在创建[`ParseSess`]时调用的driver程序回调
     /// This is a callback from the driver that is called when [`ParseSess`] is created.
     pub parse_sess_created: Option<Box<dyn FnOnce(&mut ParseSess) + Send>>,
 
+    // 添加注释: 这是来自driver程序的回调, 在我们注册lint时调用; 当LintStore处理非共享状态时, 它会在插件注册期间调用.
     /// This is a callback from the driver that is called when we're registering lints;
     /// it is called during plugin registration when we have the LintStore in a non-shared state.
     ///
+    // 添加注释: 请注意, 如果您在这里找到了Some, 您可能想在正在注册的新函数中调用该函数.
     /// Note that if you find a Some here you probably want to call that function in the new
     /// function being registered.
     pub register_lints: Option<Box<dyn Fn(&Session, &mut LintStore) + Send + Sync>>,
 
+    // 添加注释: 这是来自driver程序的回调, 在我们填充查询列表后立即调用.
     /// This is a callback from the driver that is called just after we have populated
     /// the list of queries.
     ///
+    // 添加注释: 第二个参数是本地提供者, 第三个参数是外部提供者.
     /// The second parameter is local providers and the third parameter is external providers.
     pub override_queries:
         Option<fn(&Session, &mut ty::query::Providers, &mut ty::query::Providers)>,
 
+    // 添加注释: 这是来自driver程序的回调, 被调用以创建代码生成后端
     /// This is a callback from the driver that is called to create a codegen backend.
     pub make_codegen_backend:
         Option<Box<dyn FnOnce(&config::Options) -> Box<dyn CodegenBackend> + Send>>,
 
+    // 添加注释: 诊断代码注册表
     /// Registry of diagnostics codes.
     pub registry: Registry,
 }

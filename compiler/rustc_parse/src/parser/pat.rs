@@ -12,11 +12,13 @@ use rustc_span::symbol::{kw, sym, Ident};
 
 type Expected = Option<&'static str>;
 
+// 添加注释: 函数和lambda参数模式的`预期`.
 /// `Expected` for function and lambda parameter patterns.
 pub(super) const PARAM_EXPECTED: Expected = Some("parameter name");
 
 const WHILE_PARSING_OR_MSG: &str = "while parsing this or-pattern starting here";
 
+// 添加注释: 解析`or-patterns`模式时是否恢复.
 /// Whether or not to recover a `,` when parsing or-patterns.
 #[derive(PartialEq, Copy, Clone)]
 pub enum RecoverComma {

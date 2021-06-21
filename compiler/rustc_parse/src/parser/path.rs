@@ -14,9 +14,13 @@ use rustc_span::symbol::{kw, sym, Ident};
 use std::mem;
 use tracing::debug;
 
+// 添加注释: 指定如何解析路径
 /// Specifies how to parse a path.
 #[derive(Copy, Clone, PartialEq)]
 pub enum PathStyle {
+    // 添加注释: 在某些上下文中, 特别是在表达式中, 具有泛型参数的路径与其它内容不明确. 例如, 在表达式中, `segment < ....`可以
+    // 解释为比较, 而`segment ( ....`可以解释为函数调用. 在所有这些上下文中, 出于实际原因, 默认情况下首选非路径解释,
+    // 但路径解释可以由消歧器`:`强制, 例如`x<y>`是比较, `x::<y>`是明确的路径.
     /// In some contexts, notably in expressions, paths with generic arguments are ambiguous
     /// with something else. For example, in expressions `segment < ....` can be interpreted
     /// as a comparison and `segment ( ....` can be interpreted as a function call.
@@ -24,10 +28,13 @@ pub enum PathStyle {
     /// reasons, but the path interpretation can be forced by the disambiguator `::`, e.g.
     /// `x<y>` - comparisons, `x::<y>` - unambiguously a path.
     Expr,
+    // 添加注释: 在其它上下文中, 特别是类型中, 不存在歧义并且可以在没有消歧器的情况下编写路径, 例如, `x<y>`是明确的路径.
+    // 带有消歧义的路径仍然被接受, `x::<y>`也是明确的路径.
     /// In other contexts, notably in types, no ambiguity exists and paths can be written
     /// without the disambiguator, e.g., `x<y>` - unambiguously a path.
     /// Paths with disambiguators are still accepted, `x::<Y>` - unambiguously a path too.
     Type,
+    // 添加注释: 不允许使用通过参数的路径, 例如`foo::bar:Baz`, 用于导入、可见性或属性.
     /// A path with generic arguments disallowed, e.g., `foo::bar::Baz`, used in imports,
     /// visibilities or attributes.
     /// Technically, this variant is unnecessary and e.g., `Expr` can be used instead
@@ -38,7 +45,9 @@ pub enum PathStyle {
 }
 
 impl<'a> Parser<'a> {
+    // 添加注释: 解析合格的路径.
     /// Parses a qualified path.
+    // 添加注释: 假设前面的`<`已经被解析.
     /// Assumes that the leading `<` has been parsed already.
     ///
     /// `qualified_path = <type [as trait_ref]>::path`

@@ -94,8 +94,13 @@ impl<'a> Parser<'a> {
         }
     }
 
+    // 添加注释: 解析非终端(例如, MBE `:pat` 或 `:ident`)
     /// Parse a non-terminal (e.g. MBE `:pat` or `:ident`).
     pub fn parse_nonterminal(&mut self, kind: NonterminalKind) -> PResult<'a, Nonterminal> {
+        // 添加注释: 任何存储其令牌的“非终端”(当前为“NtItem”和“NtExpr”)都需要在此处强制捕获它们.
+        // `macro_rules!` 调用可以将捕获的 item/expr 传递给 proc-macro,这需要捕获的标记可用.
+        // 由于我们无法预先确定 proc-macro 是否会被(可传递地)调用,我们总是为任何需要它们的“非终端”捕获令牌.
+
         // Any `Nonterminal` which stores its tokens (currently `NtItem` and `NtExpr`)
         // needs to have them force-captured here.
         // A `macro_rules!` invocation may pass a captured item/expr to a proc-macro,
@@ -173,7 +178,9 @@ impl<'a> Parser<'a> {
     }
 }
 
+// 添加注释: 令牌是一个标识符, 但不是`_`.
 /// The token is an identifier, but not `_`.
+// 添加注释: 我们暂时禁止将`_`传递给需要`ident`的宏.
 /// We prohibit passing `_` to macros expecting `ident` for now.
 fn get_macro_ident(token: &Token) -> Option<(Ident, bool)> {
     token.ident().filter(|(ident, _)| ident.name != kw::Underscore)

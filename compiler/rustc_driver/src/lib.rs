@@ -85,6 +85,7 @@ pub fn abort_on_err<T>(result: Result<T, ErrorReported>, sess: &Session) -> T {
 pub trait Callbacks {
     /// Called before creating the compiler instance
     fn config(&mut self, _config: &mut interface::Config) {}
+    // 添加注释: 解析后调用. 返回值指示编译器之后是否继续编译(默认值为`Compilation::Continue`)
     /// Called after parsing. Return value instructs the compiler whether to
     /// continue the compilation afterwards (defaults to `Compilation::Continue`)
     fn after_parsing<'tcx>(
@@ -94,6 +95,7 @@ pub trait Callbacks {
     ) -> Compilation {
         Compilation::Continue
     }
+    // 添加注释: 扩展后调用. 返回值指示编译器之后是否继续编译(默认为`Compilation::Continue`)
     /// Called after expansion. Return value instructs the compiler whether to
     /// continue the compilation afterwards (defaults to `Compilation::Continue`)
     fn after_expansion<'tcx>(
@@ -103,6 +105,7 @@ pub trait Callbacks {
     ) -> Compilation {
         Compilation::Continue
     }
+    // 添加注释: 分析后调用. 返回值指示编译器之后是否继续编译(默为值为`Compilation::Continue`)
     /// Called after analysis. Return value instructs the compiler whether to
     /// continue the compilation afterwards (defaults to `Compilation::Continue`)
     fn after_analysis<'tcx>(
@@ -320,6 +323,7 @@ fn run_compiler(
     callbacks.config(&mut config);
 
     interface::run_compiler(config, |compiler| {
+        // 添加注释: 获取编译环境的session
         let sess = compiler.session();
         // 添加注释: `RustcDefaultCalls::print_crate_info`将会根据参数选项打印对应信息
         let should_stop = RustcDefaultCalls::print_crate_info(
@@ -351,6 +355,7 @@ fn run_compiler(
             let early_exit = || sess.compile_status().map(|_| None);
             queries.parse()?;
 
+            // 添加注释: 如果指定了打印源代码的选项参数
             if let Some(ppm) = &sess.opts.pretty {
                 if ppm.needs_ast_map() {
                     queries.global_ctxt()?.peek_mut().enter(|tcx| {
@@ -378,6 +383,7 @@ fn run_compiler(
                 return early_exit();
             }
 
+            // 添加注释: 解析后调用.
             if callbacks.after_parsing(compiler, queries) == Compilation::Stop {
                 return early_exit();
             }
@@ -392,6 +398,7 @@ fn run_compiler(
             {
                 let (_, lint_store) = &*queries.register_plugins()?.peek();
 
+                // 添加注释: 已注册Lint插件; 现在我们可以处理命令行标志了.
                 // Lint plugins are registered; now we can process command line flags.
                 if sess.opts.describe_lints {
                     describe_lints(&sess, &lint_store, true);
@@ -400,6 +407,7 @@ fn run_compiler(
             }
 
             queries.expansion()?;
+            // 添加注释: 扩展后调用.
             if callbacks.after_expansion(compiler, queries) == Compilation::Stop {
                 return early_exit();
             }
@@ -414,6 +422,7 @@ fn run_compiler(
 
             queries.global_ctxt()?;
 
+            // 添加注释: 创建GlobalCtxt后删除AST以释放内存
             // Drop AST after creating GlobalCtxt to free memory
             {
                 let _timer = sess.prof.generic_activity("drop_ast");
@@ -424,6 +433,7 @@ fn run_compiler(
                 return early_exit();
             }
 
+            // 添加注释: save_analysis参数表示: 写语法和类型分析(JSON格式)信息, 除了正常输出, 将保存下来
             if sess.opts.debugging_opts.save_analysis {
                 let crate_name = queries.crate_name()?.peek().clone();
                 queries.global_ctxt()?.peek_mut().enter(|tcx| {
@@ -861,6 +871,7 @@ the command line flag directly.
     );
 }
 
+// 添加注释: 写入所有stdout line命令选项, 以及所有可用lint的列表
 /// Write to stdout lint command options, together with a list of all available lints
 pub fn describe_lints(sess: &Session, lint_store: &LintStore, loaded_plugins: bool) {
     println!(
@@ -1330,9 +1341,6 @@ pub fn init_env_logger(env: &str) {
 }
 
 pub fn main() -> ! {
-    // FIXME
-    let f = fs::write("C:\\Users\\ahbkc\\Desktop\\hello.txt", "hhhhh");
-    if let Ok(_f) = f {}
     let start_time = Instant::now();
     let start_rss = get_resident_set_size();
     init_rustc_env_logger();

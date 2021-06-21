@@ -380,6 +380,7 @@ pub(super) fn check_for_substitution<'a>(
     token.clone()
 }
 
+// 添加注释: 如果在给定分隔符的当前位置找到, 则提取字符串.
 /// Extract string if found at current position with given delimiters
 fn peek_delimited(text: &str, from_ch: char, to_ch: char) -> Option<&str> {
     let mut chars = text.chars();
