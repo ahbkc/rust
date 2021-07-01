@@ -547,8 +547,10 @@ impl<'a> Parser<'a> {
         }
     }
 
+    // 添加注释: 检查下一个标记是否为`tok`, 如果是则返回`true`.
     /// Checks if the next token is `tok`, and returns `true` if so.
     ///
+    // 添加注释: 如果没有遇到`tok`, 这个方法会自动将`tok`添加到`expected_tokens`.
     /// This method will automatically add `tok` to `expected_tokens` if `tok` is not
     /// encountered.
     fn check(&mut self, tok: &TokenKind) -> bool {
@@ -559,6 +561,7 @@ impl<'a> Parser<'a> {
         is_present
     }
 
+    // 添加注释: 如果存在, 则使用令牌`tok`. 返回给定的令牌是否存在.
     /// Consumes a token 'tok' if it exists. Returns whether the given token was present.
     pub fn eat(&mut self, tok: &TokenKind) -> bool {
         let is_present = self.check(tok);
@@ -568,6 +571,7 @@ impl<'a> Parser<'a> {
         is_present
     }
 
+    // 添加注释: 如果下一个标记是给定的关键字, 则返回`true`而不吃它. 出于诊断目的, 还添加了期望值.
     /// If the next token is the given keyword, returns `true` without eating it.
     /// An expectation is also added for diagnostics purposes.
     fn check_keyword(&mut self, kw: Symbol) -> bool {
@@ -575,6 +579,8 @@ impl<'a> Parser<'a> {
         self.token.is_keyword(kw)
     }
 
+    // 添加注释: 如果下一个标记是给定的关键字, 则吃掉它并返回`true`. 否则, 返回`false`. 出于诊断目的,
+    // 还添加了期望值.
     /// If the next token is the given keyword, eats it and returns `true`.
     /// Otherwise, returns `false`. An expectation is also added for diagnostics purposes.
     // Public for rustfmt usage.
@@ -596,8 +602,11 @@ impl<'a> Parser<'a> {
         }
     }
 
+    // 添加注释: 如果给定的词不是关键字, 则表示错误.
     /// If the given word is not a keyword, signals an error.
+    // 添加注释: 如果下一个标记不是给定的单词, 则表示错误.
     /// If the next token is not the given word, signals an error.
+    // 添加注释: 否则, 吃掉它.
     /// Otherwise, eats it.
     fn expect_keyword(&mut self, kw: Symbol) -> PResult<'a, ()> {
         if !self.eat_keyword(kw) { self.unexpected() } else { Ok(()) }
@@ -972,6 +981,7 @@ impl<'a> Parser<'a> {
         self.look_ahead(dist, |t| kws.iter().any(|&kw| t.is_keyword(kw)))
     }
 
+    // 添加注释: 解析异步性: `async`或什么都没有.
     /// Parses asyncness: `async` or nothing.
     fn parse_asyncness(&mut self) -> Async {
         if self.eat_keyword(kw::Async) {
@@ -982,6 +992,7 @@ impl<'a> Parser<'a> {
         }
     }
 
+    // 添加注释: 解析unsafety: `unsafe`或什么都没有.
     /// Parses unsafety: `unsafe` or nothing.
     fn parse_unsafety(&mut self) -> Unsafe {
         if self.eat_keyword(kw::Unsafe) {
@@ -991,6 +1002,7 @@ impl<'a> Parser<'a> {
         }
     }
 
+    // 添加注释: 解析常量: `const`或什么都没有.
     /// Parses constness: `const` or nothing.
     fn parse_constness(&mut self) -> Const {
         // Avoid const blocks to be parsed as const items
@@ -1003,6 +1015,7 @@ impl<'a> Parser<'a> {
         }
     }
 
+    // 添加注释: 解析内联const表达式.
     /// Parses inline const expressions.
     fn parse_const_block(&mut self, span: Span) -> PResult<'a, P<Expr>> {
         self.sess.gated_spans.gate(sym::inline_const, span);
@@ -1108,6 +1121,7 @@ impl<'a> Parser<'a> {
         }
     }
 
+    // 添加注释: 从输入中解析单个标记树.
     /// Parses a single token tree from the input.
     pub(crate) fn parse_token_tree(&mut self) -> TokenTree {
         match self.token.kind {
@@ -1142,6 +1156,7 @@ impl<'a> Parser<'a> {
         }
     }
 
+    // 添加注释: 将令牌流解析为`TokenTree`列表, 直到EOF.
     /// Parses a stream of tokens into a list of `TokenTree`s, up to EOF.
     pub fn parse_all_token_trees(&mut self) -> PResult<'a, Vec<TokenTree>> {
         let mut tts = Vec::new();
@@ -1162,8 +1177,10 @@ impl<'a> Parser<'a> {
         TokenStream::new(result)
     }
 
+    // 添加注释: 评估具有适当限制的闭包.
     /// Evaluates the closure with restrictions in place.
     ///
+    // 添加注释: 在评估闭包后, 限制被重置.
     /// Afters the closure is evaluated, restrictions are reset.
     fn with_res<T>(&mut self, res: Restrictions, f: impl FnOnce(&mut Self) -> T) -> T {
         let old = self.restrictions;
@@ -1295,6 +1312,7 @@ impl<'a> Parser<'a> {
         if self.eat_keyword(kw::Extern) { Extern::from_abi(self.parse_abi()) } else { Extern::None }
     }
 
+    // 添加注释: 将字符串文字解析为ABI规范.
     /// Parses a string literal as an ABI spec.
     fn parse_abi(&mut self) -> Option<StrLit> {
         match self.parse_str_lit() {

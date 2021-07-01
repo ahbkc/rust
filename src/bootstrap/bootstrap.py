@@ -170,6 +170,7 @@ def require(cmd, exit=True):
 
 
 def stage0_data(rust_root):
+    # 添加注释: 从stage0.txt构建dict
     """Build a dictionary from stage0.txt"""
     nightlies = os.path.join(rust_root, "src/stage0.txt")
     with open(nightlies, 'r') as nightlies:
@@ -189,6 +190,8 @@ def format_build_time(duration):
 
 def default_build_triple(verbose):
     """Build triple as in LLVM"""
+    # 添加注释: 如果用户已经有一个带有现有`rustc`安装的主机构建的三元组, 则使用已存在的.
+    # 这解决了Windows构建被检测为GNU而不是MSVC的大多数问题.
     # If the user already has a host build triple with an existing `rustc`
     # install, use their preference. This fixes most issues with Windows builds
     # being detected as GNU instead of MSVC.
@@ -211,6 +214,7 @@ def default_build_triple(verbose):
     ostype = require(["uname", "-s"], exit=required)
     cputype = require(['uname', '-m'], exit=required)
 
+    # 添加注释: 如果我们没有`uname`, 则假设是windows
     # If we do not have `uname`, assume Windows.
     if ostype is None or cputype is None:
         return 'x86_64-pc-windows-msvc'
@@ -218,6 +222,7 @@ def default_build_triple(verbose):
     ostype = ostype.decode(default_encoding)
     cputype = cputype.decode(default_encoding)
 
+    # 添加注释: 这里的目标是指提出与LLVM相同的三元组, 至少对于我们愿意定位的平台子集.
     # The goal here is to come up with the same triple as LLVM would,
     # at least for the subset of platforms we're willing to target.
     ostype_mapper = {
@@ -229,6 +234,7 @@ def default_build_triple(verbose):
         'OpenBSD': 'unknown-openbsd'
     }
 
+    # 添加注释: 先考虑直接变换, 再考虑特殊情况
     # Consider the direct transformation first and then the special cases
     if ostype in ostype_mapper:
         ostype = ostype_mapper[ostype]
@@ -384,18 +390,22 @@ class RustBuild(object):
         self.rustc_commit = None
 
     def download_toolchain(self, stage0=True, rustc_channel=None):
+        # 添加注释: 获取Rust的构建系统, 该系统是使用Rust编写的
         """Fetch the build system for Rust, written in Rust
 
+        // 添加注释: 此方法将构建一个缓存目录, 然后它将获取具有用于引导Rust编译器本身的stage0编译器的tarball.
         This method will build a cache directory, then it will fetch the
         tarball which has the stage0 compiler used to then bootstrap the Rust
         compiler itself.
 
+        // 添加注释: 提取每个下载的tarball, 之后, 脚本会将所有内容移动到正确的位置.
         Each downloaded tarball is extracted, after that, the script
         will move all the content to the right place.
         """
         if rustc_channel is None:
             rustc_channel = self.rustc_channel
         rustfmt_channel = self.rustfmt_channel
+        # 添加注释: 获取bin_root路径
         bin_root = self.bin_root(stage0)
 
         key = self.date
@@ -414,6 +424,7 @@ class RustBuild(object):
             filename = "rustc-{}-{}{}".format(rustc_channel, self.build,
                                               tarball_suffix)
             self._download_component_helper(filename, "rustc", tarball_suffix, stage0)
+            # 添加注释: download-rustc不需要自已的cargo, 它可以只使用beat的
             # download-rustc doesn't need its own cargo, it can just use beta's.
             if stage0:
                 filename = "cargo-{}-{}{}".format(rustc_channel, self.build,
@@ -426,6 +437,7 @@ class RustBuild(object):
                     filename, "rustc-dev", tarball_suffix, stage0
                 )
 
+            # 添加注释: 修复bin或动态路径
             self.fix_bin_or_dylib("{}/bin/rustc".format(bin_root))
             self.fix_bin_or_dylib("{}/bin/rustdoc".format(bin_root))
             lib_dir = "{}/lib".format(bin_root)
@@ -708,6 +720,7 @@ class RustBuild(object):
             return key != stamp.read()
 
     def bin_root(self, stage0):
+        # 添加注释: 返回给定阶段的二进制根目录
         """Return the binary root directory for the given stage
 
         >>> rb = RustBuild()
@@ -717,6 +730,7 @@ class RustBuild(object):
         >>> rb.bin_root(False) == os.path.join("build", "ci-rustc")
         True
 
+        // 添加注释: 当给出`build`属性时, 应该是一个嵌套属性目录:
         When the 'build' property is given should be a nested directory:
 
         >>> rb.build = "devel"
@@ -801,6 +815,7 @@ class RustBuild(object):
         return self.program_config('rustfmt')
 
     def program_config(self, program, stage0=True):
+        # 添加注释: 在给定阶段返回给定程序的配置路径
         """Return config path for the given program at the given stage
 
         >>> rb = RustBuild()
@@ -865,6 +880,7 @@ class RustBuild(object):
         return os.path.join(self.build_dir, "bootstrap", "debug", "bootstrap")
 
     def build_bootstrap(self):
+        # 添加注释: 构建引导程序
         """Build bootstrap"""
         build_dir = os.path.join(self.build_dir, "bootstrap")
         if self.clean and os.path.exists(build_dir):
@@ -918,9 +934,11 @@ class RustBuild(object):
             args.append("--locked")
         if self.use_vendored_sources:
             args.append("--frozen")
+        # 添加注释: 开始构建boostrap二进制文件
         run(args, env=env, verbose=self.verbose)
 
     def build_triple(self):
+        # 添加注释: 在LLVM中构建三元组
         """Build triple as in LLVM
 
         Note that `default_build_triple` is moderately expensive,
@@ -966,6 +984,7 @@ class RustBuild(object):
             cwd=module_path, verbose=self.verbose)
 
     def update_submodules(self):
+        # 添加注释: 通过GIT更新子模块
         """Update submodules"""
         if (not os.path.exists(os.path.join(self.rust_root, ".git"))) or \
                 self.get_toml('submodules') == "false":
@@ -973,6 +992,7 @@ class RustBuild(object):
 
         default_encoding = sys.getdefaultencoding()
 
+        # 添加注释: 检查`git`命令的存在和版本
         # check the existence and version of 'git' command
         git_version_str = require(['git', '--version']).split()[2].decode(default_encoding)
         self.git_version = distutils.version.LooseVersion(git_version_str)
@@ -980,8 +1000,10 @@ class RustBuild(object):
         slow_submodules = self.get_toml('fast-submodules') == "false"
         start_time = time()
         if slow_submodules:
+            # 添加注释: 无条件更新所有子模块
             print('Unconditionally updating all submodules')
         else:
+            # 添加注释: 仅更新更改的子模块
             print('Updating only changed submodules')
         default_encoding = sys.getdefaultencoding()
         submodules = [s.split(' ', 1)[1] for s in subprocess.check_output(
@@ -991,12 +1013,15 @@ class RustBuild(object):
         ).decode(default_encoding).splitlines()]
         filtered_submodules = []
         submodules_names = []
+        # 添加注释: 判断是否存在llvm-project项目
         llvm_checked_out = os.path.exists(os.path.join(self.rust_root, "src/llvm-project/.git"))
         external_llvm_provided = self.get_toml('llvm-config') or self.downloading_llvm()
         llvm_needed = not self.get_toml('codegen-backends', 'rust') \
             or "llvm" in self.get_toml('codegen-backends', 'rust')
         for module in submodules:
             if module.endswith("llvm-project"):
+                # 添加注释: 如果提供了外部LLVM或如果我们正在下载LLVM或未构建LLVM后端, 请不要同步llvm-project子模块.
+                # 另外, 如果子模块已经初始化, 无论如何都要同步它, 这样就不会弄乱贡献者的拉取请求.
                 # Don't sync the llvm-project submodule if an external LLVM was
                 # provided, if we are downloading LLVM or if the LLVM backend is
                 # not being built. Also, if the submodule has been initialized
@@ -1027,6 +1052,7 @@ class RustBuild(object):
             self._download_url = 'https://static.rust-lang.org'
 
     def set_dev_environment(self):
+        # 添加注释: 设置开发环境下的下载路径
         """Set download URL for development environment"""
         if 'RUSTUP_DEV_DIST_SERVER' in os.environ:
             self._download_url = os.environ['RUSTUP_DEV_DIST_SERVER']
@@ -1065,6 +1091,7 @@ class RustBuild(object):
                 shutil.rmtree('.cargo')
 
     def ensure_vendored(self):
+        # 添加注释: 如果需要, 确保vendored的来源可用
         """Ensure that the vendored sources are available if needed"""
         vendor_dir = os.path.join(self.rust_root, 'vendor')
         # Note that this does not handle updating the vendored dependencies if
@@ -1099,6 +1126,7 @@ def bootstrap(help_triggered):
     args = [a for a in sys.argv if a != '-h' and a != '--help']
     args, _ = parser.parse_known_args(args)
 
+    # 配置初始引导程序
     # Configure initial bootstrap
     build = RustBuild()
     build.rust_root = os.path.abspath(os.path.join(__file__, '../../..'))
@@ -1115,9 +1143,11 @@ def bootstrap(help_triggered):
         if not os.path.exists(toml_path):
             toml_path = os.path.join(build.rust_root, toml_path)
 
+        # 读取toml文件
         with open(toml_path) as config:
             build.config_toml = config.read()
 
+    # 从toml文件中获取profile项
     profile = build.get_toml('profile')
     if profile is not None:
         include_file = 'config.{}.toml'.format(profile)
@@ -1141,6 +1171,7 @@ def bootstrap(help_triggered):
     build_dir = build.get_toml('build-dir', 'build') or 'build'
     build.build_dir = os.path.abspath(build_dir.replace("$ROOT", build.rust_root))
 
+    # 添加注释: stage0_data方法将返回dict结构数据
     data = stage0_data(build.rust_root)
     build.date = data['date']
     build.rustc_channel = data['rustc']
@@ -1154,17 +1185,21 @@ def bootstrap(help_triggered):
         build.set_normal_environment()
 
     build.build = args.build or build.build_triple()
+    # 添加注释: 更新子模块
     build.update_submodules()
 
     # Fetch/build the bootstrap
     build.download_toolchain()
+    # 添加注释: 如果设置了`download-rustc`, 则下载主编译器
     # Download the master compiler if `download-rustc` is set
     build.maybe_download_ci_toolchain()
     sys.stdout.flush()
     build.ensure_vendored()
+    # 添加注释: 开始编译bootstrap二进制文件
     build.build_bootstrap()
     sys.stdout.flush()
 
+    # 添加注释: 准备开始执行bootstrap程序
     # Run the bootstrap
     args = [build.bootstrap_binary()]
     args.extend(sys.argv[1:])
@@ -1181,6 +1216,7 @@ def bootstrap(help_triggered):
 
 
 def main():
+    # 添加注释: 引导程序入口点
     """Entry point for the bootstrap process"""
     start_time = time()
 

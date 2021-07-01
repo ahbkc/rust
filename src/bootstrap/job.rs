@@ -47,15 +47,19 @@ use winapi::um::winnt::{
 };
 
 pub unsafe fn setup(build: &mut Build) {
+    // 添加注释: 启用msys禁用的Windows错误报告对话框, 以便我们可以JIT调试rustc
     // Enable the Windows Error Reporting dialog which msys disables,
     // so we can JIT debug rustc
     let mode = SetErrorMode(0);
     SetErrorMode(mode & !SEM_NOGPFAULTERRORBOX);
 
+    // 添加注释: 创建一个新的工作对象供我们使用
     // Create a new job object for us to use
     let job = CreateJobObjectW(ptr::null_mut(), ptr::null());
     assert!(!job.is_null(), "{}", io::Error::last_os_error());
 
+    // 添加注释: 指示当作业对象的所有句柄都消失时, 应终止对象中的所有进程. 请注意, 默认情况下这包括我们的整个
+    // 流程树, 因为我们已经添加了我们自已, 默认情况下我们的children将驻留在作业中.
     // Indicate that when all handles to the job object are gone that all
     // process in the object should be killed. Note that this includes our
     // entire process tree by default because we've added ourselves and our

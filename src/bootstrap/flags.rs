@@ -162,6 +162,7 @@ To learn more about a subcommand, run `./x.py <subcommand> -h`",
         );
 
         let mut opts = Options::new();
+        // 添加注释: 所有子命令的通用选项
         // Options common to all subcommands
         opts.optflagmulti("v", "verbose", "use verbose output (-vv for very verbose)");
         opts.optflag("i", "incremental", "use incremental compilation");
@@ -176,6 +177,7 @@ To learn more about a subcommand, run `./x.py <subcommand> -h`",
             "include default paths in addition to the provided ones",
         );
         opts.optopt("", "on-fail", "command to run on failure", "CMD");
+        // 添加注释: `dry-run`参数代表试运行;不构建任何东西
         opts.optflag("", "dry-run", "dry run; don't build anything");
         opts.optopt(
             "",
@@ -226,6 +228,8 @@ To learn more about a subcommand, run `./x.py <subcommand> -h`",
         opts.optopt("", "rust-profile-generate", "generate PGO profile with rustc build", "FORMAT");
         opts.optopt("", "rust-profile-use", "use PGO profile for rustc build", "FORMAT");
 
+        // 添加注释: 在我们完成指定哪些选项有效之前, 我们不能使用getopt来解析选项, 但在当前实现下, 某些选项以子命令为条件. 因
+        // 此我们必须先手动识别子命令, 这样才能完成选项的定义. 然后我们可以从那里开始使用 getopt::Matches对象
         // We can't use getopt to parse the options until we have completed specifying which
         // options are valid, but under the current implementation, some options are conditional on
         // the subcommand. Therefore we must manually identify the subcommand first, so that we can
@@ -253,6 +257,7 @@ To learn more about a subcommand, run `./x.py <subcommand> -h`",
         let subcommand = match subcommand {
             Some(s) => s,
             None => {
+                // 添加注释: 没有有效参数, 将结果当前进程
                 // No or an invalid subcommand -- show the general usage and subcommand help
                 // An exit code will be 0 when no subcommand is given, and 1 in case of an invalid
                 // subcommand.
@@ -262,6 +267,7 @@ To learn more about a subcommand, run `./x.py <subcommand> -h`",
             }
         };
 
+        // 添加注释: 一些子命令获得额外的选项
         // Some subcommands get extra options
         match subcommand.as_str() {
             "test" | "t" => {
@@ -323,10 +329,12 @@ To learn more about a subcommand, run `./x.py <subcommand> -h`",
             _ => {}
         };
 
+        // 添加注释: 构建闭包`usage`
         // fn usage()
         let usage = |exit_code: i32, opts: &Options, verbose: bool, subcommand_help: &str| -> ! {
             let mut extra_help = String::new();
 
+            // 添加注释: 除了`clean`之外的所有子命令都可以有一个可选的`可用路径`部分
             // All subcommands except `clean` can have an optional "Available paths" section
             if verbose {
                 let config = Config::parse(&["build".to_string()]);
@@ -348,19 +356,24 @@ To learn more about a subcommand, run `./x.py <subcommand> -h`",
             process::exit(exit_code);
         };
 
+        // 添加注释: 当完成了指定哪些选项是可能的, 所以开始getopts解析
         // Done specifying what options are possible, so do the getopts parsing
         let matches = opts.parse(args).unwrap_or_else(|e| {
+            // 添加注释: 无效参数/选项格式
             // Invalid argument/option format
             println!("\n{}\n", e);
             usage(1, &opts, false, &subcommand_help);
         });
 
+        // 添加注释: 额外的健全性检查以确保我们没有遇到这个疯狂的角落安全:
         // Extra sanity check to make sure we didn't hit this crazy corner case:
         //
         //     ./x.py --frobulate clean build
         //            ^-- option  ^     ^- actual subcommand
+        //                        添加注释: arg to option可能被认为是子命令
         //                        \_ arg to option could be mistaken as subcommand
         let mut pass_sanity_check = true;
+        // 添加注释: 检查是否能通过健全性检查
         match matches.free.get(0) {
             Some(check_subcommand) => {
                 if check_subcommand != subcommand {
@@ -373,12 +386,15 @@ To learn more about a subcommand, run `./x.py <subcommand> -h`",
         }
         if !pass_sanity_check {
             println!("{}\n", subcommand_help);
+            // 添加注释: 抱歉, 我无法确定您要指定的子命令.
+            // 添加注释: 您可能需要在子命令之后移动一些选项.
             println!(
                 "Sorry, I couldn't figure out which subcommand you were trying to specify.\n\
                  You may need to move some options to after the subcommand.\n"
             );
             process::exit(1);
         }
+        // 添加注释: 某些命令的额外帮助文本
         // Extra help text for some commands
         match subcommand.as_str() {
             "build" | "b" => {
@@ -535,12 +551,14 @@ Arguments:
             }
             _ => {}
         };
+        // 添加注释: 获取在子命令之后出现的任何可选路径
         // Get any optional paths which occur after the subcommand
         let mut paths = matches.free[1..].iter().map(|p| p.into()).collect::<Vec<PathBuf>>();
 
         let cfg_file = env::var_os("BOOTSTRAP_CONFIG").map(PathBuf::from);
         let verbose = matches.opt_present("verbose");
 
+        // 添加注释: 用户传入 -h/--help?
         // User passed in -h/--help?
         if matches.opt_present("help") {
             usage(0, &opts, verbose, &subcommand_help);

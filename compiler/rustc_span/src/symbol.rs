@@ -1522,6 +1522,7 @@ impl Symbol {
         Symbol(SymbolIndex::from_u32(n))
     }
 
+    // 添加注释: 将字符串映射到其内部表示.
     /// Maps a string to its interned representation.
     pub fn intern(string: &str) -> Self {
         with_interner(|interner| interner.intern(string))

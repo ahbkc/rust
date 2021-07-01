@@ -64,19 +64,23 @@ pub fn parse<'a>(sess: &'a Session, input: &Input) -> PResult<'a, ast::Crate> {
         }
     })?;
 
+    // 添加注释: 将扩展前的AST打印为JSON并停止.
     if sess.opts.debugging_opts.ast_json_noexpand {
         println!("{}", json::as_json(&krate));
     }
 
+    // 添加注释: 收集有关输入的统计信息.
     if sess.opts.debugging_opts.input_stats {
         eprintln!("Lines of code:             {}", sess.source_map().count_lines());
         eprintln!("Pre-expansion node count:  {}", count_nodes(&krate));
     }
 
+    // 添加注释: 显示编译器调试的跨度(expr | pat | ty).
     if let Some(ref s) = sess.opts.debugging_opts.show_span {
         rustc_ast_passes::show_span::run(sess.diagnostic(), s, &krate);
     }
 
+    // 添加注释: 打印一些关于AST和HIR的统计信息.
     if sess.opts.debugging_opts.hir_stats {
         hir_stats::print_ast_stats(&krate, "PRE EXPANSION AST STATS");
     }
@@ -96,11 +100,14 @@ declare_box_region_type!(
     (&mut Resolver<'_>) -> (Result<ast::Crate>, ResolverOutputs)
 );
 
+// 添加注释: 运行编译器的`早期阶段`: 初始`cfg`处理、加载编译器插件、语法扩展、二级`cfg`扩展、测试工具的综合(如果要提供)、
+// 对标准库的依赖注入和前奏和名称解析.
 /// Runs the "early phases" of the compiler: initial `cfg` processing, loading compiler plugins,
 /// syntax expansion, secondary `cfg` expansion, synthesis of a test
 /// harness if one is to be provided, injection of a dependency on the
 /// standard library and prelude, and name resolution.
 ///
+// 添加注释: 如果我们在处理-W help后中止, 则返回[`None`].
 /// Returns [`None`] if we're aborting after handling -W help.
 pub fn configure_and_expand(
     sess: Lrc<Session>,
@@ -110,6 +117,9 @@ pub fn configure_and_expand(
     crate_name: &str,
 ) -> Result<(ast::Crate, BoxedResolver)> {
     tracing::trace!("configure_and_expand");
+    // 添加注释: 目前, 出于依赖性跟踪的目的, 我们忽略名称解析数据结构. 相反, 我们将运行名称解析并将其输出包含在每个项目
+    // 的哈希中, 就像我们为宏扩展所做的那样. 换句话说, 散列不仅反映了它的内容, 还反映了对这些内容进行名称解析的结果. 希望
+    // 我们会在某个时候将其推迟.
     // Currently, we ignore the name resolution data structures for the purposes of dependency
     // tracking. Instead we will run name resolution and include its output in the hash of each
     // item, much like we do for macro expansion. In other words, the hash reflects not just
@@ -261,14 +271,21 @@ fn configure_and_expand_inner<'a>(
 
     util::check_attr_crate_type(&sess, &krate.attrs, &mut resolver.lint_buffer());
 
+    // 添加注释: 展开所有宏
     // Expand all macros
     krate = sess.time("macro_expand_crate", || {
+        // 添加注释: windows dll没有rpath, 因此它们不知道如何找到它们的依赖项. 由我们来告诉系统在哪里
+        // 可以找到所有依赖的dll. 请注意, 这使用cfg!(windows)而不使用target_cfg因为语法扩展总是为主机编译器
+        // 加载, 而不是目标加载.
         // Windows dlls do not have rpaths, so they don't know how to find their
         // dependencies. It's up to us to tell the system where to find all the
         // dependent dlls. Note that this uses cfg!(windows) as opposed to
         // targ_cfg because syntax extensions are always loaded for the host
         // compiler, not for the target.
         //
+        // 添加注释: 然而, 这在某种程序上是一个固有的不雅操作, 因为调用此函数的多个线程可能会继续扩展PATH到远远超
+        // 出其应用的范围. 现在为了解决这个问题, 我们只是不向PATH添加任何已经存在于PATH中的新元素. 这基本上是针对
+        // rustdoc的#17360的针对性修复, 它并行运行rustc, 但已经看到(#33844)导致PATH变得太长的问题.
         // This is somewhat of an inherently racy operation, however, as
         // multiple threads calling this function could possibly continue
         // extending PATH far beyond what it should. To solve this for now we
@@ -278,6 +295,7 @@ fn configure_and_expand_inner<'a>(
         // problems with PATH becoming too long.
         let mut old_path = OsString::new();
         if cfg!(windows) {
+            // 添加注释: 从环境变量中获取PATH环境变量的值, 如果获取失败则取`old_path`变量.
             old_path = env::var_os("PATH").unwrap_or(old_path);
             let mut new_path = sess.host_filesearch(PathKind::All).search_path_dirs();
             for path in env::split_paths(&old_path) {
@@ -313,9 +331,11 @@ fn configure_and_expand_inner<'a>(
         };
         let mut ecx = ExtCtxt::new(&sess, cfg, &mut resolver, Some(&extern_mod_loaded));
 
+        // 添加注释: 开始展开宏
         // Expand macros now!
         let krate = sess.time("expand_crate", || ecx.monotonic_expander().expand_crate(krate));
 
+        // 添加注释: 剩下的就是报错.
         // The rest is error reporting
 
         sess.time("check_unused_macros", || {
@@ -340,10 +360,12 @@ fn configure_and_expand_inner<'a>(
             resolver.lint_buffer().buffer_lint(lint, node_id, span, msg);
         }
         if cfg!(windows) {
+            // 添加注释: 如果当前环境是windows则设置PATH环境变量.
             env::set_var("PATH", &old_path);
         }
 
         if recursion_limit_hit {
+            // 添加注释: 如果我们达到递归限制, 请尽早退出以避免后面的传递被大型AST淹没.
             // If we hit a recursion limit, exit early to avoid later passes getting overwhelmed
             // with a large AST
             Err(ErrorReported)
@@ -368,6 +390,10 @@ fn configure_and_expand_inner<'a>(
     let crate_types = sess.crate_types();
     let is_proc_macro_crate = crate_types.contains(&CrateType::ProcMacro);
 
+    // 添加注释: 为了向后兼容, 如果rustdoc在没有指定`--crate-type proc-macro`的proc宏包上运行,
+    // 我们不会尝试运行proc宏注入. 这只会影响手动调用`rustdoc`的用户, 因为`cargo doc`将自动传递
+    // 正确的`--crate-type`标志.
+    // 但是, 我们确实发出警告, 让这些用户知道他们应该开始传递`--crate-type proc-macro`
     // For backwards compatibility, we don't try to run proc macro injection
     // if rustdoc is run on a proc macro crate without '--crate-type proc-macro' being
     // specified. This should only affect users who manually invoke 'rustdoc', as
@@ -399,6 +425,7 @@ fn configure_and_expand_inner<'a>(
         });
     }
 
+    // 添加注释: 完成宏扩展
     // Done with macro expansion!
 
     if sess.opts.debugging_opts.input_stats {
@@ -415,11 +442,13 @@ fn configure_and_expand_inner<'a>(
 
     resolver.resolve_crate(&krate);
 
+    // 添加注释: 需要 *after* 扩展才能检查宏扩展的结果.
     // Needs to go *after* expansion to be able to check the results of macro expansion.
     sess.time("complete_gated_feature_checking", || {
         rustc_ast_passes::feature_gate::check_crate(&krate, sess);
     });
 
+    // 添加注释: 将所有缓冲的lint从`ParseSess`添加到`Session`.
     // Add all buffered lints from the `ParseSess` to the `Session`.
     sess.parse_sess.buffered_lints.with_lock(|buffered_lints| {
         info!("{} parse sess buffered_lints", buffered_lints.len());
@@ -566,6 +595,7 @@ fn write_out_deps(
     outputs: &OutputFilenames,
     out_filenames: &[PathBuf],
 ) {
+    // 如果需要, 将依赖规则写入dep-info文件
     // Write out dependency rules to the dep-info file if requested
     if !sess.opts.output_types.contains_key(&OutputType::DepInfo) {
         return;
@@ -620,6 +650,7 @@ fn write_out_deps(
             writeln!(file, "{}:", path)?;
         }
 
+        // 添加注释: 发出带有有关访问的环境变量的信息的特殊注释
         // Emit special comments with information about accessed environment variables.
         let env_depinfo = sess.parse_sess.env_depinfo.borrow();
         if !env_depinfo.is_empty() {

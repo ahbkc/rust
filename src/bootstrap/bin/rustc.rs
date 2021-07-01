@@ -1,8 +1,12 @@
+// 添加注释: 在运行引导程序时作为`rustc`传递给Cargo的Shim(垫片, 填隙片)
 //! Shim which is passed to Cargo as "rustc" when running the bootstrap.
 //!
+// 添加注释: 这个shim将处理一些我们的构建过程需要Cargo通过正常配置无法完成的各种任务:
 //! This shim will take care of some various tasks that our build process
 //! requires that Cargo can't quite do through normal configuration:
 //!
+// 添加注释: 1.在编译构建脚本和构建依赖时, 我们需要一个有保证的完整标准库可用. 唯一实际拥有此功能
+// 的编译器是快照, 因此我们检测
 //! 1. When compiling build scripts and build dependencies, we need a guaranteed
 //!    full standard library available. The only compiler which actually has
 //!    this is the snapshot, so we detect this situation and always compile with

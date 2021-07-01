@@ -1,5 +1,7 @@
+// 添加注释: 构建的序列化配置
 //! Serialized configuration of a build.
 //!
+// 添加注释: 该模块实现解析`config.toml`配置文件以调整构建的运行方式
 //! This module implements parsing `config.toml` configuration files to tweak
 //! how the build runs.
 
@@ -539,6 +541,7 @@ impl Config {
         }
     }
 
+    // 添加注释: 稍微规范化Python中的路径. 我们不相信来自Python的路径(#49785)
     /// Normalizes paths from Python slightly. We don't trust paths from Python (#49785).
     fn normalize_python_path(path: OsString) -> PathBuf {
         Path::new(&path).components().collect()
@@ -578,6 +581,7 @@ impl Config {
     }
 
     pub fn parse(args: &[String]) -> Config {
+        // 添加注释: 解析命令行参数
         let flags = Flags::parse(&args);
 
         let mut config = Config::default_opts();

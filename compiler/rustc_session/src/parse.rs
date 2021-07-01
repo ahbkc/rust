@@ -112,6 +112,7 @@ pub fn feature_err_issue<'a>(
     err
 }
 
+// 添加注释: 有关解析会话的信息
 /// Info about a parsing session.
 pub struct ParseSess {
     pub span_diagnostic: Handler,
@@ -131,6 +132,7 @@ pub struct ParseSess {
     pub symbol_gallery: SymbolGallery,
     /// The parser has reached `Eof` due to an unclosed brace. Used to silence unnecessary errors.
     pub reached_eof: Lock<bool>,
+    // 添加注释: 在构建期间访问的环境变量及其存在时的值.
     /// Environment variables accessed during the build and their values when they exist.
     pub env_depinfo: Lock<FxHashSet<(Symbol, Option<Symbol>)>>,
     /// All the type ascriptions expressions that have had a suggestion for likely path typo.

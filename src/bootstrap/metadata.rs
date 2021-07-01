@@ -28,6 +28,7 @@ struct Dependency {
 }
 
 pub fn build(build: &mut Build) {
+    // 添加注释: 运行`cargo metadata`来找出我们正在测试的crate
     // Run `cargo metadata` to figure out what crates we're testing.
     let mut cargo = Command::new(&build.initial_cargo);
     cargo

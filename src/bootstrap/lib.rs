@@ -342,9 +342,11 @@ impl Mode {
 }
 
 impl Build {
+    // 添加注释: 从命令行上的`flags`和文件系统`config`创建一组新的构建配置.
     /// Creates a new set of build configuration from the `flags` on the command
     /// line and the filesystem `config`.
     ///
+    // 添加注释: 默认情况下, 所有构建输出都将放置在当前目录中.
     /// By default all build output will be placed in the current directory.
     pub fn new(config: Config) -> Build {
         let src = config.src.clone();
@@ -368,9 +370,11 @@ impl Build {
         let miri_info = channel::GitInfo::new(ignore_git, &src.join("src/tools/miri"));
         let rustfmt_info = channel::GitInfo::new(ignore_git, &src.join("src/tools/rustfmt"));
 
+        // 添加注释: 我们总是尝试使用git进行LLVM构建
         // we always try to use git for LLVM builds
         let in_tree_llvm_info = channel::GitInfo::new(false, &src.join("src/llvm-project"));
 
+        // 添加注释: config.dry_run参数代表是否是`试运行`
         let initial_target_libdir_str = if config.dry_run {
             "/dummy/lib/path/to/lib/".to_string()
         } else {
@@ -385,6 +389,7 @@ impl Build {
         let initial_target_dir = Path::new(&initial_target_libdir_str).parent().unwrap();
         let initial_lld = initial_target_dir.join("bin").join("rust-lld");
 
+        // 添加注释: config.dry_run如果是true则代表是试运行
         let initial_sysroot = if config.dry_run {
             "/dummy".to_string()
         } else {
@@ -399,10 +404,12 @@ impl Build {
             .unwrap()
             .to_path_buf();
 
+        // 添加注释: 读取`version`文件, 获取版本号
         let version = std::fs::read_to_string(src.join("src").join("version"))
             .expect("failed to read src/version");
         let version = version.trim();
 
+        // 添加注释: 构建Build结构体
         let mut build = Build {
             initial_rustc: config.initial_rustc.clone(),
             initial_cargo: config.initial_cargo.clone(),
@@ -442,11 +449,14 @@ impl Build {
             tool_artifacts: Default::default(),
         };
 
+        // 添加注释: `build.verbose`方法将会在详细模式下打印传入的字符串
         build.verbose("finding compilers");
+        // 添加注释: 初始化cc编译环境
         cc_detect::find(&mut build);
         build.verbose("running sanity check");
         sanity::check(&mut build);
 
+        // 添加注释: 如果local-rust当前版本的Major.minor相同, 则强制进行local-rebuild
         // If local-rust is the same major.minor as the current version, then force a
         // local-rebuild
         let local_version_verbose =
@@ -491,6 +501,7 @@ impl Build {
         }
 
         {
+            // 添加注释: 构建builder, 此处的builder只是用于下面的判断
             let builder = builder::Builder::new(&self);
             if let Some(path) = builder.paths.get(0) {
                 if path == Path::new("nonexistent/path/to/trigger/cargo/metadata") {
@@ -499,8 +510,10 @@ impl Build {
             }
         }
 
+        // 添加注释: 判断是否是试运行
         if !self.config.dry_run {
             {
+                // 添加注释: 当前不是试运行时为什么要执行两遍???
                 self.config.dry_run = true;
                 let builder = builder::Builder::new(&self);
                 builder.execute_cli();
@@ -513,6 +526,7 @@ impl Build {
             builder.execute_cli();
         }
 
+        // 从`test --no-fail-fast`检查延迟的失败.
         // Check for postponed failures from `test --no-fail-fast`.
         let failures = self.delayed_failures.borrow();
         if failures.len() > 0 {
@@ -781,6 +795,7 @@ impl Build {
         self.verbosity > 0
     }
 
+    // 添加注释: 如果在详细模式下配置此构建, 则将会打印一条消息
     /// Prints a message if this build is configured in verbose mode.
     fn verbose(&self, msg: &str) {
         if self.is_verbose() {
@@ -918,6 +933,7 @@ impl Build {
         self.config.use_lld && !target.contains("msvc")
     }
 
+    // 添加注释: 如果指定, 则返回此目标是否应静态链接C运行时
     /// Returns if this target should statically link the C runtime, if specified
     fn crt_static(&self, target: TargetSelection) -> Option<bool> {
         if target.contains("pc-windows-msvc") {

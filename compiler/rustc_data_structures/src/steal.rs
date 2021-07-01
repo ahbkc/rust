@@ -1,6 +1,7 @@
 use crate::stable_hasher::{HashStable, StableHasher};
 use crate::sync::{MappedReadGuard, ReadGuard, RwLock};
 
+// 添加注释: `Steal`结构旨在用作查询的值
 /// The `Steal` struct is intended to used as the value for a query.
 /// Specifically, we sometimes have queries (*cough* MIR *cough*)
 /// where we create a large, complex value that we want to iteratively

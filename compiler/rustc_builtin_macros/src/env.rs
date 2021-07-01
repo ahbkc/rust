@@ -1,3 +1,4 @@
+// 添加注释: 支持`env!`扩展所需的编译器代码.
 // The compiler code necessary to support the env! extension.  Eventually this
 // should all get sucked into either the compiler syntax extension plugin
 // interface.

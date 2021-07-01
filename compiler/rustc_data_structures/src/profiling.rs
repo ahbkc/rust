@@ -626,6 +626,7 @@ pub fn duration_to_secs_str(dur: std::time::Duration) -> String {
     format!("{:.3}", dur.as_secs_f64())
 }
 
+// 添加注释: 内存报告
 // Memory reporting
 cfg_if! {
     if #[cfg(windows)] {
@@ -642,6 +643,7 @@ cfg_if! {
                 0 => None,
                 _ => {
                     let pmc = unsafe { pmc.assume_init() };
+                    // 添加注释: 获取当前工作集大小, 以字节为单位
                     Some(pmc.WorkingSetSize as usize)
                 }
             }

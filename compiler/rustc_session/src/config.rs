@@ -665,11 +665,16 @@ impl OutputFilenames {
 }
 
 pub fn host_triple() -> &'static str {
+    // 添加注释: 从构建环境中获取主机三元组. 这确保了我们对主机三元组的想法与我们实际构建的库集相同.
+    // 我们不能只采用LLVM的主机三元组, 因为它们将所有i86架构规范为i386.
     // Get the host triple out of the build environment. This ensures that our
     // idea of the host triple is the same as for the set of libraries we've
     // actually built.  We can't just take LLVM's host triple because they
     // normalize all ix86 architectures to i386.
     //
+    // !!!添加注释: 此处获取的`CFG_COMPILER_HOST_TRIPLE`值是在编译时, 而不是在运行, 在编译时宏都将会展开
+    // 添加注释: 我们不是获取三元组(对于当前主机), 而是获取(编译时)构建这个rustc的目标三元组, 并
+    // 调用(在运行时)主机三元组
     // Instead of grabbing the host triple (for the current host), we grab (at
     // compile time) the target triple that this rustc is built with and
     // calling that (at runtime) the host triple.

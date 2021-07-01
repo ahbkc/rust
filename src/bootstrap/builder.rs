@@ -49,34 +49,46 @@ impl<'a> Deref for Builder<'a> {
 }
 
 pub trait Step: 'static + Clone + Debug + PartialEq + Eq + Hash {
+    // 添加注释: `PathBuf`在创建目录时或在汇编后返回`Compiler`
     /// `PathBuf` when directories are created or to return a `Compiler` once
     /// it's been assembled.
     type Output: Clone;
 
+    // 添加注释: 默认情况下, 此步骤是否作为其各自阶段的一部分运行. 此处的`true`仍然可以通过调用
+    // `default_condition`的`should_run`覆盖
     /// Whether this step is run by default as part of its respective phase.
     /// `true` here can still be overwritten by `should_run` calling `default_condition`.
     const DEFAULT: bool = false;
 
+    // 添加注释: 如果为true, 但是如果指定了`--target`, 但未指定`--host`, 则应该跳过些规则
     /// If true, then this rule should be skipped if --target was specified, but --host was not
     const ONLY_HOSTS: bool = false;
 
+    // 添加注释: 执行此规则的主要功能. 可以使用其它步骤调用`builer.ensure()`来运行这些步骤.
     /// Primary function to execute this rule. Can call `builder.ensure()`
     /// with other steps to run those.
     fn run(self, builder: &Builder<'_>) -> Self::Output;
 
+    // 添加注释: 当bootstrap传递一组路径时, 这将控制此规则是否会执行. 但是, 当我们没有传递任何路径时,
+    // 它不会在`默认`上下文中被调用; 在这种情况下, 将直接调用`make_run`
     /// When bootstrap is passed a set of paths, this controls whether this rule
     /// will execute. However, it does not get called in a "default" context
     /// when we are not passed any paths; in that case, `make_run` is called
     /// directly.
     fn should_run(run: ShouldRun<'_>) -> ShouldRun<'_>;
 
+    // 添加注释: 建立一个`根`规则, 作为默认规则或从传递给我们的路径.
     /// Builds up a "root" rule, either as a default rule or from a path passed
     /// to us.
     ///
+    // 添加注释: 当path作为`None`时, 我们在没有传递路径的上下文中执行. 例如, 当运行`./x.py build`时,
+    // 如果它在下面的正确列表中且路径为`None`, 则可能会调用此规则.
     /// When path is `None`, we are executing in a context where no paths were
     /// passed. When `./x.py build` is run, for example, this rule could get
     /// called if it is in the correct list below with a path of `None`.
     fn make_run(_run: RunConfig<'_>) {
+        // 添加注释: 对于不想从根上下文调用的规则, 没有make_run的实现是合理的. 这意味着它们可能是
+        // 依赖项(例如, sysroot)创建或类似的, 因此从./x.py调用它们是不合逻辑的.
         // It is reasonable to not have an implementation of make_run for rules
         // who do not want to get called from the root context. This means that
         // they are likely dependencies (e.g., sysroot creation) or similar, and
@@ -105,17 +117,24 @@ struct StepDescription {
     name: &'static str,
 }
 
+// 添加注释: 用于匹配任务规则的路径集合
 /// Collection of paths used to match a task rule.
 #[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq)]
 pub enum PathSet {
+    // 添加注释: 单个路径集合.
     /// A collection of individual paths.
     ///
+    // 添加注释: 这些一般作为路径后缀匹配. 例如, 如果`src/libstd`在集合中, `libstd`
+    // 的命令行值将匹配.
     /// These are generally matched as a path suffix. For example, a
     /// command-line value of `libstd` will match if `src/libstd` is in the
     /// set.
     Set(BTreeSet<PathBuf>),
+    // 添加注释: 路径的`套件`
     /// A "suite" of paths.
     ///
+    // 添加注释: 这些可以作为路径后缀(如`Set`)或作为前缀匹配. 例如, `src/test/ui/abi/variadic-ffi.rs`的
+    // 命令行值将匹配`src/test/ui`. `ui`的命令行值也 将匹配`src/test/ui`
     /// These can match as a path suffix (like `Set`), or as a prefix. For
     /// example, a command-line value of `src/test/ui/abi/variadic-ffi.rs`
     /// will match `src/test/ui`. A command-line value of `ui` would also
@@ -184,6 +203,7 @@ impl StepDescription {
         let should_runs =
             v.iter().map(|desc| (desc.should_run)(ShouldRun::new(builder))).collect::<Vec<_>>();
 
+        // 添加注释: 对规则的健全性检查
         // sanity checks on rules
         for (desc, should_run) in v.iter().zip(&should_runs) {
             assert!(
@@ -204,6 +224,7 @@ impl StepDescription {
         }
 
         for path in paths {
+            // 添加注释: 去掉CurDir前缀(如果存在)
             // strip CurDir prefix if present
             let path = match path.strip_prefix(".") {
                 Ok(p) => p,
@@ -231,9 +252,11 @@ impl StepDescription {
 #[derive(Clone)]
 pub struct ShouldRun<'a> {
     pub builder: &'a Builder<'a>,
+    // 添加注释: 使用BTreeSet来维护排序顺序
     // use a BTreeSet to maintain sort order
     paths: BTreeSet<PathSet>,
 
+    // 添加注释: 如果这是默认规则, 则这是对其运行的附加约束. 通常类似于编译器文档被启用.
     // If this is a default rule, this is an additional constraint placed on
     // its run. Generally something like compiler docs being enabled.
     is_really_default: bool,
@@ -244,6 +267,7 @@ impl<'a> ShouldRun<'a> {
         ShouldRun {
             builder,
             paths: BTreeSet::new(),
+            // 添加注释: 默认没有附加条件
             is_really_default: true, // by default no additional conditions
         }
     }
@@ -253,9 +277,14 @@ impl<'a> ShouldRun<'a> {
         self
     }
 
+    // 添加注释: 如果命令行选择给定的crate或其任何(本地)依赖项, 则表示它应该运行.
     /// Indicates it should run if the command-line selects the given crate or
     /// any of its (local) dependencies.
     ///
+    // 添加注释: 与`krate`方法相比, 这将依赖视为同一作业的别名. 通常首选使用`krate`, 并分别处理每个单独
+    // 的路径. 例如`./x.py test src/liballoc`(使用`krate`方法时)将只测试`liballoc`.
+    // 然而, `./x.py check src/liballoc`(使用`all_krates`方法时)将检查所有的libtest. `all_krates`应该在
+    // 某个时候被移除.
     /// Compared to `krate`, this treats the dependencies as aliases for the
     /// same job. Generally it is preferred to use `krate`, and treat each
     /// individual path separately. For example `./x.py test src/liballoc`
@@ -272,9 +301,11 @@ impl<'a> ShouldRun<'a> {
         self
     }
 
+    // 添加注释: 如果命令行选择给定的crate或其任何(本地)依赖项, 则表示它应该运行.
     /// Indicates it should run if the command-line selects the given crate or
     /// any of its (local) dependencies.
     ///
+    // 添加注释: `make_run`将为每个匹配的命令行路径单独调用.
     /// `make_run` will be called separately for each matching command-line path.
     pub fn krate(mut self, name: &str) -> Self {
         for krate in self.builder.in_tree_crates(name, None) {
@@ -284,17 +315,20 @@ impl<'a> ShouldRun<'a> {
         self
     }
 
+    // 添加注释: 单一的, 非锯齿的路径
     // single, non-aliased path
     pub fn path(self, path: &str) -> Self {
         self.paths(&[path])
     }
 
+    // 添加注释: 同一个作业的多个别名
     // multiple aliases for the same job
     pub fn paths(mut self, paths: &[&str]) -> Self {
         self.paths.insert(PathSet::Set(paths.iter().map(PathBuf::from).collect()));
         self
     }
 
+    // 添加注释: 判断是否是套件路径
     pub fn is_suite_path(&self, path: &Path) -> Option<&PathSet> {
         self.paths.iter().find(|pathset| match pathset {
             PathSet::Suite(p) => path.starts_with(p),
@@ -334,6 +368,7 @@ pub enum Kind {
 }
 
 impl<'a> Builder<'a> {
+    // 添加注释: 获取步骤描述集合
     fn get_step_descriptions(kind: Kind) -> Vec<StepDescription> {
         macro_rules! describe {
             ($($rule:ty),+ $(,)?) => {{
@@ -570,10 +605,13 @@ impl<'a> Builder<'a> {
         self.run_step_descriptions(&Builder::get_step_descriptions(Kind::Doc), paths);
     }
 
+    // 添加注释: 执行步骤描述集合
     fn run_step_descriptions(&self, v: &[StepDescription], paths: &[PathBuf]) {
         StepDescription::run(v, self, paths);
     }
 
+    // 添加注释: 在给定的阶段和给定的主机上获得一个编译器. 显式不接受`Compiler`, 因为所有`Compiler`
+    // 实例都应该通过这个函数获得, 因为它确保它们是有效的(即构建和组装)
     /// Obtain a compiler at a given stage and for a given host. Explicitly does
     /// not take `Compiler` since all `Compiler` instances are meant to be
     /// obtained through this function, since it ensures that they are valid
@@ -582,10 +620,13 @@ impl<'a> Builder<'a> {
         self.ensure(compile::Assemble { target_compiler: Compiler { stage, host } })
     }
 
+    // 添加注释: 与`compiler`类似, 除了处理完整引导选项以在需要时静默使用stage1编译器而不是stage2编译器.
     /// Similar to `compiler`, except handles the full-bootstrap option to
     /// silently use the stage1 compiler instead of a stage2 compiler if one is
     /// requested.
     ///
+    // 添加注释: 请注意, 这没有创建`compiler(stage, host)`的副作用, 不像上面的`compiler`这样的副作用. 此处返回的
+    // 编译器只能用于编译新工件, 不能用于依赖特定sysroot的存在.
     /// Note that this does *not* have the side effect of creating
     /// `compiler(stage, host)`, unlike `compiler` above which does have such
     /// a side effect. The returned compiler here can only be used to compile
@@ -610,6 +651,7 @@ impl<'a> Builder<'a> {
         self.ensure(compile::Sysroot { compiler })
     }
 
+    // 添加注释: 返回为编译器的sysroot找到标准库和其它工件的libdir
     /// Returns the libdir where the standard library and other artifacts are
     /// found for a compiler's sysroot.
     pub fn sysroot_libdir(&self, compiler: Compiler, target: TargetSelection) -> Interned<PathBuf> {
@@ -649,9 +691,11 @@ impl<'a> Builder<'a> {
         self.sysroot_libdir(compiler, compiler.host).with_file_name("codegen-backends")
     }
 
+    // 添加注释: 返回编译器的libdir, 它本身存储它本身链接的动态库.
     /// Returns the compiler's libdir where it stores the dynamic libraries that
     /// it itself links against.
     ///
+    // 添加注释: 例如, 在Unix上返回`<sysroot>/lib`, 在Windows上返回`<sysroot>/bin`
     /// For example this returns `<sysroot>/lib` on Unix and `<sysroot>/bin` on
     /// Windows.
     pub fn rustc_libdir(&self, compiler: Compiler) -> PathBuf {
@@ -667,9 +711,11 @@ impl<'a> Builder<'a> {
         }
     }
 
+    // 添加注释: 返回编译器的相对libdir, 它存储它本身链接的动态库.
     /// Returns the compiler's relative libdir where it stores the dynamic libraries that
     /// it itself links against.
     ///
+    // 添加注释: 例如, 在Unix上返回`lib`, 在Windows上返回`bin`
     /// For example this returns `lib` on Unix and `bin` on
     /// Windows.
     pub fn libdir_relative(&self, compiler: Compiler) -> &Path {
@@ -683,6 +729,7 @@ impl<'a> Builder<'a> {
         }
     }
 
+    // 添加注释: 返回编译器的相对libdir, 其中为编译器的sysroot找到标准库和其它工件
     /// Returns the compiler's relative libdir where the standard library and other artifacts are
     /// found for a compiler's sysroot.
     ///
@@ -695,6 +742,7 @@ impl<'a> Builder<'a> {
         }
     }
 
+    // 添加注释: 将编译器的动态库路径添加到`cmd`的动态库查找路径.
     /// Adds the compiler's directory of dynamic libraries to `cmd`'s dynamic
     /// library lookup path.
     pub fn add_rustc_lib_path(&self, compiler: Compiler, cmd: &mut Command) {
@@ -708,6 +756,7 @@ impl<'a> Builder<'a> {
         add_dylib_path(vec![self.rustc_libdir(compiler)], cmd);
     }
 
+    // 添加注释: 获取指定编译器的路径
     /// Gets a path to the compiler specified.
     pub fn rustc(&self, compiler: Compiler) -> PathBuf {
         if compiler.is_snapshot(self) {
@@ -717,6 +766,7 @@ impl<'a> Builder<'a> {
         }
     }
 
+    // 添加注释: 获取所有编译器的代码生成后端的路径
     /// Gets the paths to all of the compiler's codegen backends.
     fn codegen_backends(&self, compiler: Compiler) -> impl Iterator<Item = PathBuf> {
         fs::read_dir(self.sysroot_codegen_backends(compiler))
@@ -761,8 +811,11 @@ impl<'a> Builder<'a> {
         cmd
     }
 
+    // 添加注释: 返回目标的`llvm-config`路径(如果存在)
     /// Return the path to `llvm-config` for the target, if it exists.
     ///
+    // 添加注释: 请注意, 如果LLVM禁用, 或者如果我们处于检查构建或试运行中, 这将返回`None`,
+    // 此时无需构建所有LLVM.
     /// Note that this returns `None` if LLVM is disabled, or if we're in a
     /// check build or dry-run, where there's no need to build all of LLVM.
     fn llvm_config(&self, target: TargetSelection) -> Option<PathBuf> {
@@ -775,8 +828,12 @@ impl<'a> Builder<'a> {
         None
     }
 
+    // 添加注释: 准备要运行的`cargo`调用
     /// Prepares an invocation of `cargo` to be run.
     ///
+    // 添加注释: 这将创建一个`Command`, 表示Cargo的挂起执行. 这个cargo将被配置为使用`compiler`
+    // 作为实际的rustc编译器, 它的输出将由`mode`的输出目录限定, 它将为指定的`target`传递`--target`标志,
+    // 并将执行cargo命令`cmd`
     /// This will create a `Command` that represents a pending execution of
     /// Cargo. This cargo will be configured to use `compiler` as the actual
     /// rustc compiler, its output will be scoped by `mode`'s output directory,
@@ -1386,6 +1443,7 @@ impl<'a> Builder<'a> {
         let rust_version = self.rust_version().replace(' ', "\n");
         rustdocflags.arg("--crate-version").arg(&rust_version);
 
+        // 添加注释: 整个构建过程中必需的环境变量
         // Environment variables *required* throughout the build
         //
         // FIXME: should update code to not require this env var
@@ -1486,6 +1544,8 @@ impl<'a> Builder<'a> {
         Cargo { command: cargo, rustflags, rustdocflags }
     }
 
+    // 添加注释: 确保构建了给定的步骤, 并返回其输出. 这将缓存该步骤, 因此根据需要经常调用它以
+    // 确保构建所有依赖项是安全的(并且是很多的)
     /// Ensure that a given step is built, returning its output. This will
     /// cache the step, so it is safe (and good!) to call this as often as
     /// needed to ensure that all dependencies are built.
@@ -1551,10 +1611,14 @@ impl Rustflags {
         ret
     }
 
+    // 添加注释: 默认情况下, cargo将获取环境中的各种变量. 然而, bootstrap重用这些变量将额外的标志传递给rustdoc, 所以默认
+    // 情况下它们会被覆盖.
+    // 显示添加回环境中的任何先前值.
     /// By default, cargo will pick up on various variables in the environment. However, bootstrap
     /// reuses those variables to pass additional flags to rustdoc, so by default they get overriden.
     /// Explicitly add back any previous value in the environment.
     ///
+    // 添加注释: `prefix`通常是`RUSTFLAGS`或`RUSTDOCFLAGS`
     /// `prefix` is usually `RUSTFLAGS` or `RUSTDOCFLAGS`.
     fn propagate_cargo_env(&mut self, prefix: &str) {
         // Inherit `RUSTFLAGS` by default ...

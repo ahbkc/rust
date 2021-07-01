@@ -48,6 +48,7 @@ impl<T> Query<T> {
         self.result.borrow_mut().take().expect("missing query result").unwrap()
     }
 
+    // 添加注释: 使用RefCell的borrow查询结果. 如果结果被盗则panic.
     /// Borrows the query result using the RefCell. Panics if the result is stolen.
     pub fn peek(&self) -> Ref<'_, T> {
         Ref::map(self.result.borrow(), |r| {
@@ -55,6 +56,7 @@ impl<T> Query<T> {
         })
     }
 
+    // 添加注释: 使用RefCell的mut borrows查询结果. 如果结果被盗则panic.
     /// Mutably borrows the query result using the RefCell. Panics if the result is stolen.
     pub fn peek_mut(&self) -> RefMut<'_, T> {
         RefMut::map(self.result.borrow_mut(), |r| {
@@ -127,9 +129,10 @@ impl<'tcx> Queries<'tcx> {
         })
     }
 
+    // 添加注释: 解析输入信息, 解析成功后将返回ast结构数据
     pub fn parse(&self) -> Result<&Query<ast::Crate>> {
         self.parse.compute(|| {
-            // 添加注释: 对输入信息进行处理
+            // 添加注释: 对输入信息进行处理, 并返回处理后的AST
             passes::parse(self.session(), &self.compiler.input).map_err(|mut parse_error| {
                 parse_error.emit();
                 ErrorReported

@@ -218,15 +218,20 @@ impl Annotatable {
     }
 }
 
+// 添加注释: 可能需要重试的扩展结果.
 /// Result of an expansion that may need to be retried.
+// 添加注释: 考虑将它用于非`MultiItemModifier`扩展器.
 /// Consider using this for non-`MultiItemModifier` expanders as well.
 pub enum ExpandResult<T, U> {
+    // 添加注释: 扩展产生了结果(可能是假的).
     /// Expansion produced a result (possibly dummy).
     Ready(T),
+    // 添加注释: 扩展无法产生结果, 需要重试.
     /// Expansion could not produce a result and needs to be retried.
     Retry(U),
 }
 
+// 添加注释: `meta_item`是属性, `item`是被修改的项目.
 // `meta_item` is the attribute, and `item` is the item being modified.
 pub trait MultiItemModifier {
     fn expand(
@@ -303,6 +308,7 @@ where
     }
 }
 
+// 添加注释: 表示将标记树映射到宏结果的事物
 /// Represents a thing that maps token trees to Macro Results
 pub trait TTMacroExpander {
     fn expand<'cx>(
@@ -330,6 +336,7 @@ where
     }
 }
 
+// 添加注释: 使用宏, 因为转发到简单函数存在类型系统问题
 // Use a macro because forwarding to a simple function has type system issues
 macro_rules! make_stmts_default {
     ($me:expr) => {
@@ -343,40 +350,49 @@ macro_rules! make_stmts_default {
     };
 }
 
+// 添加注释: 宏展开的结果. 各种方法的返回值在宏的调用点拼接到AST中.
 /// The result of a macro expansion. The return values of the various
 /// methods are spliced into the AST at the callsite of the macro.
 pub trait MacResult {
+    // 添加注释: 创建表达式
     /// Creates an expression.
     fn make_expr(self: Box<Self>) -> Option<P<ast::Expr>> {
         None
     }
+    // 添加注释: 创建零个或多个条目.
     /// Creates zero or more items.
     fn make_items(self: Box<Self>) -> Option<SmallVec<[P<ast::Item>; 1]>> {
         None
     }
 
+    // 添加注释: 创建零个或多个impl条目.
     /// Creates zero or more impl items.
     fn make_impl_items(self: Box<Self>) -> Option<SmallVec<[P<ast::AssocItem>; 1]>> {
         None
     }
 
+    // 添加注释: 创建零个或多个trait条目.
     /// Creates zero or more trait items.
     fn make_trait_items(self: Box<Self>) -> Option<SmallVec<[P<ast::AssocItem>; 1]>> {
         None
     }
 
+    // 添加注释: 在`extern {}` 块中创建零个或多个条目.
     /// Creates zero or more items in an `extern {}` block
     fn make_foreign_items(self: Box<Self>) -> Option<SmallVec<[P<ast::ForeignItem>; 1]>> {
         None
     }
 
+    // 添加注释: 创建一个模式.
     /// Creates a pattern.
     fn make_pat(self: Box<Self>) -> Option<P<ast::Pat>> {
         None
     }
 
+    // 添加注释: 创建零个或多个语句.
     /// Creates zero or more statements.
     ///
+    // 添加注释: 默认情况下, 这会尝试创建一个表达式语句, 如果失败则返回None.
     /// By default this attempts to create an expression statement,
     /// returning None if that fails.
     fn make_stmts(self: Box<Self>) -> Option<SmallVec<[ast::Stmt; 1]>> {
@@ -418,6 +434,7 @@ pub trait MacResult {
 
 macro_rules! make_MacEager {
     ( $( $fld:ident: $t:ty, )* ) => {
+        // 添加注释: `MacResult`实现, 适用于您已经构建了可能返回的每种形式的AST的常见情况.
         /// `MacResult` implementation for the common case where you've already
         /// built each form of AST that you might return.
         #[derive(Default)]
@@ -501,6 +518,7 @@ impl MacResult for MacEager {
     }
 }
 
+// 添加注释: 填充宏扩展结果, 允许编译在遇到错误后继续
 /// Fill-in macro expansion result, to allow compilation to continue
 /// after hitting errors.
 #[derive(Copy, Clone)]
@@ -510,19 +528,23 @@ pub struct DummyResult {
 }
 
 impl DummyResult {
+    // 添加注释: 创建一个可以是任何内容的默认`MacResult`
     /// Creates a default MacResult that can be anything.
     ///
+    // 添加注释: 在遇到任何错误并调用`span_err`后, 将其用作返回值.
     /// Use this as a return value after hitting any errors and
     /// calling `span_err`.
     pub fn any(span: Span) -> Box<dyn MacResult + 'static> {
         Box::new(DummyResult { is_error: true, span })
     }
 
+    // 添加注释: 与`any`相同, 但必须是有效片段, 而不是错误.
     /// Same as `any`, but must be a valid fragment, not error.
     pub fn any_valid(span: Span) -> Box<dyn MacResult + 'static> {
         Box::new(DummyResult { is_error: false, span })
     }
 
+    // 添加注释: 一个普通的虚拟表达式.
     /// A plain dummy expression.
     pub fn raw_expr(sp: Span, is_error: bool) -> P<ast::Expr> {
         P(ast::Expr {
@@ -534,11 +556,13 @@ impl DummyResult {
         })
     }
 
+    // 添加注释: 一个普通的虚拟模式
     /// A plain dummy pattern.
     pub fn raw_pat(sp: Span) -> ast::Pat {
         ast::Pat { id: ast::DUMMY_NODE_ID, kind: PatKind::Wild, span: sp, tokens: None }
     }
 
+    // 添加注释: 一个普通的虚拟类型
     /// A plain dummy type.
     pub fn raw_ty(sp: Span, is_error: bool) -> P<ast::Ty> {
         P(ast::Ty {
@@ -616,20 +640,26 @@ impl MacResult for DummyResult {
     }
 }
 
+// 添加注释: 一种语法扩展类型
 /// A syntax extension kind.
 pub enum SyntaxExtensionKind {
+    // 添加注释: 基于令牌的类似函数的宏.
     /// A token-based function-like macro.
     Bang(
+        // 添加注释: 具有签名 TokenStream -> TokenStream的扩展器.
         /// An expander with signature TokenStream -> TokenStream.
         Box<dyn ProcMacro + sync::Sync + sync::Send>,
     ),
 
+    // 添加注释: 基于AST的类似函数的宏
     /// An AST-based function-like macro.
     LegacyBang(
+        // 添加注释: 具有签名 TokenStream -> AST的扩展器
         /// An expander with signature TokenStream -> AST.
         Box<dyn TTMacroExpander + sync::Sync + sync::Send>,
     ),
 
+    // 添加注释: 基于令牌的属性宏
     /// A token-based attribute macro.
     Attr(
         /// An expander with signature (TokenStream, TokenStream) -> TokenStream.
@@ -1152,6 +1182,7 @@ pub fn parse_expr(p: &mut parser::Parser<'_>) -> Option<P<ast::Expr>> {
     None
 }
 
+// 添加注释: 将`tts`解释为逗号分隔的表达式序列, 期望正好是一个字符串文字, 或者发出错误并返回`None`.
 /// Interpreting `tts` as a comma-separated sequence of expressions,
 /// expect exactly one string literal, or emit an error and return `None`.
 pub fn get_single_str_from_tts(

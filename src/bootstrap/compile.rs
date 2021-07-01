@@ -1,6 +1,9 @@
+// 添加注释: 编译器和标准库的各个阶段的编译实现.
 //! Implementation of compiling various phases of the compiler and standard
 //! library.
 //!
+// 添加注释: 该模块包含`rustbuild`构建系统中的一些真正的内容, Cargo用于编译标准库, libtest和编译器.
+// 该模块还负责组装sysroot, 因为它从前一阶段的输出开始.
 //! This module contains some of the real meat in the rustbuild build system
 //! which is where Cargo is used to compiler the standard library, libtest, and
 //! compiler. This module is also responsible for assembling the sysroot as it
@@ -41,6 +44,7 @@ impl Step for Std {
     const DEFAULT: bool = true;
 
     fn should_run(run: ShouldRun<'_>) -> ShouldRun<'_> {
+        // 添加注释: 下载stage1的时候, 标准库已经拷贝到sysroot, 不需要重新编译.
         // When downloading stage1, the standard library has already been copied to the sysroot, so
         // there's no need to rebuild it.
         let download_rustc = run.builder.config.download_rustc;
@@ -54,8 +58,10 @@ impl Step for Std {
         });
     }
 
+    // 添加注释: 构建标准库
     /// Builds the standard library.
     ///
+    // 添加注释: 这将使用针对`目标`架构的`编译器`为构建的特定阶段构建标准库. 创建的工件也将链接到sysroot目录中
     /// This will build the standard library for a particular stage of the build
     /// using the `compiler` targeting the `target` architecture. The artifacts
     /// created will also be linked into the sysroot directory.
@@ -168,6 +174,7 @@ fn copy_third_party_objects(
     target_deps
 }
 
+// 添加注释: 复制各种目标所需的第三方对象以进行自包含链接.
 /// Copies third party objects needed by various targets for self-contained linkage.
 fn copy_self_contained_objects(
     builder: &Builder<'_>,
@@ -234,6 +241,7 @@ fn copy_self_contained_objects(
     target_deps
 }
 
+// 添加注释: 配置cargo以编译标准库, 添加适当的环境变量等.
 /// Configure cargo to compile the standard library, adding appropriate env vars
 /// and such.
 pub fn std_cargo(builder: &Builder<'_>, target: TargetSelection, stage: u32, cargo: &mut Cargo) {
@@ -241,18 +249,26 @@ pub fn std_cargo(builder: &Builder<'_>, target: TargetSelection, stage: u32, car
         cargo.env("MACOSX_DEPLOYMENT_TARGET", target);
     }
 
+    // 添加注释: 确定我们是否要将优化的C内在函数编译到`compiler-builtions` crate. 这些内在函数存在于
+    // LLVM的`compiler-rt`存储库中, 但我们的`src/llvm-project`子模块并不总是被检出, 因此我们需要有
+    // 条件地寻找它. (例如, 如果使用外部LLVM, 我们将跳过LLVM子模块检出)
     // Determine if we're going to compile in optimized C intrinsics to
     // the `compiler-builtins` crate. These intrinsics live in LLVM's
     // `compiler-rt` repository, but our `src/llvm-project` submodule isn't
     // always checked out, so we need to conditionally look for this. (e.g. if
     // an external LLVM is used we skip the LLVM submodule checkout).
     //
+    // 添加注释: 请注意, 这不应影响`compiler-builtins`的正确性, 而只会影响其速度. C中的
+    // 一些内在函数还没有被翻译成Rust, 但这种情况非常罕见. 其他内在函数在C中优化了实现, 这
+    // 些实现只有较慢的版本移植到Rust, 所以我们尽可能支持C版本, 但这并不重要.
     // Note that this shouldn't affect the correctness of `compiler-builtins`,
     // but only its speed. Some intrinsics in C haven't been translated to Rust
     // yet but that's pretty rare. Other intrinsics have optimized
     // implementations in C which have only had slower versions ported to Rust,
     // so we favor the C version where we can, but it's not critical.
     //
+    // 添加注释: 如果`compiler-rt`可用, 请确保启用`compiler-builtins` crate的`c`功能,
+    // 并将其配置为了解`compiler-rt`所在的位置
     // If `compiler-rt` is available ensure that the `c` feature of the
     // `compiler-builtins` crate is enabled and it's configured to learn where
     // `compiler-rt` is located.
@@ -287,6 +303,7 @@ pub fn std_cargo(builder: &Builder<'_>, target: TargetSelection, stage: u32, car
             .arg("--manifest-path")
             .arg(builder.src.join("library/test/Cargo.toml"));
 
+        // 添加注释: 通过帮助libc crate查找各种sysroot本机库来帮助它编译.
         // Help the libc crate compile by assisting it in finding various
         // sysroot native libraries.
         if target.contains("musl") {
@@ -304,18 +321,24 @@ pub fn std_cargo(builder: &Builder<'_>, target: TargetSelection, stage: u32, car
         }
     }
 
+    // 添加注释: 默认情况下, rustc使用`-Cembed-bitcode=yes`, 并且Cargo使用`-Cembed-bitcode=no`
+    // 覆盖非LTO构建. 但是, libstd必须使用bitcode构建, 以便生成的rlib可用于LTO构建(使用bitcode)和
+    // 非LTO构建(使用目标代码). 所以我们在这里覆盖覆盖.
     // By default, rustc uses `-Cembed-bitcode=yes`, and Cargo overrides that
     // with `-Cembed-bitcode=no` for non-LTO builds. However, libstd must be
     // built with bitcode so that the produced rlibs can be used for both LTO
     // builds (which use bitcode) and non-LTO builds (which use object code).
     // So we override the override here!
     //
+    // 添加注释: 但是我们不会为stage0烦恼, 因为它从未与LTO一起使用.
     // But we don't bother for the stage 0 compiler because it's never used
     // with LTO.
     if stage >= 1 {
         cargo.rustflag("-Cembed-bitcode=yes");
     }
 
+    // 添加注释: 默认情况下, rustc不包含展开表, 除非特定目标需要它们. RISC-V目标不需要它们, 但
+    // 使用它们编译标准库意味着用户可以获取回溯, 而无需自已重新编译标准库.
     // By default, rustc does not include unwind tables unless they are required
     // for a particular target. They are not required by RISC-V targets, but
     // compiling the standard library with them means that users can get
@@ -981,6 +1004,8 @@ impl Step for Sysroot {
 
 #[derive(Debug, Copy, PartialOrd, Ord, Clone, PartialEq, Eq, Hash)]
 pub struct Assemble {
+    // 添加注释: 我们将在此步骤中生成的编译器. Assemble本身将负责确保存在必要的先决条件, 也就是说,
+    // 此目标可以是stage2编译器, 而Assemble将为您构建之前的阶段.
     /// The compiler which we will produce in this step. Assemble itself will
     /// take care of ensuring that the necessary prerequisites to do so exist,
     /// that is, this target can be a stage2 compiler and Assemble will build

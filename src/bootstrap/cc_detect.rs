@@ -31,6 +31,9 @@ use build_helper::output;
 use crate::config::{Target, TargetSelection};
 use crate::{Build, GitRepo};
 
+// 添加注释: `cc`crate没有提供获取检测到的归档程序的路径的方法, 因此这里使用一些简化的逻辑. 首先我们尊重环境变量`AR`,
+// 然后尝试从C编译器路径推断存档器路径.
+// 将来这个逻辑应该被调用到`cc`crate来代替.
 // The `cc` crate doesn't provide a way to obtain a path to the detected archiver,
 // so use some simplified logic here. First we respect the environment variable `AR`, then
 // try to infer the archiver path from the C compiler path.
@@ -63,6 +66,7 @@ fn cc2ar(cc: &Path, target: TargetSelection) -> Option<PathBuf> {
 }
 
 pub fn find(build: &mut Build) {
+    // 添加注释: 对于所有目标, 我们将需要一个C编译器来构建一些shim以及作为Rust代码的链接器
     // For all targets we're going to need a C compiler for building some shims
     // and such as well as for being a linker for Rust code.
     let targets = build
@@ -111,6 +115,8 @@ pub fn find(build: &mut Build) {
         build.cc.insert(target, compiler.clone());
         let cflags = build.cflags(target, GitRepo::Rustc);
 
+        // 添加注释: 如果我们使用llvm-libunwind, 我们将需要一个C++编译器以及所有目标. 如果目标三元组也是
+        // 主机三元组, 我们无论如何都需要一个.
         // If we use llvm-libunwind, we will need a C++ compiler as well for all targets
         // We'll need one anyways if the target triple is also a host triple
         let mut cfg = cc::Build::new();
@@ -129,10 +135,12 @@ pub fn find(build: &mut Build) {
             set_compiler(&mut cfg, Language::CPlusPlus, target, config, build);
             true
         } else {
+            // 添加注释: 使用自动检测的编译器(或通过`CXX_target_triple`环境变量配置的编译器)
             // Use an auto-detected compiler (or one configured via `CXX_target_triple` env vars).
             cfg.try_get_compiler().is_ok()
         };
 
+        // 添加注释: 对于VxWorks, 记录将在lib.rs::linker()中使用的CXX编译器
         // for VxWorks, record CXX compiler which will be used in lib.rs:linker()
         if cxx_configured || target.contains("vxworks") {
             let compiler = cfg.get_compiler();
@@ -160,6 +168,8 @@ fn set_compiler(
     build: &Build,
 ) {
     match &*target.triple {
+        // 添加注释: 在为android编译时, 我们可能在config.toml中配置了NDK, 在这种情况下我们会查看哪里.
+        // 否则默认编译器已经考虑了相关的三元组.
         // When compiling for android we may have the NDK configured in the
         // config.toml in which case we look there. Otherwise the default
         // compiler already takes into account the triple in question.
@@ -176,6 +186,8 @@ fn set_compiler(
             }
         }
 
+        // 添加注释: OpenBSD的默认gcc版本可能太旧了, 如果是这种情况, 请尝试使用egcc, 它是来自
+        // ports的gcc版本
         // The default gcc version from OpenBSD may be too old, try using egcc,
         // which is a gcc version from ports, if this is the case.
         t if t.contains("openbsd") => {
@@ -224,6 +236,7 @@ fn set_compiler(
     }
 }
 
+// 添加注释: 本机编译器的目标编程语言
 /// The target programming language for a native compiler.
 enum Language {
     /// The compiler is targeting C.

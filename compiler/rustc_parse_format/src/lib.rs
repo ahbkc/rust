@@ -1,5 +1,7 @@
+// 添加注释: 对格式字符串的宏支持
 //! Macro support for format strings
 //!
+// 添加注释: 这些结构在为编译器解析格式字符串时使用. 解析不会在运行时发生: 而是生成`std::fmt::rt`结构.
 //! These structures are used when parsing format strings for the compiler.
 //! Parsing does not happen at runtime: structures of `std::fmt::rt` are
 //! generated instead.
@@ -25,11 +27,14 @@ use std::string;
 
 use rustc_span::{InnerSpan, Symbol};
 
+// 添加注释: 我们正在解析的格式字符串的类型.
 /// The type of format string that we are parsing.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum ParseMode {
+    // 添加注释: 按照`format_args!`的普通格式字符串.
     /// A normal format string as per `format_args!`.
     Format,
+    // 添加注释: `asm!`的内联汇编模板字符串.
     /// An inline assembly template string for `asm!`.
     InlineAsm,
 }
@@ -257,6 +262,7 @@ impl<'a> Iterator for Parser<'a> {
 }
 
 impl<'a> Parser<'a> {
+    // 添加注释: 为给定的格式字符串创建一个新的解析器.
     /// Creates a new parser for the given format string
     pub fn new(
         s: &'a str,
@@ -283,6 +289,8 @@ impl<'a> Parser<'a> {
         }
     }
 
+    // 添加注释: 错误通知. 该消息实际上并不需要是String类型, 但我认为它会在最终使用条件时使用,
+    // 所以现在不妨开始使用它.
     /// Notifies of an error. The message doesn't actually need to be of type
     /// String, but I think it does when this eventually uses conditions so it
     /// might as well start using it now.
@@ -427,6 +435,7 @@ impl<'a> Parser<'a> {
         }
     }
 
+    // 添加注释: 消耗所有空白字符直到第一个非空白字符.
     /// Consumes all whitespace characters until the first non-whitespace character
     fn ws(&mut self) {
         while let Some(&(_, c)) = self.cur.peek() {
@@ -616,6 +625,7 @@ impl<'a> Parser<'a> {
         spec
     }
 
+    // 添加注释: 解析当前位置的内联汇编模板修饰符, 返回`FormatSpec`结构体的`ty`字段中的修饰符.
     /// Parses an inline assembly template modifier at the current position, returning the modifier
     /// in the `ty` field of the `FormatSpec` struct.
     fn inline_asm(&mut self) -> FormatSpec<'a> {
