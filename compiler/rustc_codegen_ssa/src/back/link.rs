@@ -10,6 +10,8 @@ use rustc_session::config::{OutputFilenames, OutputType, PrintRequest};
 use rustc_session::output::{check_file_is_writeable, invalid_output_for_target, out_filename};
 use rustc_session::search_paths::PathKind;
 use rustc_session::utils::NativeLibKind;
+// 添加注释: 对于我们支持的所有链接器, 以及在我们摆脱它之前, 它们可能需要从共享的
+// crate上下文中获取的信息.
 /// For all the linkers we support, and information they might
 /// need out of the shared crate context before we get rid of it.
 use rustc_session::{filesearch, Session};
@@ -36,6 +38,7 @@ use std::process::{ExitStatus, Output, Stdio};
 use std::{ascii, char, env, fmt, fs, io, mem, str};
 
 pub fn ensure_removed(diag_handler: &Handler, path: &Path) {
+    // 添加注释: `fs::remove_file`函数将根据传入的`Path`删除文件
     if let Err(e) = fs::remove_file(path) {
         if e.kind() != io::ErrorKind::NotFound {
             diag_handler.err(&format!("failed to remove {}: {}", path.display(), e));
@@ -43,6 +46,7 @@ pub fn ensure_removed(diag_handler: &Handler, path: &Path) {
     }
 }
 
+// 添加注释: 此处的泛型B在llvm下是`LlvmArchiveBuilder`
 // 添加注释: 执行编译阶段的链接部分. 这将为此编译会话生成所有请求的输出.
 /// Performs the linkage portion of the compilation phase. This will generate all
 /// of the requested outputs for this compilation session.
@@ -65,6 +69,7 @@ pub fn link_binary<'a, B: ArchiveBuilder<'a>>(
             continue;
         }
 
+        // 添加注释: 检查目标是否支持crate_type作为输出
         if invalid_output_for_target(sess, crate_type) {
             bug!(
                 "invalid output type `{:?}` for target os `{}`",
@@ -89,14 +94,17 @@ pub fn link_binary<'a, B: ArchiveBuilder<'a>>(
             let out_filename = out_filename(sess, crate_type, outputs, crate_name);
             match crate_type {
                 CrateType::Rlib => {
+                    // 添加注释: 链接rlib库
                     let _timer = sess.timer("link_rlib");
                     link_rlib::<B>(sess, codegen_results, RlibFlavor::Normal, &out_filename, &path)
                         .build();
                 }
                 CrateType::Staticlib => {
+                    // 添加注释: 链接静态库
                     link_staticlib::<B>(sess, codegen_results, &out_filename, &path);
                 }
                 _ => {
+                    // 添加注释: 创建一个动态库或可执行文件
                     link_natively::<B>(
                         sess,
                         crate_type,
@@ -107,7 +115,10 @@ pub fn link_binary<'a, B: ArchiveBuilder<'a>>(
                     );
                 }
             }
+            // 添加注释: 此处理解为如果该值为`true`, 则我们将针对编译器生成的每个工件发出JSON blob
             if sess.opts.json_artifact_notifications {
+                // 添加注释: 当执行`rustc --error-format=json --json=artifacts main.rs`时, 将会打印如下信息
+                // {"artifact":"main.exe","emit":"link"}
                 sess.parse_sess.span_diagnostic.emit_artifact_notification(&out_filename, "link");
             }
         }
@@ -117,18 +128,25 @@ pub fn link_binary<'a, B: ArchiveBuilder<'a>>(
     // Remove the temporary object file and metadata if we aren't saving temps
     sess.time("link_binary_remove_temps", || {
         if !sess.opts.cg.save_temps {
+            // 添加注释: 如果此选项为false, 将删除临时对象文件, 此处使用将定义一个闭包函数
             let remove_temps_from_module = |module: &CompiledModule| {
                 if let Some(ref obj) = module.object {
+                    // 添加注释: `ensure_removed`函数将根据传入路径删除文件
                     ensure_removed(sess.diagnostic(), obj);
                 }
 
                 if let Some(ref obj) = module.dwarf_object {
+                    // 添加注释: `ensure_removed`函数将根据传入路径删除文件
                     ensure_removed(sess.diagnostic(), obj);
                 }
             };
 
+            // 添加注释: `preserve_objects_for_their_debuginfo`函数指示我们是否应该在文件系统上保留目标文件以获取调试信息,
+            // true代表是, false代表否
             if sess.opts.output_types.should_link() && !preserve_objects_for_their_debuginfo(sess) {
+                // 添加注释: 当应该链接并且不应在文件系统上保留目标文件以获取调试信息时, 进入该分支.
                 for module in &codegen_results.modules {
+                    // 添加注释: 遍历获取代码生成后端结果中的模块集合, 调用`remove_temps_from_module`传入当前对象
                     remove_temps_from_module(module);
                 }
             }
@@ -144,6 +162,8 @@ pub fn link_binary<'a, B: ArchiveBuilder<'a>>(
     });
 }
 
+// 添加注释: 第三个参数用于env vars, 在Windows上用于设置MSVC查找其DLL的路径, 以及gcc
+// 查找其捆绑的工具链
 // The third parameter is for env vars, used on windows to set up the
 // path for MSVC to find its DLLs, and gcc to find its bundled
 // toolchain
@@ -153,17 +173,23 @@ fn get_linker(
     flavor: LinkerFlavor,
     self_contained: bool,
 ) -> Command {
+    // 添加注释: 查找msvc tool
     let msvc_tool = windows_registry::find_tool(&sess.opts.target_triple.triple(), "link.exe");
 
+    // 添加注释: 如果我们的链接器看起来像Windows上的批处理脚本, 那么要执行它, 我们需要显式地生成`cmd`.
+    // 这主要是为了处理emscripten, 其中链接器是`emcc.bat`并且需要生成为`cmd /c emcc.bat`
     // If our linker looks like a batch script on Windows then to execute this
     // we'll need to spawn `cmd` explicitly. This is primarily done to handle
     // emscripten where the linker is `emcc.bat` and needs to be spawned as
     // `cmd /c emcc.bat ...`.
     //
+    // 添加注释: 这在历史上是有效的, 但自#42436(回归被标记为#42791)以来需要手动, 并且可以在#44443上
+    // 找到有关emscripten本身的更多信息.
     // This worked historically but is needed manually since #42436 (regression
     // was tagged as #42791) and some more info can be found on #44443 for
     // emscripten itself.
     let mut cmd = match linker.to_str() {
+        // 添加注释: 如果当前是windows并且`linker`变量的结尾是`.bat`
         Some(linker) if cfg!(windows) && linker.ends_with(".bat") => Command::bat_script(linker),
         _ => match flavor {
             LinkerFlavor::Lld(f) => Command::lld(linker, f),
@@ -174,6 +200,8 @@ fn get_linker(
         },
     };
 
+    // 添加注释: UWP应用在应用商店提交期间强制执行API限制. 为了符合Windows应用认证工具包, MSVC需要
+    // 与运行时库(vcruntime和msvcrt等)的应用商店版本链接.
     // UWP apps have API restrictions enforced during Store submissions.
     // To comply with the Windows App Certification Kit,
     // MSVC needs to link with the Store versions of the runtime libraries (vcruntime, msvcrt, etc).
@@ -192,11 +220,13 @@ fn get_linker(
                     _ => None,
                 };
                 if let Some(ref a) = arch {
+                    // 添加注释: 移动此处到`fn linker_with_args`.
                     // FIXME: Move this to `fn linker_with_args`.
                     let mut arg = OsString::from("/LIBPATH:");
                     arg.push(format!("{}\\lib\\{}\\store", root_lib_path.display(), a));
                     cmd.arg(&arg);
                 } else {
+                    // 添加注释: 架构不支持!!!
                     warn!("arch is not supported");
                 }
             } else {
@@ -207,6 +237,7 @@ fn get_linker(
         }
     }
 
+    // 添加注释: 编译器的sysroot通常有一些捆绑的工具, 因此将其添加到child的PATH中.
     // The compiler's sysroot often has some bundled tools, so add it to the
     // PATH for the child.
     let mut new_path = sess.host_filesearch(PathKind::All).get_tools_search_paths(self_contained);
@@ -279,6 +310,9 @@ pub fn each_linked_rlib(
     Ok(())
 }
 
+// 添加注释: 我们在这里使用一个临时目录来避免并发rustc进程之间的竞争, 例如在构建.rlib时使用相同的元数据
+// 文件名在同一目录中构建(相互踩踏), 或将.rmeta写入到正在搜索`extern crate`的目录(观察到一个不完整的文件).
+// 返回的路径是包含完整元数据的临时文件
 /// We use a temp directory here to avoid races between concurrent rustc processes,
 /// such as builds in the same directory using the same filename for metadata while
 /// building an `.rlib` (stomping over one another), or writing an `.rmeta` into a
@@ -295,8 +329,11 @@ pub fn emit_metadata(sess: &Session, metadata: &EncodedMetadata, tmpdir: &MaybeT
     out_filename
 }
 
+// 添加注释: 创建一个`rlib`.
 /// Create an 'rlib'.
 ///
+// 添加注释: 当前版本的rlib本质上是一个重命名的.a文件. rlib主要包含crate的目标文件, 但它也包含来自本机库的所有目标文件.
+// 这是通过解压缩本机库并将有内容插入此存档来完成的.
 /// An rlib in its current incarnation is essentially a renamed .a file. The rlib primarily contains
 /// the object file of the crate, but it also contains all of the object files from native
 /// libraries. This is done by unzipping native libraries and inserting all of the contents into
@@ -315,11 +352,17 @@ fn link_rlib<'a, B: ArchiveBuilder<'a>>(
         ab.add_file(obj);
     }
 
+    // 添加注释: 请注意, 在这个循环中, 我们忽略了`lib.cfg`的值. 也就是说, 如果我们在此处添加
+    // 静态库, 我们可能不会被配置为实际包含静态库. 那是因为稍后当我们使用这个rlib时, 我们将决定
+    // 我们是否真的需要静态库.
     // Note that in this loop we are ignoring the value of `lib.cfg`. That is,
     // we may not be configured to actually include a static library if we're
     // adding it here. That's because later when we consume this rlib we'll
     // decide whether we actually needed the static library or not.
     //
+    // 添加注释: 为了`正确`做到这一点, 我们需要跟踪哪些库将哪些目标文件添加到存档中. 然而, 我们
+    // 在这里不这样做. 不过, #[link(cfg(...))]功能不稳定, 只是为了让liblic工作. 从这个意义上说,
+    // 下面的检查只是表明, 如果有任何我们想在链接时省略目标文件的库, 我们只排除所有自定义目标文件.
     // To do this "correctly" we'd need to keep track of which libraries added
     // which object files to the archive. We don't do that here, however. The
     // #[link(cfg(..))] feature is unstable, though, and only intended to get
@@ -327,6 +370,8 @@ fn link_rlib<'a, B: ArchiveBuilder<'a>>(
     // there are any libraries we want to omit object files for at link time we
     // just exclude all custom object files.
     //
+    // 添加注释: 最终, 如果我们想要稳定或充实 #[link(cfg(...))]功能, 那么我们需要弄清楚
+    // 如何记录从此处找到的库中加载了哪些对象, 然后将其编码到我们以某种方式方式生成的rlib.
     // Eventually if we want to stabilize or flesh out the #[link(cfg(..))]
     // feature then we'll need to figure out how to record what objects were
     // loaded from the libraries found here and then encode that into the
@@ -341,41 +386,54 @@ fn link_rlib<'a, B: ArchiveBuilder<'a>>(
             | NativeLibKind::Unspecified => continue,
         }
         if let Some(name) = lib.name {
+            // 添加注释: `add_native_library`函数: 将本机库的所有内容添加到此文档中. 这将在相关位置搜索名为`name`的库.
             ab.add_native_library(name, lib.verbatim.unwrap_or(false));
         }
     }
 
+    // 添加注释: 将所有文件添加到存档后, 我们需要更新存档的符号表.
     // After adding all files to the archive, we need to update the
     // symbol table of the archive.
     ab.update_symbols();
 
+    // 添加注释: 请注意, 在存档对象中的所有对象文件之后添加所有非对象"神奇文件"很重要. 原因如下:
     // Note that it is important that we add all of our non-object "magical
     // files" *after* all of the object files in the archive. The reason for
     // this is as follows:
     //
+    // 添加注释: 执行LTO时, 将修改此存档以从上方删除对象. 其原因如下所述.
     // * When performing LTO, this archive will be modified to remove
     //   objects from above. The reason for this is described below.
     //
+    // 添加注释: 当系统链接器查看档案时, 它会尝试确定档案的架构以查看其是否可以链接.
     // * When the system linker looks at an archive, it will attempt to
     //   determine the architecture of the archive in order to see whether its
     //   linkable.
     //
+    //   添加注释: 此检测的算法是: 迭代存档中的文件. 跳过神奇的SYMDEF名称. 将第一个文件解释为
+    //   目标文件. 从目标文件中读取架构.
     //   The algorithm for this detection is: iterate over the files in the
     //   archive. Skip magical SYMDEF names. Interpret the first file as an
     //   object file. Read architecture from the object file.
     //
+    // 添加注释: 正如人们可能看到的, 如果"metadata"和"foo.bc"放在所有对象之前, 那么一旦删除
+    // "foo.o", 就无法正确推断此存档的架构.
     // * As one can probably see, if "metadata" and "foo.bc" were placed
     //   before all of the objects, then the architecture of this archive would
     //   not be correctly inferred once 'foo.o' is removed.
     //
+    // 添加注释: 基本上, 所以这一切都意味着这段代码不应该移动到上面的代码之上.
     // Basically, all this means is that this code should not move above the
     // code above.
     match flavor {
         RlibFlavor::Normal => {
+            // 添加注释: rlibs将元数据包含在单独的文件中, 而不是将元数据放在目标文件部分中.
             // Instead of putting the metadata in an object file section, rlibs
             // contain the metadata in a separate file.
             ab.add_file(&emit_metadata(sess, &codegen_results.metadata, tmpdir));
 
+            // 添加注释: 将所有文件添加到存档后, 我们需要更新存档的符号表. 这目前在macOs上失效(请参阅#11162),
+            // 无论如何都没有必要.
             // After adding all files to the archive, we need to update the
             // symbol table of the archive. This currently dies on macOS (see
             // #11162), and isn't necessary there anyway
@@ -398,13 +456,16 @@ fn link_rlib<'a, B: ArchiveBuilder<'a>>(
 // 添加注释: 创建一个静态存档
 /// Create a static archive.
 ///
+// 添加注释: 这本质上与rlib相同, 但它还涉及将所有上游crate的对象添加到存档中. 这也将包含在上游依赖项的所有本机库中.
 /// This is essentially the same thing as an rlib, but it also involves adding all of the upstream
 /// crates' objects into the archive. This will slurp in all of the native libraries of upstream
 /// dependencies as well.
 ///
+// 添加注释: 此外, 我们无法链接动态库, 因此我们警告所有未链接的动态库依赖项.
 /// Additionally, there's no way for us to link dynamic libraries, so we warn about all dynamic
 /// library dependencies that they're not linked in.
 ///
+// 添加注释: 不需要在静态存档中包含元数据, 因此请确保不在元数据对象文件中链接(并且也不要使用元数据文件准备存档)
 /// There's no need to include metadata in a static archive, so ensure to not link in the metadata
 /// object file (and also don't prepare the archive with a metadata file).
 fn link_staticlib<'a, B: ArchiveBuilder<'a>>(
@@ -413,6 +474,7 @@ fn link_staticlib<'a, B: ArchiveBuilder<'a>>(
     out_filename: &Path,
     tempdir: &MaybeTempDir,
 ) {
+    // 添加注释: `link_rlib`函数将创建一个`rlib`.
     let mut ab =
         link_rlib::<B>(sess, codegen_results, RlibFlavor::StaticlibBase, out_filename, tempdir);
     let mut all_native_libs = vec![];
@@ -421,17 +483,24 @@ fn link_staticlib<'a, B: ArchiveBuilder<'a>>(
         let name = &codegen_results.crate_info.crate_name[&cnum];
         let native_libs = &codegen_results.crate_info.native_libraries[&cnum];
 
+        // 添加注释: 在这里, 当我们将rlib包含到我们的静态库中, 我们需要决定是否在此过程中包含额外
+        // 的目标文件. 这些额外的目标文件来自静态包含的本机库, 但它们可能会被#[link(cfg(..))]删除.
         // Here when we include the rlib into our staticlib we need to make a
         // decision whether to include the extra object files along the way.
         // These extra object files come from statically included native
         // libraries, but they may be cfg'd away with #[link(cfg(..))].
         //
+        // 添加注释: 然而, 这个不稳定的特性只需要liblibc就可以工作. 唯一的用例就是musl静态包含在liblibc.rlib中,
+        // 所以如果我们不想要包含的版本, 我们只需要跳过它. 因此, 这里的逻辑是, 如果*any*链接库被cfg'd删除, 我们只是
+        // 跳过所有目标文件.
         // This unstable feature, though, only needs liblibc to work. The only
         // use case there is where musl is statically included in liblibc.rlib,
         // so if we don't want the included version we just need to skip it. As
         // a result the logic here is that if *any* linked library is cfg'd away
         // we just skip all object files.
         //
+        // 添加注释: 显然, 这对于通用功能来说是不够的, 我们希望从库的元数据中读取以确定哪些目标文件来
+        // 自何处并有选择地跳过它们.
         // Clearly this is not sufficient for a general purpose feature, and
         // we'd want to read from the library's metadata to determine which
         // object files come from where and selectively skip them.
@@ -474,6 +543,7 @@ fn escape_stdout_stderr_string(s: &[u8]) -> String {
 
 const LLVM_DWP_EXECUTABLE: &'static str = "rust-llvm-dwp";
 
+// 添加注释: 调用`llvm-dwp`(与rustc一起提供)将`dwo`文件从Split DWARF链接到`dwp`文件.
 /// Invoke `llvm-dwp` (shipped alongside rustc) to link `dwo` files from Split DWARF into a `dwp`
 /// file.
 fn link_dwarf_object<'a>(sess: &'a Session, executable_out_filename: &Path) {
@@ -527,8 +597,10 @@ fn link_dwarf_object<'a>(sess: &'a Session, executable_out_filename: &Path) {
     }
 }
 
+// 添加注释: 创建一个动态库或可执行文件
 /// Create a dynamic library or executable.
 ///
+// 添加注释: 这将调用系统链接器/cc来创建结果文件. 这也链接到所有上游文件.
 /// This will invoke the system linker/cc to create the resulting file. This links to all upstream
 /// files as well.
 fn link_natively<'a, B: ArchiveBuilder<'a>>(
@@ -540,6 +612,7 @@ fn link_natively<'a, B: ArchiveBuilder<'a>>(
     target_cpu: &str,
 ) {
     info!("preparing {:?} to {:?}", crate_type, out_filename);
+    // 添加注释: 获取链接器路径和链接器风格
     let (linker_path, flavor) = linker_and_flavor(sess);
     let mut cmd = linker_with_args::<B>(
         &linker_path,
@@ -552,6 +625,7 @@ fn link_natively<'a, B: ArchiveBuilder<'a>>(
         target_cpu,
     );
 
+    // 添加注释: 禁用来自本地化链接器的非英语消息.
     linker::disable_localization(&mut cmd);
 
     for &(ref k, ref v) in &sess.target.link_env {
@@ -561,13 +635,16 @@ fn link_natively<'a, B: ArchiveBuilder<'a>>(
         cmd.env_remove(k);
     }
 
+    // 添加注释: 打印链接参数
     if sess.opts.debugging_opts.print_link_args {
         println!("{:?}", &cmd);
     }
 
+    // 添加注释: 可能没有找到正确格式的库.
     // May have not found libraries in the right formats.
     sess.abort_if_errors();
 
+    // 添加注释: 调用系统链接器
     // Invoke the system linker
     info!("{:?}", &cmd);
     let retry_on_segfault = env::var("RUSTC_RETRY_LINKER_ON_SEGFAULT").is_ok();
@@ -578,15 +655,20 @@ fn link_natively<'a, B: ArchiveBuilder<'a>>(
         prog = sess.time("run_linker", || exec_linker(sess, &cmd, out_filename, tmpdir));
         let output = match prog {
             Ok(ref output) => output,
+            // 添加注释: 输出Err则终止loop
             Err(_) => break,
         };
         if output.status.success() {
+            // 添加注释: 输出成功则终止loop
             break;
         }
         let mut out = output.stderr.clone();
         out.extend(&output.stdout);
         let out = String::from_utf8_lossy(&out);
 
+        // 添加注释: 检查链接是否因gcc的"无法识别的命令行选项: -no-pie 或 clang的未知参数: -no-pie而失败".
+        // 如果是这样, 请在不使用-no-pie选项的情况下重新执行链接步骤. 这是安全的, 因为如果链接器不支持-no-pie,
+        // 那么它不应该默认将可执行文件链接为饼图. 不同版本的gcc似乎在错误消息中使用了不同的引号, 因此不要检查它们.
         // Check to see if the link failed with "unrecognized command line option:
         // '-no-pie'" for gcc or "unknown argument: '-no-pie'" for clang. If so,
         // reperform the link step without the -no-pie option. This is safe because
@@ -945,13 +1027,17 @@ fn link_sanitizer_runtime(sess: &Session, linker: &mut dyn Linker, name: &str) {
     }
 }
 
+// 添加注释: 返回一个布尔值, 指示在LTO期间是否应略指定的crate.
 /// Returns a boolean indicating whether the specified crate should be ignored
 /// during LTO.
 ///
+// 添加注释: 在LTO期间被忽略的crate不会在我们创建的"海量目标文件"中集中在一起, 并以其正常的rlib状态链接.
+// 请参阅下面的评论, 了解哪些crates不参与LTO.
 /// Crates ignored during LTO are not lumped together in the "massive object
 /// file" that we create and are linked in their normal rlib states. See
 /// comments below for what crates do not participate in LTO.
 ///
+// 添加注释: 板条箱不参与LTO是不寻常的. 通常只有特定于编译器和不稳定的crate才有理由不参与LTO.
 /// It's unusual for a crate to not participate in LTO. Typically only
 /// compiler-specific and unstable crates have a reason to not participate in
 /// LTO.
@@ -971,6 +1057,7 @@ fn linker_and_flavor(sess: &Session) -> (PathBuf, LinkerFlavor) {
     ) -> Option<(PathBuf, LinkerFlavor)> {
         match (linker, flavor) {
             (Some(linker), Some(flavor)) => Some((linker, flavor)),
+            // 添加注释: 只有链接器的味道是已知的; 使用所选风格的默认链接器.
             // only the linker flavor is known; use the default linker for the selected flavor
             (None, Some(flavor)) => Some((
                 PathBuf::from(match flavor {
@@ -983,6 +1070,9 @@ fn linker_and_flavor(sess: &Session) -> (PathBuf, LinkerFlavor) {
                     }
                     LinkerFlavor::Gcc => {
                         if cfg!(any(target_os = "solaris", target_os = "illumos")) {
+                            // 添加注释: 在历史上的Solaris系统, "cc"可能是Sun Studio, 它与
+                            // "gcc"的标志不兼容. 这段历史留下了很长的阴影, 如今许多现代illumos
+                            // 发行版都将GCC作为"gcc"发布, 而没有将其作为"cc"发布.
                             // On historical Solaris systems, "cc" may have
                             // been Sun Studio, which is not flag-compatible
                             // with "gcc".  This history casts a long shadow,
@@ -1031,6 +1121,7 @@ fn linker_and_flavor(sess: &Session) -> (PathBuf, LinkerFlavor) {
         }
     }
 
+    // 添加注释: 通过命令行指定的链接器和链接器风格优先于目标规范指定的内容.
     // linker and linker flavor specified via command line have precedence over what the target
     // specification specifies
     if let Some(ret) = infer_from(sess, sess.opts.cg.linker.clone(), sess.opts.cg.linker_flavor) {
@@ -1048,15 +1139,19 @@ fn linker_and_flavor(sess: &Session) -> (PathBuf, LinkerFlavor) {
     bug!("Not enough information provided to determine how to invoke the linker");
 }
 
+// 添加注释: 返回一个布尔值, 指示我们是否应该在文件系统上保留目标文件以获取调试信息. 这对于类似
+// `split-dwarf`的方案通常很有用.
 /// Returns a boolean indicating whether we should preserve the object files on
 /// the filesystem for their debug information. This is often useful with
 /// split-dwarf like schemes.
 fn preserve_objects_for_their_debuginfo(sess: &Session) -> bool {
+    // 添加注释: 如果对象没有调试信息, 则无需保留任何内容.
     // If the objects don't have debuginfo there's nothing to preserve.
     if sess.opts.debuginfo == config::DebugInfo::None {
         return false;
     }
 
+    // 添加注释: 如果我们只生产作为档案的工件, 则无需保留对象, 因为它们无损地包含在档案中.
     // If we're only producing artifacts that are archives, no need to preserve
     // the objects as they're losslessly contained inside the archives.
     let output_linked =
@@ -1065,6 +1160,7 @@ fn preserve_objects_for_their_debuginfo(sess: &Session) -> bool {
         return false;
     }
 
+    // 添加注释: `解包`拆分调试信息意味着我们保留目标文件, 因为调试信息是在原始目标文件本身中找到的.
     // "unpacked" split debuginfo means that we leave object files as the
     // debuginfo is found in the original object files themselves
     sess.split_debuginfo() == SplitDebuginfo::Unpacked
@@ -1315,6 +1411,7 @@ fn link_output_kind(sess: &Session, crate_type: CrateType) -> LinkOutputKind {
     }
 }
 
+// 添加注释: 如果链接器位于sysroot中, 则返回true
 // Returns true if linker is located within sysroot
 fn detect_self_contained_mingw(sess: &Session) -> bool {
     let (linker, _) = linker_and_flavor(&sess);
@@ -1337,6 +1434,8 @@ fn detect_self_contained_mingw(sess: &Session) -> bool {
     true
 }
 
+// 添加注释: 我们是否链接到我们自已的CRT对象, 而不是依赖gcc来拉取它们.
+// 我们只为数量非常有限的目标提供此类支持.
 /// Whether we link to our own CRT objects instead of relying on gcc to pull them.
 /// We only provide such support for a very limited number of targets.
 fn crt_objects_fallback(sess: &Session, crate_type: CrateType) -> bool {
@@ -1360,6 +1459,7 @@ fn crt_objects_fallback(sess: &Session, crate_type: CrateType) -> bool {
     }
 }
 
+// 添加注释: 添加由目标规范定义的预链接目标文件.
 /// Add pre-link object files defined by the target spec.
 fn add_pre_link_objects(
     cmd: &mut dyn Linker,
@@ -1375,6 +1475,7 @@ fn add_pre_link_objects(
     }
 }
 
+// 添加注释: 添加由目标规范定义的链接后目标文件.
 /// Add post-link object files defined by the target spec.
 fn add_post_link_objects(
     cmd: &mut dyn Linker,
@@ -1390,6 +1491,7 @@ fn add_post_link_objects(
     }
 }
 
+// 添加注释: 添加由目标规范或命令行定义的任意"预链接"参数
 /// Add arbitrary "pre-link" args defined by the target spec or from command line.
 /// FIXME: Determine where exactly these args need to be inserted.
 fn add_pre_link_args(cmd: &mut dyn Linker, sess: &Session, flavor: LinkerFlavor) {
@@ -1399,6 +1501,7 @@ fn add_pre_link_args(cmd: &mut dyn Linker, sess: &Session, flavor: LinkerFlavor)
     cmd.args(&sess.opts.debugging_opts.pre_link_args);
 }
 
+// 添加注释: 添加嵌入在目标中的链接脚本(如果适用).
 /// Add a link script embedded in the target, if applicable.
 fn add_link_script(cmd: &mut dyn Linker, sess: &Session, tmpdir: &Path, crate_type: CrateType) {
     match (crate_type, &sess.target.link_script) {
@@ -1421,12 +1524,14 @@ fn add_link_script(cmd: &mut dyn Linker, sess: &Session, tmpdir: &Path, crate_ty
     }
 }
 
+// 添加注释: 添加从命令行定义的任意"用户定义"参数
 /// Add arbitrary "user defined" args defined from command line.
 /// FIXME: Determine where exactly these args need to be inserted.
 fn add_user_defined_link_args(cmd: &mut dyn Linker, sess: &Session) {
     cmd.args(&sess.opts.cg.link_args);
 }
 
+// 添加注释: 添加由目标规范定义的任意"后期链接"参数
 /// Add arbitrary "late link" args defined by the target spec.
 /// FIXME: Determine where exactly these args need to be inserted.
 fn add_late_link_args(
@@ -1454,6 +1559,7 @@ fn add_late_link_args(
     }
 }
 
+// 添加注释: 添加由目标规范定义的任意"后链接"参数.
 /// Add arbitrary "post-link" args defined by the target spec.
 /// FIXME: Determine where exactly these args need to be inserted.
 fn add_post_link_args(cmd: &mut dyn Linker, sess: &Session, flavor: LinkerFlavor) {
@@ -1462,6 +1568,7 @@ fn add_post_link_args(cmd: &mut dyn Linker, sess: &Session, flavor: LinkerFlavor
     }
 }
 
+// 添加注释: 添加包含来自当前crate的代码的目标文件.
 /// Add object files containing code from the current crate.
 fn add_local_crate_regular_objects(cmd: &mut dyn Linker, codegen_results: &CodegenResults) {
     for obj in codegen_results.modules.iter().filter_map(|m| m.object.as_ref()) {
@@ -1469,6 +1576,7 @@ fn add_local_crate_regular_objects(cmd: &mut dyn Linker, codegen_results: &Codeg
     }
 }
 
+// 添加注释: 为整个crate树链接一次的分配器代码添加目标文件.
 /// Add object files for allocator code linked once for the whole crate tree.
 fn add_local_crate_allocator_objects(cmd: &mut dyn Linker, codegen_results: &CodegenResults) {
     if let Some(obj) = codegen_results.allocator_module.as_ref().and_then(|m| m.object.as_ref()) {
@@ -1476,6 +1584,7 @@ fn add_local_crate_allocator_objects(cmd: &mut dyn Linker, codegen_results: &Cod
     }
 }
 
+// 添加注释: 添加包含当前包的元数据的对象文件.
 /// Add object files containing metadata for the current crate.
 fn add_local_crate_metadata_objects(
     cmd: &mut dyn Linker,
@@ -1493,6 +1602,7 @@ fn add_local_crate_metadata_objects(
     }
 }
 
+// 添加注释: 链接与当前crate对应的本机库和与其所有依赖crate对应的所有库.
 /// Link native libraries corresponding to the current crate and all libraries corresponding to
 /// all its dependency crates.
 /// FIXME: Consider combining this with the functions above adding object files for the local crate.
@@ -1542,6 +1652,7 @@ fn link_local_crate_native_libs_and_dependent_crate_libs<'a, B: ArchiveBuilder<'
     }
 }
 
+// 添加注释: 将sysoroot和其它全局设置的目录添加到目录搜索列表中.
 /// Add sysroot and other globally set directories to the directory search list.
 fn add_library_search_dirs(cmd: &mut dyn Linker, sess: &Session, self_contained: bool) {
     // The default library location, we need this to find the runtime.
@@ -1556,6 +1667,7 @@ fn add_library_search_dirs(cmd: &mut dyn Linker, sess: &Session, self_contained:
     }
 }
 
+// 添加注释: 添加选项, 使生成的ELF文件中的重定位部分变为只读并禁止延迟绑定.
 /// Add options making relocation sections in the produced ELF files read-only
 /// and suppressing lazy binding.
 fn add_relro_args(cmd: &mut dyn Linker, sess: &Session) {
@@ -1567,6 +1679,7 @@ fn add_relro_args(cmd: &mut dyn Linker, sess: &Session) {
     }
 }
 
+// 添加注释: 添加动态链接器在运行时使用的库搜索路径.
 /// Add library search paths used at runtime by dynamic linkers.
 fn add_rpath_args(
     cmd: &mut dyn Linker,
@@ -1599,6 +1712,11 @@ fn add_rpath_args(
     }
 }
 
+// 添加注释: 生成包含链接器路径和参数的链接器命令行.
+// `NO-OPT-OUT`标记了用户在不创建自定义目标规范的情况下无法从命令行中删除的参数.
+// `OBJECT-FILES`指定参数是否可以添加目标文件.
+// `CUSTOMIZATION-POINT`意味着可以在此处插入由用户或目标规范定义的任意参数.
+// `AUDIT-ORDER` - 需要确定该选项是否依赖于订单
 /// Produce the linker command line containing linker path and arguments.
 /// `NO-OPT-OUT` marks the arguments that cannot be removed from the command line
 /// by the user without creating a custom target specification.
@@ -1785,11 +1903,14 @@ fn linker_with_args<'a, B: ArchiveBuilder<'a>>(
 
 /// # Native library linking
 ///
+// 添加注释: 用户提供的库搜索路径(命令行上的-L). 这些是用于查找Rust crate的相同路径, 因此其中一些可能已经由之前的crate
+// 链接代码添加. 这仅允许在编译时找到它们, 因此仍然完全取决于外部力量以确保可以在运行时找到该库.
 /// User-supplied library search paths (-L on the command line). These are the same paths used to
 /// find Rust crates, so some of them may have been added already by the previous crate linking
 /// code. This only allows them to be found at compile time so it is still entirely up to outside
 /// forces to make sure that library can be found at runtime.
 ///
+// 添加注释: 另请注意, 此外链接的本机库仅是位于当前板条箱中的库. 具有本机库依赖项的上游crate可能会将其本机库拉入上方.
 /// Also note that the native libraries linked here are only the ones located in the current crate.
 /// Upstream crates with native library dependencies may have their native library pulled in above.
 fn add_local_native_libraries(
@@ -1846,6 +1967,7 @@ fn add_local_native_libraries(
 
 /// # Rust Crate linking
 ///
+// 添加注释: 创建rlib输出时根本不考虑Rust crates. 在生成最终输出(而不是中间rlib版本)时, 将链接所有依赖项.
 /// Rust crates are not considered at all when creating an rlib output. All dependencies will be
 /// linked when producing the final output (instead of the intermediate rlib version).
 fn add_upstream_rust_crates<'a, B: ArchiveBuilder<'a>>(
@@ -2113,16 +2235,22 @@ fn add_upstream_rust_crates<'a, B: ArchiveBuilder<'a>>(
     }
 }
 
+// 添加注释: 链接我们所有上游crate的本机依赖项. 请记住, 所有这些上游本机依赖项都是非静态依赖项. 我们有两种情况:
 /// Link in all of our upstream crates' native dependencies. Remember that all of these upstream
 /// native dependencies are all non-static dependencies. We've got two cases then:
 ///
+// 添加注释: 1.上游crate是一个rlib. 在这种情况下, 我们*必须*链接到本机依赖项, 因为rlib只是一个存档.
 /// 1. The upstream crate is an rlib. In this case we *must* link in the native dependency because
 /// the rlib is just an archive.
 ///
+// 添加注释: 2.上游crate是一个dylib. 为了使用dylib, 我们必须在系统某处存在依赖项. 因此, 我们也不会因为没有将动态
+// 依赖项链接到这个crate中而获得很多好处.
 /// 2. The upstream crate is a dylib. In order to use the dylib, we have to have the dependency
 /// present on the system somewhere. Thus, we don't gain a whole lot from not linking in the
 /// dynamic dependency to this crate as well.
 ///
+// 添加注释: 这个用例有点微秒. 理论上, 一个crate的原生依赖纯粹是crate本身的一个实现细节, 但问题出现在泛型和内联
+// 函数上. 如果泛型函数调用本机函数, 则必须在目标包中实例化泛型函数, 这意味着本机符号也必须在目标包中解析.
 /// The use case for this is a little subtle. In theory the native dependencies of a crate are
 /// purely an implementation detail of the crate itself, but the problem arises with generic and
 /// inlined functions. If a generic function calls a native function, then the generic function

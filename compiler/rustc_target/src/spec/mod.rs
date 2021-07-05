@@ -451,6 +451,8 @@ pub type LinkArgs = BTreeMap<LinkerFlavor, Vec<String>>;
 
 #[derive(Clone, Copy, Hash, Debug, PartialEq, Eq)]
 pub enum SplitDebuginfo {
+    // 添加注释: 拆分调试信息已禁用, 这意味着在支持的平台上, 您可以在可执行文件本身中找到所有调试信息.
+    // 这仅对ELF有效支持.
     /// Split debug-information is disabled, meaning that on supported platforms
     /// you can find all debug information in the executable itself. This is
     /// only supported for ELF effectively.
@@ -460,6 +462,7 @@ pub enum SplitDebuginfo {
     /// * ELF - `.dwarf_*` sections
     Off,
 
+    // 添加注释: 拆分调试信息可以在最终工件分开的`packed`位置中找到. 这在所有平台上都受支持.
     /// Split debug-information can be found in a "packed" location separate
     /// from the final artifact. This is supported on all platforms.
     ///
@@ -468,6 +471,7 @@ pub enum SplitDebuginfo {
     /// * ELF - `*.dwp` (run `rust-llvm-dwp`)
     Packed,
 
+    // 添加注释: 可以在文件系统上的各个目标文件找到拆分调试信息. 主可执行文件可能指向目标文件.
     /// Split debug-information can be found in individual object files on the
     /// filesystem. The main executable may point to the object files.
     ///
@@ -1040,125 +1044,189 @@ pub struct TargetOptions {
     /// Objects to link before and after all other object code.
     pub pre_link_objects: CrtObjects,
     pub post_link_objects: CrtObjects,
+    // 添加注释: 与`(pre|post)_link_object`相同, 但是当我们在目标的原生gcc的帮助下无法拉取对象并回退到
+    // `self-contained`模式并手动拉取它们时.
     /// Same as `(pre|post)_link_objects`, but when we fail to pull the objects with help of the
     /// target's native gcc and fall back to the "self-contained" mode and pull them manually.
     /// See `crt_objects.rs` for some more detailed documentation.
     pub pre_link_objects_fallback: CrtObjects,
     pub post_link_objects_fallback: CrtObjects,
+    // 添加注释: 使用哪种逻辑来确定是否回退到`self-contained`模式
     /// Which logic to use to determine whether to fall back to the "self-contained" mode or not.
     pub crt_objects_fallback: Option<CrtObjectsFallback>,
 
+    // 添加注释: 在任何用户定义之后但在链接后对象之前无条件传递的链接器参数. 应该始终链接到的标
+    // 准平台库, 通常放在此处.
     /// Linker arguments that are unconditionally passed after any
     /// user-defined but before post-link objects. Standard platform
     /// libraries that should be always be linked to, usually go here.
     pub late_link_args: LinkArgs,
+    // 添加注释: 如果至少一个Rust依赖项是动态链接的, 则除了`late_link_args`之外还使用
+    // 链接器参数.
     /// Linker arguments used in addition to `late_link_args` if at least one
     /// Rust dependency is dynamically linked.
     pub late_link_args_dynamic: LinkArgs,
+    // 添加注释: 如果所有Rust依赖项都是静态链接的, 则除了`late_link_args`之外还使用
+    // 链接器参数.
     /// Linker arguments used in addition to `late_link_args` if aall Rust
     /// dependencies are statically linked.
     pub late_link_args_static: LinkArgs,
+    // 添加注释: 在任何用户定义的库之后无条件传递的链接器参数.
     /// Linker arguments that are unconditionally passed *after* any
     /// user-defined libraries.
     pub post_link_args: LinkArgs,
+    // 添加注释: 应用于`dylib`和`executable`crate类型的可选链接脚本. 这是一个包含脚本的字符串,
+    // 而不是路径. 只能应用于`linker_is_gnu`为true的链接器.
     /// Optional link script applied to `dylib` and `executable` crate types.
     /// This is a string containing the script, not a path. Can only be applied
     /// to linkers where `linker_is_gnu` is true.
     pub link_script: Option<String>,
 
+    // 添加注释: 为链接器调用设置的环境变量
     /// Environment variables to be set for the linker invocation.
     pub link_env: Vec<(String, String)>,
+    // 添加注释: 为链接器调用删除的环境变量
     /// Environment variables to be removed for the linker invocation.
     pub link_env_remove: Vec<String>,
 
+    // 添加注释: 传递给外部汇编器的额外参数(当使用时)
     /// Extra arguments to pass to the external assembler (when used)
     pub asm_args: Vec<String>,
 
+    // 添加注释: 传递给LLVM的默认CPU. 对应于`llc -mcpu=$cpu`. 默认为"generic".
     /// Default CPU to pass to LLVM. Corresponds to `llc -mcpu=$cpu`. Defaults
     /// to "generic".
     pub cpu: String,
+    // 添加注释: 要传递给LLVM的默认目标功能. 这些功能将*always*通过, 即使通过`-C`也不能禁用.
+    // 对应于`llc -mattr=$fatures`
     /// Default target features to pass to LLVM. These features will *always* be
     /// passed, and cannot be disabled even via `-C`. Corresponds to `llc
     /// -mattr=$features`.
     pub features: String,
+    // 添加注释: 此目标上是否提供动态链接. 默认为false
     /// Whether dynamic linking is available on this target. Defaults to false.
     pub dynamic_linking: bool,
+    // 添加注释: 如果动态库可用, 是否只支持cdylib
     /// If dynamic linking is available, whether only cdylibs are supported.
     pub only_cdylib: bool,
+    // 添加注释: 此目标上是否有可执行文件. 例如, ISO只允许生成静态库. 默认为false.
     /// Whether executables are available on this target. iOS, for example, only allows static
     /// libraries. Defaults to false.
     pub executables: bool,
+    // 添加注释: 在目标文件中使用的重定位模型. 对应于`llc -relocation-model=#relocation_model`. 默认为pic
     /// Relocation model to use in object file. Corresponds to `llc
     /// -relocation-model=$relocation_model`. Defaults to `Pic`.
     pub relocation_model: RelocModel,
+    // 添加注释: 要使用的代码模型. 对应于`llc -code-model=$code_model`. 默认为`None`,
+    // 表示"从基本LLVM目标继承"
     /// Code model to use. Corresponds to `llc -code-model=$code_model`.
     /// Defaults to `None` which means "inherited from the base LLVM target".
     pub code_model: Option<CodeModel>,
+    // 添加注释: 要使用的TLS模型. 选项是"blobal-dynamic"(默认), "local-dynamic", "initial-exec"和
+    // "local-exec". 这类似于GCC/Clang中的 -ftls-model选项.
     /// TLS model to use. Options are "global-dynamic" (default), "local-dynamic", "initial-exec"
     /// and "local-exec". This is similar to the -ftls-model option in GCC/Clang.
     pub tls_model: TlsModel,
+    // 添加注释: 如果ABI有"红色区域", 则不要发出使用"红色区域"的代码. 默认为false
     /// Do not emit code that uses the "red zone", if the ABI has one. Defaults to false.
     pub disable_redzone: bool,
+    // 添加注释: 如果可能, 从堆栈帧中消除帧针指. 默认为true
     /// Eliminate frame pointers from stack frames if possible. Defaults to true.
     pub eliminate_frame_pointer: bool,
+    // 添加注释: 在其自已的section中发出每个函数. 默认为true
     /// Emit each function in its own section. Defaults to true.
     pub function_sections: bool,
+    // 添加注释: 附加到每个动态库名称的字符串. 默认为`lib`
     /// String to prepend to the name of every dynamic library. Defaults to "lib".
     pub dll_prefix: String,
+    // 添加注释: 附加到每个动态库名称的字符串. 默认为`.so`
     /// String to append to the name of every dynamic library. Defaults to ".so".
     pub dll_suffix: String,
+    // 添加注释: 附加到每个可执行文件名称的字符串
     /// String to append to the name of every executable.
     pub exe_suffix: String,
+    // 添加注释: 附加到每个静态库名称的字符串. 默认为`lib`
     /// String to prepend to the name of every static library. Defaults to "lib".
     pub staticlib_prefix: String,
+    // 添加注释: 附加到每个静态库名称的字符串. 默认为`.a`
     /// String to append to the name of every static library. Defaults to ".a".
     pub staticlib_suffix: String,
+    // 添加注释: 为此目标设置的`target_family`cfg的值.
     /// Values of the `target_family` cfg set for this target.
     ///
+    // 添加注释: 常用选项有: "unix", "windows". 默为空
     /// Common options are: "unix", "windows". Defaults to no families.
     ///
     /// See <https://doc.rust-lang.org/reference/conditional-compilation.html#target_family>.
     pub families: Vec<String>,
+    // 添加注释: 目标工具链的ABI是否支持将小结构作为整数返回
     /// Whether the target toolchain's ABI supports returning small structs as an integer.
     pub abi_return_struct_as_int: bool,
+    // 添加注释: 目标工具链是否与macOS类似. 仅对针对IOS/macOS进行编译有效, 尤其是运行dsymutil和其它一些东西,
+    // 例如`-dead_strip`. 默认为false
     /// Whether the target toolchain is like macOS's. Only useful for compiling against iOS/macOS,
     /// in particular running dsymutil and some other stuff like `-dead_strip`. Defaults to false.
     pub is_like_osx: bool,
+    // 添加注释: 目标工具链是否与Solaris相似
     /// Whether the target toolchain is like Solaris's.
+    // 添加注释: 仅对针对Illumos/Solaris进行编译有用, 因为它们具有一组不同的链接器标志. 默认为false
     /// Only useful for compiling against Illumos/Solaris,
     /// as they have a different set of linker flags. Defaults to false.
     pub is_like_solaris: bool,
+    // 添加注释: 目标是否像Windows.
     /// Whether the target is like Windows.
+    // 添加注释: 这是几个更具体的属性的组合, 表示为单个标志:
     /// This is a combination of several more specific properties represented as a single flag:
+    //    添加注释: 目标使用Windows ABI
     ///   - The target uses a Windows ABI,
+    //    添加注释: 使用PF/COFF作为目标代码的格式
     ///   - uses PE/COFF as a format for object code,
+    //    添加注释: 对共享库使用Windows风格的dllexport/dllimport
     ///   - uses Windows-style dllexport/dllimport for shared libraries,
+    //    添加注释: 使用导入库和.def文件进行符号导出
     ///   - uses import libraries and .def files for symbol exports,
+    //    添加注释: 可执行文件支持设置子系统
     ///   - executables support setting a subsystem.
     pub is_like_windows: bool,
+    // 添加注释: 目标是否像MSVC.
     /// Whether the target is like MSVC.
+    // 添加注释: 这是几个更具体的属性的组合,表示为单个标志:
     /// This is a combination of several more specific properties represented as a single flag:
+    //    添加注释: 目标具有来自`is_like_windows`的所有属性(对于树内目标, "is_like_msvc" = "is_like_windows"由单元测试确保)
     ///   - The target has all the properties from `is_like_windows`
     ///     (for in-tree targets "is_like_msvc ⇒ is_like_windows" is ensured by a unit test),
+    //    添加注释: 有一些特定于MSVC的Windows ABI属性
     ///   - has some MSVC-specific Windows ABI properties,
+    //    添加注释: 使用类似link.exe的链接器
     ///   - uses a link.exe-like linker,
+    //    添加注释: 使用CodeView/PDF进行调试信息和natvis进行可视化
     ///   - uses CodeView/PDB for debuginfo and natvis for its visualization,
+    //    添加注释: 使用基于SEH的展开
     ///   - uses SEH-based unwinding,
+    //    添加注释: 支持控制流保护机制
     ///   - supports control flow guard mechanism.
     pub is_like_msvc: bool,
+    // 添加注释: 目标工具链是否像Emscripten的一样. 仅对使用Emscripten工具链进行编译有用. 默认为false.
     /// Whether the target toolchain is like Emscripten's. Only useful for compiling with
     /// Emscripten toolchain.
     /// Defaults to false.
     pub is_like_emscripten: bool,
+    // 添加注释: 目标工具链是否像Fuchsia's
     /// Whether the target toolchain is like Fuchsia's.
     pub is_like_fuchsia: bool,
+    // 添加注释: 目标工具链是否像WASM.
     /// Whether a target toolchain is like WASM.
     pub is_like_wasm: bool,
+    // 添加注释: 如果不使用默认值, 要使用的DWARF版本. 有用, 因为某些平台(osx, bsd)只需要DWARF2
     /// Version of DWARF to use if not using the default.
     /// Useful because some platforms (osx, bsd) only want up to DWARF2.
     pub dwarf_version: Option<u32>,
+    // 添加注释: 链接器是否支持类似GNU的参数, 例如-O. 默认为false
     /// Whether the linker support GNU-like arguments such as -O. Defaults to false.
     pub linker_is_gnu: bool,
+    // 添加注释: MinGW工具链有一个已知问题, 它阻止它正确处理包含超过2<sup>15</sup>个部分的COFF目标文件.
+    // 由于每个弱符号都需要自已的COMDAT部分, 因此弱链接意味着大量的部分很容易超过较大代码库的给定限制. 因此,
+    // 我们想要一种方法来禁止某些平台上的弱链接.
     /// The MinGW toolchain has a known issue that prevents it from correctly
     /// handling COFF object files with more than 2<sup>15</sup> sections. Since each weak
     /// symbol needs its own COMDAT section, weak linkage implies a large
@@ -1166,170 +1234,225 @@ pub struct TargetOptions {
     /// codebases. Consequently we want a way to disallow weak linkage on some
     /// platforms.
     pub allows_weak_linkage: bool,
+    // 添加注释: 链接器是否支持rpath. 默认为false.
     /// Whether the linker support rpaths or not. Defaults to false.
     pub has_rpath: bool,
+    // 添加注释: 是否禁用链接到默认库, 通常对应于`-nodefaultlibs`. 默认为true.
     /// Whether to disable linking to the default libraries, typically corresponds
     /// to `-nodefaultlibs`. Defaults to true.
     pub no_default_libraries: bool,
+    // 添加注释: 如果位置无关代码的默认重定位模型未更改, 则动态链接的可执行文件可以编译为位置无关.
+    // 这是利用ASLR的必要条件, 否则可执行文件中的函数不会随机化, 并且可以在利用任何代码中的漏洞
+    // 期间使用.
     /// Dynamically linked executables can be compiled as position independent
     /// if the default relocation model of position independent code is not
     /// changed. This is a requirement to take advantage of ASLR, as otherwise
     /// the functions in the executable are not randomized and can be used
     /// during an exploit of a vulnerability in any code.
     pub position_independent_executables: bool,
+    // 添加注释: 支持静态链接和位置无关的可执行文件.
     /// Executables that are both statically linked and position-independent are supported.
     pub static_position_independent_executables: bool,
+    // 添加注释: 确定目标是否总是需要将PLT用于间接库调用. 这控制了`-Z plt`标志的默认值.
     /// Determines if the target always requires using the PLT for indirect
     /// library calls or not. This controls the default value of the `-Z plt` flag.
     pub needs_plt: bool,
+    // 添加注释: 部分, 完整或关闭. Full RELRO使动态链接器在启动时解析所有符号, 并在启动程序之前将GOT
+    // 标记为已读, 防止覆盖GOT.
     /// Either partial, full, or off. Full RELRO makes the dynamic linker
     /// resolve all symbols at startup and marks the GOT read-only before
     /// starting the program, preventing overwriting the GOT.
     pub relro_level: RelroLevel,
+    // 添加注释: 归档文件应该发出的格式. 这会影响我们是使用LLVM来组装归档文件还是回退到系统链接器,
+    // 目前只有"gnu"用于落入LLVM. 未知字符串会导致使用系统链接器.
     /// Format that archives should be emitted in. This affects whether we use
     /// LLVM to assemble an archive or fall back to the system linker, and
     /// currently only "gnu" is used to fall into LLVM. Unknown strings cause
     /// the system linker to be used.
     pub archive_format: String,
+    // 添加注释: 允许asm!()吗? 默认为true.
     /// Is asm!() allowed? Defaults to true.
     pub allow_asm: bool,
+    // 添加注释: 运行时启动代码是否需要向`main`函数传递`argc`和`argc`值.
     /// Whether the runtime startup code requires the `main` function be passed
     /// `argc` and `argv` values.
     pub main_needs_argc_argv: bool,
 
+    // 添加注释: 指示ELF TLS(例如, #[thread_local])是否可用于此目标的标志.
     /// Flag indicating whether ELF TLS (e.g., #[thread_local]) is available for
     /// this target.
     pub has_elf_tls: bool,
+    // 添加注释: 这主要是为了方便与emscripten兼容. 如果我们提供实际上是.bc文件的emcc.o文件, 它将`正常工作`.
     // This is mainly for easy compatibility with emscripten.
     // If we give emcc .o files that are actually .bc files it
     // will 'just work'.
     pub obj_is_bitcode: bool,
+    // 添加注释: 目标是否要求发出的目标代码包括位码.
     /// Whether the target requires that emitted object code includes bitcode.
     pub forces_embed_bitcode: bool,
+    // 添加注释: 与嵌入位码关联的LLVM cmdline部分的内容.
     /// Content of the LLVM cmdline section associated with embedded bitcode.
     pub bitcode_llvm_cmdline: String,
 
+    // 添加注释: 不要使用这个字段; 而是使用`.min_atomic_width()`方法.
     /// Don't use this field; instead use the `.min_atomic_width()` method.
     pub min_atomic_width: Option<u64>,
 
+    // 添加注释: 不要使用这个字段; 而是使用`.max_atomic_width()`方法.
     /// Don't use this field; instead use the `.max_atomic_width()` method.
     pub max_atomic_width: Option<u64>,
 
+    // 添加注释: 目标是否原生支持原子CAS操作
     /// Whether the target supports atomic CAS operations natively
     pub atomic_cas: bool,
 
+    // 添加注释: panic策略: `unwind`或`abort`
     /// Panic strategy: "unwind" or "abort"
     pub panic_strategy: PanicStrategy,
 
+    // 添加注释: 当前目标不支持的ABI列表. 请注意, 通用ABI被认为在所有平台上都支持, 不能将
+    // 其标记为不支持.
     /// A list of ABIs unsupported by the current target. Note that generic ABIs
     /// are considered to be supported on all platforms and cannot be marked
     /// unsupported.
     pub unsupported_abis: Vec<Abi>,
 
+    // 添加注释: 是否允许将dylib链接到静态CRT.
     /// Whether or not linking dylibs to a static CRT is allowed.
     pub crt_static_allows_dylibs: bool,
+    // 添加注释: 默认情况下CRT是否静态链接
     /// Whether or not the CRT is statically linked by default.
     pub crt_static_default: bool,
+    // 添加注释: 编译器是否遵守crt-static(或者是无操作)
     /// Whether or not crt-static is respected by the compiler (or is a no-op).
     pub crt_static_respected: bool,
 
+    // 添加注释: 要使用的堆栈探测器的实现
     /// The implementation of stack probes to use.
     pub stack_probes: StackProbeType,
 
+    // 添加注释: 全局符号的最小对齐方式
     /// The minimum alignment for global symbols.
     pub min_global_align: Option<u64>,
 
+    // 添加注释: 在调试模式下使用的默认代码生成单元数.
     /// Default number of codegen units to use in debug mode
     pub default_codegen_units: Option<u64>,
 
+    // 添加注释: 是否在优化会产生落入无关内存的控制流的地方生成陷阱指令.
     /// Whether to generate trap instructions in places where optimization would
     /// otherwise produce control flow that falls through into unrelated memory.
     pub trap_unreachable: bool,
 
+    // 添加注释: 此目标需要使用LTO编译所有内容以生成最终可执行文件, 也就是此目标没有本机链接器.
     /// This target requires everything to be compiled with LTO to emit a final
     /// executable, aka there is no native linker for this target.
     pub requires_lto: bool,
 
+    // 添加注释: 此目标不支持线程
     /// This target has no support for threads.
     pub singlethread: bool,
 
+    // 添加注释: 是否在LLVM中无条件地禁用库函数调用lowering/optimization优化 为此目标.
     /// Whether library functions call lowering/optimization is disabled in LLVM
     /// for this target unconditionally.
     pub no_builtins: bool,
 
+    // 添加注释: 此目标中符号的默认可见性应为`hidden`而不是`default`
     /// The default visibility for symbols in this target should be "hidden"
     /// rather than "default"
     pub default_hidden_visibility: bool,
 
+    // 添加注释: 是否将.debug_gdb_scripts段添加到输出目标文件中.
     /// Whether a .debug_gdb_scripts section will be added to the output object file
     pub emit_debug_gdb_scripts: bool,
 
+    // 添加注释: 是否在函数上无条件地使用`uwtable`属性, 通常是因为平台需要为诸如堆栈展开器之类的东西展开.
     /// Whether or not to unconditionally `uwtable` attributes on functions,
     /// typically because the platform needs to unwind for things like stack
     /// unwinders.
     pub requires_uwtable: bool,
 
+    // 添加注释: 如果未指定`-C force-unwind-tables`并且此目标不需要`uwtable`, 则是否在函数上发出`uwtable`属性.
     /// Whether or not to emit `uwtable` attributes on functions if `-C force-unwind-tables`
     /// is not specified and `uwtable` is not required on this target.
     pub default_uwtable: bool,
 
+    // 添加注释: SIMD类型是否在Rust ABI中通过引用传递, 如果目标可以使用一组混合的目标功能进行编译, 通常需要.
+    // 默认情况下这是`true`, 对于像wasm32这样的目标, 整个程序要么有simd, 要么没有.
     /// Whether or not SIMD types are passed by reference in the Rust ABI,
     /// typically required if a target can be compiled with a mixed set of
     /// target features. This is `true` by default, and `false` for targets like
     /// wasm32 where the whole program either has simd or not.
     pub simd_types_indirect: bool,
 
+    // 添加注释: 将应在dylib中导出的符号列表传递给链接器
     /// Pass a list of symbol which should be exported in the dylib to the linker.
     pub limit_rdylib_exports: bool,
 
+    // 添加注释: 如果设置, 则让链接器准确导出这些符号, 而不是使用通常的逻辑从crate本身中找出这一点.
     /// If set, have the linker export exactly these symbols, instead of using
     /// the usual logic to figure this out from the crate itself.
     pub override_export_symbols: Option<Vec<String>>,
 
+    // 添加注释: 确定MergeFunctions LLVM传递应如何或是否应为此目标运行. `disabled`, `trampolines`, `aliases`
     /// Determines how or whether the MergeFunctions LLVM pass should run for
     /// this target. Either "disabled", "trampolines", or "aliases".
+    // 添加注释: MergeFunctions传递通常很有用, 但某些目标可能需要选择退出. 默认为`aliases`
     /// The MergeFunctions pass is generally useful, but some targets may need
     /// to opt out. The default is "aliases".
     ///
     /// Workaround for: <https://github.com/rust-lang/rust/issues/57356>
     pub merge_functions: MergeFunctions,
 
+    // 添加注释: 使用平台相关的mcount函数
     /// Use platform dependent mcount function
     pub mcount: String,
 
+    // 添加注释: LLVM ABI名称, 对应于 multilib C编译器中可用的 `-mabi`参数.
     /// LLVM ABI name, corresponds to the '-mabi' parameter available in multilib C compilers
     pub llvm_abiname: String,
 
+    // 添加注释: 是否将RelaxElfRelocation 标志传递给链接器.
     /// Whether or not RelaxElfRelocation flag will be passed to the linker
     pub relax_elf_relocations: bool,
 
+    // 添加注释: 传递给LLVM的附加参数, 类似于`-C llvm-args`代码生成选项.
     /// Additional arguments to pass to LLVM, similar to the `-C llvm-args` codegen option.
     pub llvm_args: Vec<String>,
 
+    // 添加注释: 是否使用旧的 .ctors初始化钩子而不是.init_array. 默认为false(使用.init_array)
     /// Whether to use legacy .ctors initialization hooks rather than .init_array. Defaults
     /// to false (uses .init_array).
     pub use_ctors_section: bool,
 
+    // 添加注释: 是否指示链接器添加用于定位展开信息的`GNU_EH_FRAME`ELF标头(仅在链接器类似`ld`时有效)
     /// Whether the linker is instructed to add a `GNU_EH_FRAME` ELF header
     /// used to locate unwinding information is passed
     /// (only has effect if the linker is `ld`-like).
     pub eh_frame_header: bool,
 
+    // 添加注释: 如果目标是使用拇指v1的ARM架构, 它允许拇指和手臂交互, 则为真.
     /// Is true if the target is an ARM architecture using thumb v1 which allows for
     /// thumb and arm interworking.
     pub has_thumb_interworking: bool,
 
+    // 添加注释: 如果有的话, 如何处理拆分调试信息. 指定`None`具有特定于目标的含义.
     /// How to handle split debug information, if at all. Specifying `None` has
     /// target-specific meaning.
     pub split_debuginfo: SplitDebuginfo,
 
+    // 添加注释: 此目标支持的消毒剂
     /// The sanitizers supported by this target
     ///
+    // 添加注释: 请注意, 此处的支持处于代码生成级别. 如果启用了sanitizer的机器代码可以在此目标上生成, 但所需的支持
+    // 库未随目标一起分发, 则该目标仍应出现此列表中的sanitizer.
     /// Note that the support here is at a codegen level. If the machine code with sanitizer
     /// enabled can generated on this target, but the necessary supporting libraries are not
     /// distributed with the target, the sanitizer should still appear in this list for the target.
     pub supported_sanitizers: SanitizerSet,
 
+    // 添加注释: 如果存在, 它是用于调整C ABI的默认值.
     /// If present it's a default value to use for adjusting the C ABI.
     pub default_adjusted_cabi: Option<Abi>,
 }
@@ -1457,6 +1580,7 @@ impl DerefMut for Target {
 }
 
 impl Target {
+    // 添加注释: 给定一个函数ABI, 将其转换为该目标的正确ABI.
     /// Given a function ABI, turn it into the correct ABI for this target.
     pub fn adjust_abi(&self, abi: Abi) -> Abi {
         match abi {

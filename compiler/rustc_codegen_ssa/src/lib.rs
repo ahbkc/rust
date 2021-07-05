@@ -50,6 +50,10 @@ pub mod target_features;
 pub mod traits;
 
 pub struct ModuleCodegen<M> {
+    // 添加注释: 模块的名称. 当crate可以在编译之间保存时, 增量编译要求该名称在
+    // **all** crate中是唯一的. 因此, 它应该包含此crate独有的内容(例如, 模块路径)以
+    // 及crate名称和消歧器.
+    // 我们目前通过CodegenUnit::build_cgu_name()生成这些名称.
     /// The name of the module. When the crate may be saved between
     /// compilations, incremental compilation requires that name be
     /// unique amongst **all** crates. Therefore, it should contain
@@ -61,6 +65,7 @@ pub struct ModuleCodegen<M> {
     pub kind: ModuleKind,
 }
 
+// 添加注释: 可能在此处包含crate名称?
 // FIXME(eddyb) maybe include the crate name in this?
 pub const METADATA_FILENAME: &str = "lib.rmeta";
 
@@ -123,8 +128,13 @@ impl From<&cstore::NativeLib> for NativeLib {
     }
 }
 
+// 添加注释: 我们从元数据加载的杂项信息会在tcx之外持外化.
 /// Misc info we load from metadata to persist beyond the tcx.
 ///
+// 添加注释: 注意: 虽然`CrateNum`只在同一个tcx内有意义, `CrateInfo`内的信息是自包含的. `CrateNum`可以看做是
+// `CrateInfo`中的唯一标识符, 其中`used_crate_source`包含所有依赖项的`CrateSource`, 并维护从标识符(`CrateNum`)
+// 到`CrateSource`的映射. 其它字段将`CrateNum`映射到crate自已的附加属性, 因此我们可以有效地检索每个依赖crate的
+// `CrateSource`和相应的属性, 而无需引用`CrateInfo`之外的信息.
 /// Note: though `CrateNum` is only meaningful within the same tcx, information within `CrateInfo`
 /// is self-contained. `CrateNum` can be viewed as a unique identifier within a `CrateInfo`, where
 /// `used_crate_source` contains all `CrateSource` of the dependents, and maintains a mapping from
@@ -170,19 +180,23 @@ pub fn provide_extern(providers: &mut Providers) {
     crate::back::symbol_export::provide_extern(providers);
 }
 
+// 添加注释: 检查给定的文件名是否以`rustc`用于它生成的目标文件的`rcgu.o`扩展名结尾.
 /// Checks if the given filename ends with the `.rcgu.o` extension that `rustc`
 /// uses for the object files it generates.
 pub fn looks_like_rust_object_file(filename: &str) -> bool {
     let path = Path::new(filename);
     let ext = path.extension().and_then(|s| s.to_str());
     if ext != Some(OutputType::Object.extension()) {
+        // 添加注释: 文件名不以".o"结尾, 因此它不能是目标文件.
         // The file name does not end with ".o", so it can't be an object file.
         return false;
     }
 
+    // 添加注释: 去掉末尾的".o"
     // Strip the ".o" at the end
     let ext2 = path.file_stem().and_then(|s| Path::new(s).extension()).and_then(|s| s.to_str());
 
+    // 添加注释: 检查内部扩展名是否等于rcgu
     // Check if the "inner" extension
     ext2 == Some(RUST_CGU_EXT)
 }

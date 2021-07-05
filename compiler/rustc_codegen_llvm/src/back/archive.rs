@@ -1,3 +1,4 @@
+// 添加注释: 处理静态档案的辅助类
 //! A helper class for dealing with static archives
 
 use std::ffi::{CStr, CString};
@@ -21,6 +22,7 @@ struct ArchiveConfig<'a> {
     pub lib_search_paths: Vec<PathBuf>,
 }
 
+// 添加注释: 将许多文件添加到存档的助手.
 /// Helper for adding many files to an archive.
 #[must_use = "must call build() to finish building the archive"]
 pub struct LlvmArchiveBuilder<'a> {
@@ -51,6 +53,7 @@ fn is_relevant_child(c: &Child<'_>) -> bool {
     }
 }
 
+// 添加注释: 创建将要修改的文档
 fn archive_config<'a>(sess: &'a Session, output: &Path, input: Option<&Path>) -> ArchiveConfig<'a> {
     use rustc_codegen_ssa::back::link::archive_search_paths;
     ArchiveConfig {
@@ -62,6 +65,7 @@ fn archive_config<'a>(sess: &'a Session, output: &Path, input: Option<&Path>) ->
 }
 
 impl<'a> ArchiveBuilder<'a> for LlvmArchiveBuilder<'a> {
+    // 添加注释: 创建一个新的静态存档, 准备修改`config`指定的存档.
     /// Creates a new static archive, ready for modifying the archive specified
     /// by `config`.
     fn new(sess: &'a Session, output: &Path, input: Option<&Path>) -> LlvmArchiveBuilder<'a> {
@@ -75,11 +79,13 @@ impl<'a> ArchiveBuilder<'a> for LlvmArchiveBuilder<'a> {
         }
     }
 
+    // 添加注释: 从些存档中删除文件
     /// Removes a file from this archive
     fn remove_file(&mut self, file: &str) {
         self.removals.push(file.to_string());
     }
 
+    // 添加注释: 列出此存档中的所有文件
     /// Lists all files in an archive
     fn src_files(&mut self) -> Vec<String> {
         if self.src_archive().is_none() {
@@ -98,6 +104,7 @@ impl<'a> ArchiveBuilder<'a> for LlvmArchiveBuilder<'a> {
             .collect()
     }
 
+    // 添加注释: 将本机库的所有内容添加到此文档中. 这将在相关位置搜索名为`name`的库.
     /// Adds all of the contents of a native library to this archive. This will
     /// search in the relevant locations for a library named `name`.
     fn add_native_library(&mut self, name: Symbol, verbatim: bool) {
@@ -112,9 +119,11 @@ impl<'a> ArchiveBuilder<'a> for LlvmArchiveBuilder<'a> {
         });
     }
 
+    // 添加注释: 将指定路径处的rlib的所有内容添加到此存档中
     /// Adds all of the contents of the rlib at the specified path to this
     /// archive.
     ///
+    // 添加注释: 这会忽略从rlib添加字节码, 如果启用了LTO, 则也不会添加目标文件.
     /// This ignores adding the bytecode from the rlib, and if LTO is enabled
     /// then the object file also isn't added.
     fn add_rlib(
@@ -151,6 +160,7 @@ impl<'a> ArchiveBuilder<'a> for LlvmArchiveBuilder<'a> {
         })
     }
 
+    // 添加注释: 将任意文件添加到此存档.
     /// Adds an arbitrary file to this archive
     fn add_file(&mut self, file: &Path) {
         let name = file.file_name().unwrap().to_str().unwrap();
@@ -158,6 +168,7 @@ impl<'a> ArchiveBuilder<'a> for LlvmArchiveBuilder<'a> {
             .push(Addition::File { path: file.to_path_buf(), name_in_archive: name.to_owned() });
     }
 
+    // 添加注释: 指示下一次调用`build`应该更新存档中的所有符号(相当于在它上面运行`ar s`)
     /// Indicate that the next call to `build` should update all symbols in
     /// the archive (equivalent to running 'ar s' over it).
     fn update_symbols(&mut self) {

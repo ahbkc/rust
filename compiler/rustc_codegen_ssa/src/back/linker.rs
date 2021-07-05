@@ -20,6 +20,11 @@ use rustc_session::Session;
 use rustc_span::symbol::Symbol;
 use rustc_target::spec::{LinkOutputKind, LinkerFlavor, LldFlavor};
 
+// 添加注释: 禁用来自本地化链接器的非英语消息.
+// 此类消息可能会导致Windows上的文本编码问题(#35785), 并在出现错误时阻止检查链接器输出,
+// 我们偶尔会这样做.
+// 这应该是可以接受的, 因为来自rustc的其它消息无文化如何都是英文的, 并且也可能希望提高链接器诊断的
+// 可搜索性.
 /// Disables non-English messages from localized linkers.
 /// Such messages may cause issues with text encoding on Windows (#35785)
 /// and prevent inspection of linker output in case of errors, which we occasionally do.
@@ -93,9 +98,12 @@ impl LinkerInfo {
     }
 }
 
+// 添加注释: `back::link`使用链接器抽象来构建调用链接器的命令.
 /// Linker abstraction used by `back::link` to build up the command to invoke a
 /// linker.
 ///
+// 添加注释: 这个trait是`back::link`所需的全部需求列表, 代表了每个选项被传递的含义.
+// 然后使用此trait来分派是否正在使用类似GNU的链接器(通常为`ld.exe`)或MSVC链接器(例如, `link.exe`)
 /// This trait is the total list of requirements needed by `back::link` and
 /// represents the meaning of each option being passed down. This trait is then
 /// used to dispatch on whether a GNU-like linker (generally `ld.exe`) or an

@@ -1,3 +1,4 @@
+// 添加注释: 内置属性和`cfg`标志门控
 //! Built-in attributes and `cfg` flag gating.
 
 use AttributeGate::*;
@@ -20,6 +21,7 @@ macro_rules! cfg_fn {
 
 pub type GatedCfg = (Symbol, Symbol, GateFn);
 
+// 添加注释: `cfg(...)`是功能门控的.
 /// `cfg(...)`'s that are feature gated.
 const GATED_CFGS: &[GatedCfg] = &[
     // (name in cfg, feature, function to check if the feature is enabled)
@@ -36,6 +38,7 @@ const GATED_CFGS: &[GatedCfg] = &[
     (sym::panic, sym::cfg_panic, cfg_fn!(cfg_panic)),
 ];
 
+// 添加注释: 找到由给定cfg名称的`pred`icate确定的门控
 /// Find a gated cfg determined by the `pred`icate which is given the cfg's name.
 pub fn find_gated_cfg(pred: impl Fn(Symbol) -> bool) -> Option<&'static GatedCfg> {
     GATED_CFGS.iter().find(|(cfg_sym, ..)| pred(*cfg_sym))
@@ -47,25 +50,31 @@ pub fn find_gated_cfg(pred: impl Fn(Symbol) -> bool) -> Option<&'static GatedCfg
 
 #[derive(Copy, Clone, PartialEq, Debug)]
 pub enum AttributeType {
+    // 添加注释: 编译器在未使用的属性检查之前使用的正常的内置属性
     /// Normal, builtin attribute that is consumed
     /// by the compiler before the unused_attribute check
     Normal,
 
+    // 添加注释: 在未使用的属性检查之前编译器可能不会使用的内置属性. 这些属性将被
+    // unused_attribute lint忽略
     /// Builtin attribute that may not be consumed by the compiler
     /// before the unused_attribute check. These attributes
     /// will be ignored by the unused_attribute lint
     AssumedUsed,
 
+    // 添加注释: 仅在crate级别允许的内置属性
     /// Builtin attribute that is only allowed at the crate level
     CrateLevel,
 }
 
 #[derive(Clone, Copy)]
 pub enum AttributeGate {
+    // 添加注释: 由给定的特定门、原因和功能门控以检查是否启用
     /// Is gated by a given feature gate, reason
     /// and function to check if enabled
     Gated(Stability, Symbol, &'static str, fn(&Features) -> bool),
 
+    // 添加注释: Ungated属性, 可用于所有发布渠道
     /// Ungated attribute, can be used on all release channels
     Ungated,
 }
@@ -83,12 +92,15 @@ impl std::fmt::Debug for AttributeGate {
 }
 
 impl AttributeGate {
+    // 添加注释: 判断是否是废弃的
     fn is_deprecated(&self) -> bool {
         matches!(*self, Self::Gated(Stability::Deprecated(_, _), ..))
     }
 }
 
+// 添加注释: 属性输入必须匹配的模板.
 /// A template that the attribute input must match.
+// 添加注释: 现在只考虑顶级形状(`#[attr]` vs `#[attr(...)]` vs `#[attr = ...]`)
 /// Only top-level shape (`#[attr]` vs `#[attr(...)]` vs `#[attr = ...]`) is considered now.
 #[derive(Clone, Copy, Default)]
 pub struct AttributeTemplate {
@@ -97,6 +109,8 @@ pub struct AttributeTemplate {
     pub name_value_str: Option<&'static str>,
 }
 
+// 添加注释: 用于构建属性模板的便捷宏.
+// 例如, `template!(Word, List: "description")`表示该属性支持形式`#[attr]`和`#[attr(description)]`
 /// A convenience macro for constructing attribute templates.
 /// E.g., `template!(Word, List: "description")` means that the attribute
 /// supports forms `#[attr]` and `#[attr(description)]`.
@@ -167,6 +181,7 @@ const INTERNAL_UNSTABLE: &str = "this is an internal attribute that will never b
 
 pub type BuiltinAttribute = (Symbol, AttributeType, AttributeTemplate, AttributeGate);
 
+// 添加注释: 对rustc或rustcdoc有特殊意义的属性.
 /// Attributes that have a special meaning to rustc or rustdoc.
 #[rustfmt::skip]
 pub const BUILTIN_ATTRIBUTES: &[BuiltinAttribute] = &[

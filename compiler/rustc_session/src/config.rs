@@ -1236,8 +1236,12 @@ pub struct JsonConfig {
     pub json_unused_externs: bool,
 }
 
+// 添加注释: 解析`--json`标记
 /// Parse the `--json` flag.
 ///
+// 添加注释: 注意: using `--json` requires also using `--error-format=json`"
+///
+// 添加注释: 返回的第一个值是如何呈现JSON诊断, 第二个值是是否启用工件通知
 /// The first value returned is how to render JSON diagnostics, and the second
 /// is whether or not artifact notifications are enabled.
 pub fn parse_json(matches: &getopts::Matches) -> JsonConfig {
@@ -1247,6 +1251,8 @@ pub fn parse_json(matches: &getopts::Matches) -> JsonConfig {
     let mut json_artifact_notifications = false;
     let mut json_unused_externs = false;
     for option in matches.opt_strs("json") {
+        // 添加注释: 现在保守地禁止`--color`和`--json`, 因为`--json`实际上不会发出任何颜色,
+        // 并且任何着色的东西都嵌入在诊断消息中.
         // For now conservatively forbid `--color` with `--json` since `--json`
         // won't actually be emitting any colors and anything colorized is
         // embedded in a diagnostic message anyway.

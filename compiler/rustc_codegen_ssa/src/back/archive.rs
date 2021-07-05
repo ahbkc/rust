@@ -10,6 +10,7 @@ pub fn find_library(
     search_paths: &[PathBuf],
     sess: &Session,
 ) -> PathBuf {
+    // 添加注释: 在Windows上, 静态库有时显示为libfoo.a, 有时显示为foo.lib
     // On Windows, static libraries sometimes show up as libfoo.a and other
     // times show up as foo.lib
     let oslibname = if verbatim {
@@ -19,6 +20,7 @@ pub fn find_library(
     };
     let unixlibname = format!("lib{}.a", name);
 
+    // 添加注释: 遍历`搜索路径集合`, 在循环中拼接路径查看对应路径文件是否存在
     for path in search_paths {
         debug!("looking for {} inside {:?}", name, path);
         let test = path.join(&oslibname);

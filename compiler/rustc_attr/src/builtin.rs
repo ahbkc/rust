@@ -481,6 +481,7 @@ pub fn find_crate_name(sess: &Session, attrs: &[Attribute]) -> Option<Symbol> {
     sess.first_attr_value_str_by_name(attrs, sym::crate_name)
 }
 
+// 添加注释: 测试cfg-pattern是否匹配cfg集
 /// Tests if a cfg-pattern matches the cfg set
 pub fn cfg_matches(cfg: &ast::MetaItem, sess: &ParseSess, features: Option<&Features>) -> bool {
     eval_condition(cfg, sess, features, &mut |cfg| {
@@ -550,6 +551,7 @@ fn parse_version(s: &str, allow_appendix: bool) -> Option<Version> {
     Some(Version { major, minor, patch })
 }
 
+// 添加注释: 评估类似cfg的条件(使用`any`和`all`), 使用`eval`评估单个项目.
 /// Evaluate a cfg-like condition (with `any` and `all`), using `eval` to
 /// evaluate individual items.
 pub fn eval_condition(
@@ -655,18 +657,23 @@ pub fn eval_condition(
 #[derive(Debug, Encodable, Decodable, Clone, HashStable_Generic)]
 pub struct Deprecation {
     pub since: Option<Symbol>,
+    // 添加注释: 发出理由的说明.
     /// The note to issue a reason.
     pub note: Option<Symbol>,
+    // 添加注释: 用于完全替换表达式中已弃用项的任何使用的文本片段.
     /// A text snippet used to completely replace any use of the deprecated item in an expression.
     ///
+    // 添加注释: 这目前是不稳定的
     /// This is currently unstable.
     pub suggestion: Option<Symbol>,
 
+    // 添加注释: 是否将since属性视为Rust版本标识符(而不是不透明的字符串).
     /// Whether to treat the since attribute as being a Rust version identifier
     /// (rather than an opaque string).
     pub is_since_rustc_version: bool,
 }
 
+// 添加注释: 查找弃用属性. `None`表示不存在.
 /// Finds the deprecation attribute. `None` if none exists.
 pub fn find_deprecation(sess: &Session, attrs: &[Attribute]) -> Option<(Deprecation, Span)> {
     find_deprecation_generic(sess, attrs.iter())
@@ -846,8 +853,12 @@ impl IntType {
     }
 }
 
+// 添加注释: 解析#[repr(...)]形式.
 /// Parse #[repr(...)] forms.
 ///
+// 添加注释: 有效的repr内容: 任何原始整数类型名称(请参阅下面的`int_type_of_word`)以指定枚举判别类型;
+// `C`, 使用与相应的C枚举或C结构布局相同的判别大小, `packed`删除填充, 以及`transparent`将表示问题提升到
+// 唯一的非ZST字段.
 /// Valid repr contents: any of the primitive integral type names (see
 /// `int_type_of_word`, below) to specify enum discriminant type; `C`, to use
 /// the same discriminant size that the corresponding C enum would or C
